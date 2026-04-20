@@ -1,0 +1,18 @@
+# Store text files with LF line endings in the repository and check them
+# out with LF on every platform, so Windows and Linux builds see the same
+# bytes and Git stops warning about LF/CRLF conversion.
+* text=auto eol=lf
+
+# Windows batch files need CRLF to run reliably in cmd.exe.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary files: never convert line endings or show text diffs.
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.icns  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary

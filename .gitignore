@@ -1,0 +1,7 @@
+# ─── Editor / OS ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.bak
+.DS_Store
+Thumbs.db
