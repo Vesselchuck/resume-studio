@@ -41,6 +41,21 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.2.0] — 2026-04-25
+
+*A redesign of the same hand-written page.*
+
+- **Changed.** The typefaces are Fraunces for the name and headings and
+  Manrope for everything else, both from Google Fonts. They replace
+  Montserrat.
+- **Changed.** The paper size is US Letter with 0.5in margins instead
+  of A4.
+- **Changed.** The contact details move from a sidebar block into the
+  page header, next to the name, which is now on one line. Languages
+  show the name and the level side by side, and on screen the page
+  sits on a warm off-white background.
+- **Changed.** `print.pdf` is printed from the new page.
+
 ## [0.1.0] — 2026-04-20
 
 *The starting point: the resume design, as a hand-written web page.*
@@ -59,4 +74,5 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.2.0]: #020--2026-04-25
 [0.1.0]: #010--2026-04-20

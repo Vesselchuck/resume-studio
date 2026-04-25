@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap">
+        href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..900,0..100&family=Manrope:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -18,25 +18,30 @@
 
     <!-- ═══════════════════  HEADER  ═══════════════════ -->
     <header class="resume-header">
-      <h1 class="name"><span>Gaius</span> <span>Caesar</span></h1>
+      <div class="resume-header__identity">
+        <h1 class="name">Gaius Caesar</h1>
+        <!-- <p class="tagline">Imperator Romanus</p> -->
+      </div>
+      <address class="resume-header__contact">
+        <span class="contact-row">
+          <span class="contact-label">Location</span>
+          Roma, Imperium Romanum
+        </span>
+        <span class="contact-row">
+          <span class="contact-label">Phone</span>
+          <a href="tel:+10000000000">(000) 000-0000</a>
+        </span>
+        <span class="contact-row">
+          <span class="contact-label">Email</span>
+          <a href="mailto:gcaesar@email.com">gcaesar@email.com</a>
+        </span>
+      </address>
     </header>
 
     <div class="body-grid">
 
       <!-- ═══════════════════  SIDEBAR  ═══════════════════ -->
-      <aside class="sidebar" aria-label="Details, skills and languages">
-
-        <section class="block">
-          <h2 class="section-heading">Details</h2>
-          <dl class="details">
-            <dt>Address</dt>
-            <dd>Roma, Imperium Romanum</dd>
-            <dt>Phone</dt>
-            <dd><a href="tel:+10000000000">(000) 000-0000</a></dd>
-            <dt>Email</dt>
-            <dd><a href="mailto:gcaesar@email.com">gcaesar@email.com</a></dd>
-          </dl>
-        </section>
+      <aside class="sidebar" aria-label="Skills and languages">
 
         <section class="block">
           <h2 class="section-heading">Key Skills</h2>
@@ -70,10 +75,19 @@
 
         <section class="block">
           <h2 class="section-heading">Languages</h2>
-          <ul class="plain-list">
-            <li>Lingua (Gradus Scientiae)</li>
-            <li>Lingua (Gradus Scientiae)</li>
-            <li>Lingua (Gradus Scientiae)</li>
+          <ul class="lang-list">
+            <li>
+              <span class="lang-name">Lingua</span>
+              <span class="lang-level">Gradus Scientiae</span>
+            </li>
+            <li>
+              <span class="lang-name">Lingua</span>
+              <span class="lang-level">Gradus Scientiae</span>
+            </li>
+            <li>
+              <span class="lang-name">Lingua</span>
+              <span class="lang-level">Gradus Scientiae</span>
+            </li>
           </ul>
         </section>
 
@@ -89,14 +103,17 @@
         </section>
 
         <!-- Work Experience -->
-        <section class="block" aria-label="Work experience">
+        <section class="block experience" aria-label="Work experience">
           <h2 class="section-heading">Work Experience</h2>
 
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Nulla porta ligula, Aliquam libero</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Phasellus scelerisque magna quis molestie malesuada. Phasellus venenatis libero at ultrices semper. Suspendisse turpis quam, posuere at aliquam et, porttitor.</li>
@@ -108,15 +125,20 @@
           <article class="job job--note">
             <header class="job-header">
               <h3 class="job-title">Transitus in Cursum Novum</h3>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+              </p>
             </header>
           </article>
 
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Etiam tincidunt lacus, Etiam fermentum</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Vivamus iaculis lectus quam, at pellentesque orci aliquet vestibulum. Duis commodo, massa ac sodales gravida, dui nibh mattis erat, quis.</li>
@@ -128,8 +150,11 @@
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Etiam eu dictum, Cras vel</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Nulla consequat tortor ac mi pellentesque mattis nec euismod elit. Phasellus aliquet bibendum turpis, sed accumsan dolor fermentum non. Aliquam.</li>
@@ -141,8 +166,11 @@
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Vivamus sit amet, Aenean varius</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Maecenas vel interdum nunc. Integer ac arcu sagittis, iaculis ipsum in, tristique leo. Vestibulum ut risus non nunc malesuada pulvinar.</li>
@@ -153,8 +181,11 @@
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Aenean consectetur, Morbi massa</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Maecenas euismod, tellus sed laoreet laoreet, orci lacus sodales augue, eget facilisis velit eros a ante. Nulla condimentum lacus in.</li>
@@ -166,8 +197,11 @@
           <article class="job">
             <header class="job-header">
               <h3 class="job-title">Vivamus vulputate auctor, Nulla pharetra</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
-              <p class="job-date"><time datetime="YYYY-MM">MMM YYYY — MMM YYYY</time></p>
+              <p class="job-meta">
+                <time datetime="YYYY-MM">MMM YYYY – MMM YYYY</time>
+                <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span>
+              </p>
             </header>
             <ul class="job-bullets">
               <li>Sed finibus accumsan nibh pharetra eleifend. Nunc lorem sapien, congue vel semper vel, tincidunt eget metus. Nam a metus leo.</li>
@@ -180,10 +214,15 @@
         <!-- Education -->
         <section class="block" aria-label="Education">
           <h2 class="section-heading">Education</h2>
-          <article class="job">
-            <header class="job-header">
-              <h3 class="job-title">Gradus Baccalaurei Artium in Historia: Donec tempor neque eget, Phasellus imperdiet dictum neque eget efficitur</h3>
-              <p class="job-location">Roma, Imperium Romanum</p>
+          <article class="edu-item">
+            <header>
+              <h3 class="edu-title">Gradus Baccalaurei Artium in Historia</h3>
+              <p class="edu-subtitle">Donec tempor neque eget</p>
+              <p class="job-meta">
+                <span>Phasellus imperdiet dictum neque eget efficitur</span>
+                <!-- <span class="sep" aria-hidden="true">·</span>
+                <span>Roma, Imperium Romanum</span> -->
+              </p>
             </header>
           </article>
         </section>
