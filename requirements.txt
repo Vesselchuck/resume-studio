@@ -1,0 +1,23 @@
+# Python dependencies for the resume build pipeline.
+#
+# Install with:  pip install -r requirements.txt
+# Windows:       py -m pip install -r requirements.txt
+#
+# Versions are pinned exactly to keep `node render.js` reproducible
+# across environments. To upgrade a package: bump the version here,
+# verify `node render.js` still produces an identical PDF (snapshot
+# test will fail and tell you if not), then commit both the bump
+# and any refreshed fixtures.
+#
+# Only the 5 packages we directly import are listed; pip resolves
+# their transitive dependencies (MarkupSafe for Jinja2, NumPy for
+# pypdfium2's PIL output paths, etc.) automatically.
+
+# Build pipeline (build.py + crop_pdf.py)
+PyYAML==6.0.3
+Jinja2==3.1.6
+pypdf==5.9.0
+
+# Snapshot test (scripts/snapshot_pdf.py)
+pypdfium2==5.7.1
+Pillow==10.3.0

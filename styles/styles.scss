@@ -1,0 +1,97 @@
+/* ══════════════════════════════════════════════════════════════
+   PAGE-BASED RESUME (FIXED A4)
+   ──────────────────────────────────────────────────────────────
+
+   ARCHITECTURE
+   ────────────
+   Each <article class="page"> is a fixed 210×297 mm sheet with
+   0.5in inner padding matching the printed margins. The screen
+   layout IS the print layout — Ctrl/Cmd+P → Save as PDF in any
+   Chromium browser produces a pixel-faithful PDF.
+
+   Content lives in data/resume_default.yml. The build pipeline
+   (scripts/build.py + templates/) renders dist/index.html, then
+   render.js produces print.pdf and screenshots. Page placement is
+   AUTOMATIC: a layout solver (scripts/solve_layout.js) measures
+   content heights from a single-column flowing render and decides
+   what lives on each page. Bridging (a job or sidebar block split
+   across pages) is computed from the content rather than declared
+   in YAML.
+
+   OVERFLOW BEHAVIOR
+   ─────────────────
+   .body-grid has `overflow: hidden`. The solver SHOULD never
+   produce a placement that overflows; if it does, content gets
+   clipped at the 0.5in margin. The render pipeline's invariant 4
+   (content-overflow detector in scripts/check_layout.js) catches
+   this case and fails the build with a clear message identifying
+   the overflowing column and culprit element.
+
+   PRINTING STRATEGY
+   ─────────────────
+     • @page { size: A4; margin: 0 } removes browser-imposed
+       margins (each .page already has the right padding).
+     • Each .page is its own print sheet via page-break-after.
+     • No layout-changing @media print rules — screen and print
+       paint identically. The print block only hides screen-only
+       decorations (page shadows, body background).
+
+   LAYOUT INVARIANT
+   ────────────────
+   The column divider's bottom edge correctly lands on the page's
+   0.5in bottom-margin line because of a 4-step dependency chain:
+     1. .page is `display: flex; flex-direction: column` with
+        `padding: var(--page-margin)`.
+     2. .body-grid has `flex: 1 1 auto`, growing to fill the
+        page's content area beneath the resume header.
+     3. .body-grid's bottom = page bottom − page margin.
+     4. The divider, an absolutely-positioned ::after pseudo-
+        element of .body-grid, terminates there.
+
+   This invariant is checked at render time by render.js — if it
+   ever drifts, the build fails loudly.
+
+   SECTION RHYTHM
+   ──────────────
+   Sibling sections separated by <hr class="section-sep"> have
+   identical visible spacing in BOTH the sidebar and main column,
+   even though the columns use different parent-gap tokens.
+   --section-rhythm encodes the total spacing; per-context margins
+   are computed from it via calc(). This is also asserted at render
+   time by render.js.
+
+   DESIGN TOKENS
+   ─────────────
+   All gaps and margins use the spacing scale (--sp-xs through
+   --sp-2xl, geometric ~1.4× steps). Page-geometry tokens are in
+   absolute units (mm/in) because they're physical print dimensions.
+   Type tokens are in pt for print fidelity.
+
+   FILE ORGANIZATION
+   ─────────────────
+   This file is the Sass entry point. Compiled to dist/styles.css
+   by `node render.js` (via the `sass` npm package). Edit the
+   underscore-prefixed partials, not the compiled output.
+
+     _tokens.scss        CSS custom properties (page geometry,
+                         spacing scale, typography, colors)
+     _base.scss          reset + body defaults
+     _layout.scss        page container, body-grid, divider, hrs
+     _components.scss    name header, section headings, blocks,
+                         sidebar/main-col content
+     _print.scss         @media print overrides
+     _measurement.scss   body.measurement-mode overrides for the
+                         layout solver's measurement HTML
+
+   Tokens have no Sass-level dependencies — they're CSS custom
+   properties, referenced via var(--name). @use is used here for
+   structural cleanliness, not because partials share Sass vars.
+
+   ══════════════════════════════════════════════════════════════ */
+
+@use 'tokens';
+@use 'base';
+@use 'layout';
+@use 'components';
+@use 'print';
+@use 'measurement';

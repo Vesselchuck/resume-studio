@@ -41,6 +41,41 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.3.0] — 2026-05-03
+
+*The first release with an interface to depend on: a YAML data format,
+a build command, environment variables and a fixed output path.*
+
+- **Added.** One YAML file (`data/resume_default.yml`) holds all the resume
+  content: `name`, `meta`, a `sidebar` of blocks and a `mainColumn` of
+  sections. `build.py` checks the file and stops with a clear error
+  when something is wrong.
+- **Added.** Your own data file. `data/resume.local.yml` takes the place
+  of the committed placeholder and is gitignored.
+  `RESUME_DATA_SOURCE=default|local` forces one or the other.
+- **Added.** `node render.js` runs the whole pipeline: unit tests, Sass,
+  a measurement render, the layout solver, the final render, layout
+  checks, printing, cropping and a snapshot comparison. Output is
+  written to `print.pdf`.
+- **Added.** Automatic page breaks. A solver works from measured heights
+  and can split a job's bullets or a sidebar list across pages, keeping
+  at least one bullet (or three list items) with its heading. The build
+  fails if the content needs more than `meta.maxPages` pages.
+- **Added.** Fixed-size pages, so the layout on screen and in print is
+  the same, and a check that fails the build when anything overflows a
+  page.
+- **Added.** PDF cropping to the exact page size, and document metadata
+  taken from the data: title, author, subject, and keywords from the
+  Key Skills block.
+- **Added.** A pixel-level snapshot test against committed fixtures,
+  with diff images when it fails.
+- **Added.** Unit tests, and automatic Python detection (`PYTHON`
+  overrides it).
+- **Changed.** The page is A4, and the layout follows the 0.1.0 design:
+  contact details in a sidebar block.
+- **Removed.** The hand-written `index.html`. Its content moved into
+  YAML and Jinja templates.
+
 ## [0.2.0] — 2026-04-25
 
 *A redesign of the same hand-written page.*
@@ -74,5 +109,6 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.3.0]: #030--2026-05-03
 [0.2.0]: #020--2026-04-25
 [0.1.0]: #010--2026-04-20

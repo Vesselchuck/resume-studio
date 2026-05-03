@@ -1,0 +1,185 @@
+{#- Reusable rendering macros for the placement-driven layout.
+
+    Convention:
+      • Each macro emits content starting at column 0; the parent
+        template invokes them at column 0 too. The HTML output is
+        ragged but valid — browsers and PDF renderers don't care
+        about indentation between block elements.
+      • Macros DO emit a trailing newline so the next macro call
+        appears on a fresh line.
+      • Continuation entries (a job's later bullets on a new page,
+        or a sidebar block's later items) suppress the heading/title.
+        The `data-continues-from` attribute keeps the relationship
+        traceable in the rendered HTML.
+-#}
+
+
+{#- ─── Slice a list for a placement entry ─────────────────────
+    `bullets_offset` and `bullets_limit` (or items_*) describe a
+    half-open slice. limit=None means "to the end."
+-#}
+{% macro slice_list(items, offset, limit) -%}
+{%- if limit is none -%}
+{{- items[offset:] -}}
+{%- else -%}
+{{- items[offset:offset + limit] -}}
+{%- endif -%}
+{% endmacro %}
+
+
+{#- ─── Job entry ──────────────────────────────────────────────
+    Renders a single job from a placement entry. Three shapes:
+      • Regular: title + meta + bullets
+      • Gap: italic title, no location, no bullets
+      • Continuation: no header, just bullets, with data-continues-from
+-#}
+{% macro render_job(entry, job_by_id) %}
+{%- set j = job_by_id[entry.job_id] -%}
+{%- set bullets = (j.bullets[entry.bullets_offset:] if entry.bullets_limit is none
+                   else j.bullets[entry.bullets_offset:entry.bullets_offset + entry.bullets_limit])
+                  if j.bullets is defined else [] -%}
+{%- if entry.continuation -%}
+<article class="job job--continued" data-continues-from="{{ j.id }}">
+  <ul class="bullets">
+{%- for bullet in bullets %}
+    <li>{{ bullet | e | md | safe }}</li>
+{%- endfor %}
+  </ul>
+</article>
+{%- else -%}
+<article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}">
+  <header class="entry-header">
+    <h3 class="job-title">{{ j.title | e }}</h3>
+    <p class="entry-meta">
+      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
+{%- if j.location is defined %}
+      <span class="job-loc">{{ j.location | e }}</span>
+{%- endif %}
+    </p>
+  </header>
+{%- if bullets %}
+  <ul class="bullets">
+{%- for bullet in bullets %}
+    <li>{{ bullet | e | md | safe }}</li>
+{%- endfor %}
+  </ul>
+{%- endif %}
+</article>
+{%- endif %}
+{% endmacro %}
+
+
+{#- ─── Sidebar block ──────────────────────────────────────────
+    Renders a single sidebar block from a placement entry. The
+    'details' block type and 'list' block type render differently;
+    continuation entries suppress the heading.
+-#}
+{% macro render_sidebar_block(entry, block_by_id) %}
+{%- set b = block_by_id[entry.block_id] -%}
+<section class="block{% if entry.continuation %} block--continued{% endif %}"
+         {%- if entry.continuation %} data-continues-from="{{ b.id }}"{% else %} id="{{ b.id }}"{% endif %}>
+{%- if not entry.continuation %}
+  <h2 class="section-heading">{{ b.heading | e }}</h2>
+{%- endif %}
+{%- if b.type == "details" %}
+  <address class="details-list">
+{%- for row in b.rows %}
+    <div class="detail-row">
+      <span class="detail-label">{{ row.label | e }}</span>
+      <span class="detail-value">
+{%- if row.href is defined -%}
+<a href="{{ row.href }}">{{ row.value | e }}</a>
+{%- else -%}
+{{ row.value | e }}
+{%- endif -%}
+</span>
+    </div>
+{%- endfor %}
+  </address>
+{%- elif b.type == "list" %}
+{%- set items = (b['items'][entry.items_offset:] if entry.items_limit is none
+                 else b['items'][entry.items_offset:entry.items_offset + entry.items_limit]) -%}
+  <ul class="plain-list">
+{%- for item in items %}
+    <li>{{ item | e }}</li>
+{%- endfor %}
+  </ul>
+{%- endif %}
+</section>
+{% endmacro %}
+
+
+{#- ─── Sidebar blocks list (with separators) ──────────────────
+    Auto-emits <hr class="section-sep"> between consecutive blocks.
+-#}
+{% macro render_sidebar_blocks(entries, block_by_id) %}
+{%- for entry in entries %}
+{%- if not loop.first %}
+<hr class="section-sep">
+{% endif -%}
+{{ render_sidebar_block(entry, block_by_id) }}
+{%- endfor %}
+{% endmacro %}
+
+
+{#- ─── Education item ─────────────────────────────────────────
+-#}
+{% macro render_edu_item(item) %}
+<article class="edu-item">
+  <header class="entry-header">
+    <h3 class="edu-title">{{ item.title | e }}</h3>
+    <p class="edu-subtitle">{{ item.subtitle | e }}</p>
+    <p class="entry-meta">
+      <span class="job-loc">{{ item.institution | e }}</span>
+    </p>
+  </header>
+</article>
+{% endmacro %}
+
+
+{#- ─── Main column section ────────────────────────────────────
+    Dispatches by section.type. Suppresses the section heading
+    when section.continuation_of is set (continuation context).
+-#}
+{% macro render_main_section(section, summary, experience, education, job_by_id) %}
+{%- if section.type == "summary" -%}
+<section class="block">
+{%- if not section.continuation_of %}
+  <h2 class="section-heading">{{ summary.heading | e }}</h2>
+{%- endif %}
+  <p class="summary-text">{{ summary.text | e }}</p>
+</section>
+{%- elif section.type == "experience" -%}
+<section class="block experience"
+         {%- if section.continuation_of %} aria-label="Work experience continued"{% endif %}>
+{%- if not section.continuation_of %}
+  <h2 class="section-heading">{{ experience.heading | e }}</h2>
+{%- endif %}
+{% for entry in section.jobs -%}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+{{ render_job(entry, job_by_id) -}}
+{% endfor %}
+</section>
+{%- elif section.type == "education" -%}
+<section class="block">
+{%- if not section.continuation_of %}
+  <h2 class="section-heading">{{ education.heading | e }}</h2>
+{%- endif %}
+{%- for item in education['items'] %}
+{{ render_edu_item(item) }}
+{%- endfor %}
+</section>
+{%- endif %}
+{% endmacro %}
+
+
+{#- ─── Main column sections list (with separators) ────────────
+-#}
+{% macro render_main_sections(sections, summary, experience, education, job_by_id) %}
+{%- for section in sections %}
+{%- if not loop.first %}
+<hr class="section-sep">
+{% endif -%}
+{{ render_main_section(section, summary, experience, education, job_by_id) }}
+{%- endfor %}
+{% endmacro %}

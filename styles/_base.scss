@@ -1,0 +1,45 @@
+/* ───────────────────────────────────────────────────────────────
+   BASE — reset and body defaults. Box model normalisation,
+   typography baseline, viewport background.
+   ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; padding: 0; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+body {
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: var(--size-body);
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--bg-app);
+  font-feature-settings: "kern", "liga";
+}
+
+ul, ol { list-style: none; }
+address { font-style: normal; }
+h1, h2, h3, h4 { font-weight: inherit; line-height: 1.2; }
+strong { font-weight: 700; }
+hr { border: 0; }
+
+a {
+  color: inherit;
+  text-decoration: none;
+  border-block-end: 1px solid transparent;
+  transition: border-color 160ms ease;
+}
+a:hover, a:focus-visible { border-block-end-color: currentColor; }
+a:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-block-end-color: transparent;
+}
+::selection { background: var(--ink); color: var(--bg-page); }
+
+

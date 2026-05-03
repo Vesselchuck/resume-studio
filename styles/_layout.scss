@@ -1,0 +1,131 @@
+/* ───────────────────────────────────────────────────────────────
+   LAYOUT — page container, horizontal rules, body grid.
+   The structural skeleton: each .page is a fixed A4 sheet,
+   .body-grid is its two-column layout (sidebar + main), and
+   the column divider is .body-grid::after pinned to the page
+   bottom-margin via flex sizing.
+   ─────────────────────────────────────────────────────────────── */
+main.resume {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2xl);
+  padding-block: 2rem;
+}
+
+/* The crucial element — a fixed-size A4 sheet. Every page is
+   exactly 210×297 mm, regardless of viewport. On screen we add a
+   subtle shadow + border so the pages look like physical sheets
+   floating on a soft grey backdrop. In print these decorations
+   disappear.                                                       */
+.page {
+  position: relative;
+  inline-size: var(--page-w);
+  block-size:  var(--page-h);
+  padding: var(--page-margin);
+  background: var(--bg-page);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  /* Critical: clip overflow so editors visually see when content
+     bleeds off a page (their cue to move things to the next page). */
+  overflow: hidden;
+  /* Stack content vertically inside the page. */
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* ─── HORIZONTAL RULES ──────────────────────────────────── */
+.top-rule {
+  block-size: 1px;
+  background: var(--rule);
+  margin-block-end: var(--sp-2xl);
+}
+
+/* Section separator — thin horizontal rule between major sections.
+   Used inside both .sidebar (between Details/Key Skills, Languages/PD)
+   and .main-col (between Summary/Work-Exp/Education).
+
+   --section-rhythm encodes the total visible distance between two
+   sibling sections (parent_gap + margin-top + 1px + margin-bottom +
+   parent_gap). Solving for margin gives:
+     margin = (rhythm - 1px) / 2 - parent_gap
+   The two contexts differ only in `parent_gap` (--sp-lg in main col,
+   --sp-xl in sidebar), so the same rhythm produces different margins
+   automatically. Change --section-rhythm to retune both at once.    */
+.section-sep {
+  block-size: 1px;
+  background: var(--rule);
+  border: 0;
+  /* main-col context: parent gap is --sp-lg. */
+  margin-block: calc((var(--section-rhythm) - 1px) / 2 - var(--sp-lg));
+}
+.sidebar > .section-sep {
+  /* sidebar context: parent gap is --sp-xl. */
+  margin-block: calc((var(--section-rhythm) - 1px) / 2 - var(--sp-xl));
+}
+
+
+/* ─── BODY GRID (per-page) ──────────────────────────────── */
+/* Two-column layout per page. The vertical column divider is drawn
+   as an absolutely-positioned 1-px pseudo-element on .body-grid,
+   bounded to the grid's height (`inset-block: 0` = top 0 to bottom 0
+   relative to the grid).
+
+   LOAD-BEARING INVARIANT — read before changing layout:
+   The divider's bottom edge correctly lands on the page's 0.5in
+   bottom-margin line ONLY because of this dependency chain:
+
+     1. .page is `display: flex; flex-direction: column` with
+        `padding: var(--page-margin)` on all sides.
+     2. .body-grid has `flex: 1 1 auto`, making it grow to fill
+        the page's content area beneath the header.
+     3. Therefore .body-grid's bottom = page bottom − page margin.
+     4. The divider, anchored to .body-grid, terminates there.
+
+   If you remove `flex: 1 1 auto`, change .page's padding semantics,
+   or insert another flex-grow sibling between header and grid, the
+   divider will silently stop short or extend wrong. Re-anchor it on
+   .page::after with explicit `bottom: var(--page-margin)` if you
+   need the divider's extent decoupled from grid behaviour.         */
+.body-grid {
+  /* `display: grid` is for our two-column children (sidebar + main).
+     `flex: 1 1 auto` is how we behave inside our parent, which is the
+     .page flex column — we grow to fill the page's content area.    */
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  column-gap: var(--col-gap);
+  align-items: start;
+  flex: 1 1 auto;
+  min-block-size: 0;
+  /* Clip content at the grid bottom (= the page's 0.5in margin
+     boundary). Content overflowing the page becomes visible to the
+     editor on screen — their cue to move it to the next page.    */
+  overflow: hidden;
+}
+.body-grid::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;            /* full grid height — see invariant above */
+  /* Sit precisely in the middle of the column gap. */
+  inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2 - 0.5px);
+  inline-size: 1px;
+  background: var(--rule);
+  pointer-events: none;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xl);
+  min-inline-size: 0;
+}
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-lg);
+  min-inline-size: 0;
+}
+
+
