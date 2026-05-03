@@ -1,0 +1,19 @@
+/* ─── MEASUREMENT MODE ─────────────────────────────────────────
+   Activated when <body class="measurement-mode"> is set, i.e.
+   when scripts/build.py runs with --mode=measurement.
+
+   The single .page in that document needs to grow tall enough to
+   contain ALL content (no overflow clipping, no fixed height).
+   The layout solver in render.js then measures positions of
+   [data-measure] elements to decide where real page breaks land.
+
+   Everything else stays the same as the print layout — same column
+   widths, same typography, same spacing — so measured heights are
+   faithful to what the final paginated output will produce. */
+body.measurement-mode .page {
+  block-size: auto;
+  min-block-size: var(--page-h);
+  /* Allow content to extend past the visual page boundary; the
+     solver only cares about positions, not visual fidelity. */
+  overflow: visible;
+}

@@ -1,0 +1,2 @@
+# Keep this directory tracked even when no fixtures are committed.
+# Snapshot tests write/read expected_print.pdf here.

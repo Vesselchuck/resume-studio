@@ -1,0 +1,182 @@
+# ─────────────────────────────────────────────────────────────────
+# RESUME DATA — single source of truth.
+# Edit this file; run `node render.js` to regenerate dist/index.html.
+#
+# Page placement is AUTOMATIC: the build pipeline measures content
+# heights and assigns sidebar blocks and jobs to pages dynamically.
+# Bridging (a job or sidebar block split across pages) is also
+# automatic. The only thing you control here is content order and
+# the maxPages cap.
+# ─────────────────────────────────────────────────────────────────
+
+name:
+  first: Gaius
+  last: Caesar
+
+meta:
+  description: >-
+    Resume of Gaius Caesar — sed gravida elit velit, in pharetra
+    based in Roma, Imperium Romanum.
+  # Maximum pages the layout solver may produce. If content cannot
+  # fit in this many pages (after applying the placement rules),
+  # the build fails. Increase only if your content genuinely needs
+  # more space; the solver is conservative by design.
+  maxPages: 10
+
+# Sidebar — single flat list of blocks. Order = visual order. The
+# layout solver places them on pages and may split a block across
+# pages (subject to the rules: heading + ≥3 items on the originating
+# page; ≥1 item on the receiving page).
+sidebar:
+  blocks:
+    - id: details
+      type: details
+      heading: Details
+      rows:
+        - label: Address
+          value: Roma, Imperium Romanum
+        - label: Phone
+          value: (000) 000-0000
+          href: "tel:+10000000000"
+        - label: Email
+          value: gcaesar@email.com
+          href: "mailto:gcaesar@email.com"
+
+    - id: key-skills
+      type: list
+      heading: Key Skills
+      items:
+        - Vestibulum Vel Mattis Mauris
+        - Suspendisse Mollis Dolor
+        - Nullam Maximus Dolor
+        - Nullam Posuere Aliquet
+        - In Maximus Justo Nec
+        - Aliquam Ac Diam Quis
+        - Pellentesque Egestas Turpis
+        - Suspendisse Non Turpis
+        - Quisque Ut Eleifend Massa
+        - Nullam Sed Neque Nulla
+        - Morbi Placerat Orci
+        - Morbi Pharetra Blandit
+        - In Cursus Libero Vitae
+        - Morbi Ac Tortor Mauris
+        - Fusce Pharetra Sodales
+        - Sed Quis Imperdiet Magna
+        - Vestibulum A Est Non
+        - Aliquam Vehicula Blandit
+        - Fusce Dapibus Dignissim Feugiat
+        - Pellentesque Elementum Turpis
+        - Cras Blandit Orci Lectus
+        - Duis Viverra Varius Dolor
+        - Curabitur Pharetra Leo Quam
+        - Nam Tincidunt Enim
+
+    - id: languages
+      type: list
+      heading: Languages
+      items:
+        - Lingua (Gradus Scientiae)
+        - Lingua (Gradus Scientiae)
+        - Lingua (Gradus Scientiae)
+
+    - id: professional-development
+      type: list
+      heading: Professional Development
+      items:
+        - Aliquam Ut Nulla Ipsum
+        - In Vehicula Orci Sed
+        - Duis Ac Metus Ullamcorper
+        - Morbi Consequat Vitae Nulla
+        - Aliquam Metus Odio Vulputate
+        - Aenean Ullamcorper Dignissim
+
+# Main column — flows continuously through the document. Sections
+# appear in the order listed. The layout solver places them across
+# pages; a job may bridge across pages (header + ≥1 bullet on the
+# originating page; ≥1 bullet on the receiving page).
+mainColumn:
+  - type: summary
+    heading: Summary
+    text: >-
+      Sed gravida elit velit, in pharetra lorem tempus id. Maecenas dictum ex
+      in risus molestie, nec faucibus velit malesuada. Nulla viverra est ut
+      molestie laoreet. Fusce et scelerisque diam. Phasellus vel lectus ut
+      nisl maximus rutrum quis ut elit. Lorem ipsum dolor sit amet,
+      consectetur adipiscing elit. Maecenas et efficitur elit, in imperdiet
+      nisi. Pellentesque tempus enim vitae cursus elementum. Praesent molestie
+      risus sed nunc lacinia suscipit. Praesent iaculis nulla. Curabitur
+      vehicula dapibus mauris, vel imperdiet diam sagittis eu.
+
+  - type: experience
+    heading: Work Experience
+    jobs:
+      - id: nulla
+        title: Nulla porta ligula, Aliquam libero
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Phasellus scelerisque magna quis molestie malesuada. Phasellus venenatis libero at ultrices semper. Suspendisse turpis quam, posuere at aliquam et, porttitor."
+          - "Aliquam mattis ipsum tincidunt sodales mattis. Ut lobortis eros lectus, eu rhoncus diam bibendum ut. Vivamus quis tempus purus. Praesent."
+          - "Donec a venenatis diam, ac rhoncus nibh. Integer dignissim tempor nunc ut lobortis. Etiam bibendum velit arcu, nec rhoncus ligula."
+
+      - id: transition-gap
+        title: Transitus in Cursum Novum
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        gap: true        # styles the entry as a non-employment gap
+
+      - id: etiam-tincidunt
+        title: Etiam tincidunt lacus, Etiam fermentum
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Vivamus iaculis lectus quam, at pellentesque orci aliquet vestibulum. Duis commodo, massa ac sodales gravida, dui nibh mattis erat, quis."
+          - "Proin posuere nulla in neque ultricies, sed viverra velit luctus. Phasellus vitae augue et metus condimentum luctus. Nam tincidunt enim."
+          - "Ut sit amet diam nec dolor hendrerit varius. Pellentesque pharetra imperdiet eleifend. Nunc tempor at odio at accumsan. Aliquam hendrerit."
+
+      - id: etiam
+        title: Etiam eu dictum, Cras vel
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Nulla consequat tortor ac mi pellentesque mattis nec euismod elit. Phasellus aliquet bibendum turpis, sed accumsan dolor fermentum non. Aliquam."
+          - "Suspendisse vulputate gravida euismod. Aenean in sodales erat. Donec iaculis dignissim tortor quis auctor. Phasellus at justo sit amet eros."
+          - "Nullam efficitur finibus lobortis. Proin vulputate at est consequat posuere. Aenean nulla odio, ultrices eu justo quis, aliquam mollis."
+
+      - id: vivamus-sit
+        title: Vivamus sit amet, Aenean varius
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Maecenas vel interdum nunc. Integer ac arcu sagittis, iaculis ipsum in, tristique leo. Vestibulum ut risus non nunc malesuada pulvinar."
+          - "Curabitur sed efficitur risus, eu eleifend turpis. Fusce bibendum ex mauris, et tempus eros bibendum quis. Aliquam egestas tortor ac."
+
+      - id: aenean
+        title: Aenean consectetur, Morbi massa
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Maecenas euismod, tellus sed laoreet laoreet, orci lacus sodales augue, eget facilisis velit eros a ante. Nulla condimentum lacus in."
+          - "Aliquam nisi mauris, venenatis ut vehicula sit amet, vulputate ut massa. Duis in fringilla nibh. Maecenas diam magna, blandit ut."
+          - "Integer faucibus scelerisque metus, vitae pharetra lorem tempus id. Donec sollicitudin sapien magna, in tincidunt dui viverra. Nullam porta."
+
+      - id: vivamus-vulputate
+        title: Vivamus vulputate auctor, Nulla pharetra
+        date: MMM YYYY — MMM YYYY
+        datetime: "YYYY-MM"
+        location: Roma, Imperium Romanum
+        bullets:
+          - "Sed finibus accumsan nibh pharetra eleifend. Nunc lorem sapien, congue vel semper vel, tincidunt eget metus. Nam a metus leo."
+          - "Phasellus sed nisl vitae urna rhoncus sollicitudin in eu nisl. Duis consequat tincidunt libero, vitae laoreet lacus congue eget. Mauris."
+
+  - type: education
+    heading: Education
+    items:
+      - title: Gradus Baccalaurei Artium in Historia
+        subtitle: Donec tempor neque eget
+        institution: Phasellus imperdiet dictum neque eget efficitur

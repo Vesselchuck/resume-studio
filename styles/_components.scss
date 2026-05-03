@@ -1,0 +1,219 @@
+/* ───────────────────────────────────────────────────────────────
+   COMPONENTS — visible page elements: name header (page 1),
+   section headings, generic block wrapper, sidebar content
+   (details rows, plain lists), main-column content (jobs,
+   bullets, education entries).
+   ─────────────────────────────────────────────────────────────── */
+.resume-header {
+  margin-block-end: var(--sp-xl);
+  /* Compensate for Montserrat's ascender padding so the top of the
+     "GAIUS" glyph sits at the page-padding edge (0.5in), not 0.05in
+     below it. This negative margin must roughly equal half the
+     line-height's leading minus the cap-height offset.              */
+  margin-block-start: -0.05in;
+}
+
+.name {
+  font-weight: 700;
+  font-size: var(--size-name);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 0.98;
+}
+.name-first, .name-last { display: block; }
+.name-last { margin-block-start: 0.05em; }
+
+
+/* ─── SECTION HEADING ───────────────────────────────────── */
+.section-heading {
+  font-weight: 700;
+  font-size: var(--size-section);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  line-height: 1;
+  margin-block-end: var(--sp-lg);
+}
+.section-heading::after {
+  content: "";
+  display: block;
+  inline-size: 2.4em;
+  /* Whole-pixel thickness — `1.5px` rounds inconsistently between
+     1 and 2 device pixels at print depending on sub-pixel position,
+     producing visibly different underlines on different headings.   */
+  block-size: 2px;
+  background: var(--ink);
+  margin-block-start: 0.4em;
+}
+
+
+/* ─── BLOCK (generic section wrapper) ───────────────────── */
+.block { display: flex; flex-direction: column; gap: var(--sp-sm); }
+
+
+/* ─── SIDEBAR CONTENT ───────────────────────────────────── */
+.details-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+.detail-row {
+  display: flex;
+  flex-direction: column;
+}
+/* Detail label (ADDRESS, PHONE, EMAIL in the sidebar). Visually a
+   peer of .job-title — same weight, same size, same line-height,
+   same color — except set in UPPERCASE to mark it as a field-label
+   rather than an entry title. Sharing the size token with .job-title
+   means future size changes touch one variable, not two.
+
+   Letter-spacing of 0.1em matches .section-heading's tracking ratio
+   so both label tiers (large section headings + small detail labels)
+   feel like part of one typographic system that scales proportionally
+   with size.                                                         */
+.detail-label {
+  font-weight: 700;
+  font-size: var(--size-jobtitle);
+  line-height: 1.3;
+  letter-spacing: var(--ls-wide);
+  text-transform: uppercase;
+}
+.detail-value {
+  font-size: var(--size-body);
+  line-height: 1.4;
+}
+
+.plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+  font-size: var(--size-body);
+  line-height: 1.4;
+}
+
+
+/* ─── MAIN COLUMN CONTENT ──────────────────────────────── */
+.summary-text {
+  font-size: var(--size-body);
+  line-height: 1.4;
+}
+
+/* Work-experience block. Inherits the default .block gap (--sp-sm)
+   so the heading-to-first-job distance matches every other section
+   (Education, Summary, sidebar lists). Inter-job spacing is then
+   added back via an adjacent-sibling margin so each job entry is
+   visually separated from the previous one without affecting the
+   heading-to-first-job gap.                                       */
+.experience .job + .job {
+  margin-block-start: var(--sp-sm);
+}
+
+.job, .edu-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+}
+
+/* A continuation job (page 2 top): the bullet hangs alone with
+   the same indent as a regular bullet.
+
+   INTENT: cancel the standard `.bullets { margin-block-start }` so
+   the orphaned bullets sit flush with the body-grid top — no
+   awkward gap above them since there's no header to separate from.
+
+   APPLIES WHEN: a job's bullets continue from the previous page
+   AND .bullets is the FIRST CHILD of the .job--continued article.
+
+   DOES NOT APPLY WHEN: anything precedes the bullets inside the
+   continuation article (e.g., a "(continued from page 1)" label).
+   In that case the cancellation creates an unwanted collapse.    */
+.job--continued > .bullets {
+  margin-block-start: 0;
+}
+
+/* A "gap" entry — used for non-employment periods (relocation, career
+   break, sabbatical, parental leave, etc.). Italicized and rendered
+   in muted grey so it reads visually as a soft note in the timeline
+   rather than a role with the same weight as employment.            */
+.job--gap .job-title {
+  font-style: italic;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Job header — stacks vertically. Title sits alone on its row
+   (full column width, no competing right-side element to compress
+   it), and the meta line below combines date + location separated
+   by a thin vertical rule.                                          */
+.entry-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-entry);
+}
+
+/* Job and education titles + the education subtitle share size and
+   leading. Titles are bold; the subtitle (specialization line below
+   the degree) is regular weight. Color inherits from body.          */
+.job-title, .edu-title, .edu-subtitle {
+  font-size: var(--size-jobtitle);
+  line-height: 1.3;
+}
+.job-title, .edu-title { font-weight: 700; }
+.edu-subtitle          { font-weight: 400; }
+
+/* Meta row: date | location, single line. Wraps gracefully if both
+   pieces together exceed the column width (rare with date+city).   */
+.entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--sp-sm);
+  font-size: var(--size-small);
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+/* Vertical rule between date and location, drawn as a ::after on
+   the date itself. Sits centered on the meta-row baseline.
+
+   INTENT: visually delimit the date from the location ("MMM YYYY
+   — MMM YYYY | Roma, Imperium Romanum") without using an extra HTML
+   element to carry the rule.
+
+   APPLIES WHEN: .job-date has a following sibling in .entry-meta
+   (i.e. there's a location after the date).
+
+   DOES NOT APPLY WHEN: .job-date is the last child of .entry-meta
+   (e.g. the "Transitus in Cursum Novum" gap entry has only
+   a date, no location). The :last-child suppression prevents a
+   stray trailing rule with nothing after it.                       */
+.job-date::after {
+  content: "";
+  display: inline-block;
+  inline-size: 1px;
+  block-size: 0.85em;
+  background: var(--rule);
+  margin-inline-start: var(--sp-sm);
+  /* Center the rule on the meta-row's text middle. `vertical-align`
+     avoids the subpixel rendering inconsistency of `transform`.     */
+  vertical-align: middle;
+}
+.job-date:last-child::after { display: none; }
+
+.bullets {
+  list-style: disc outside;
+  padding-inline-start: var(--sp-xl);
+  margin-block-start: var(--sp-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+}
+.bullets li {
+  font-size: var(--size-body);
+  line-height: 1.4;
+}
+.bullets li::marker {
+  color: var(--ink);
+}
+.bullets strong { font-weight: 700; }
+
+

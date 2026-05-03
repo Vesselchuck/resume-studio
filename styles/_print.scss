@@ -1,0 +1,42 @@
+/* ───────────────────────────────────────────────────────────────
+   PRINT — @media print overrides. Hides screen-only chrome
+   (page shadows, body background); each .page becomes one
+   printed sheet via page-break-after.
+   ─────────────────────────────────────────────────────────────── */
+/* Print is trivially simple now: each .page is already exactly
+   the size of an A4 sheet, so we just tell the browser to print
+   each page as one sheet (page-break-after: always) and remove
+   on-screen decorations.                                          */
+@media print {
+  :root {
+    --bg-app: #ffffff;
+  }
+  html, body {
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Zero browser margin — the .page already has its own padding. */
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  main.resume {
+    display: block;
+    padding: 0;
+    gap: 0;
+  }
+  .page {
+    box-shadow: none;
+    margin: 0;
+    /* Each page becomes one printed sheet. */
+    page-break-after: always;
+    break-after: page;
+  }
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}
+
+

@@ -1,0 +1,59 @@
+/* ───────────────────────────────────────────────────────────────
+   TOKENS — CSS custom properties (page geometry, spacing scale,
+   typography, colours). Referenced as var(--name) by every other
+   partial. No Sass variables; values stay in :root so they work
+   at runtime and can be inspected/overridden via dev tools.
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  /* Colour. */
+  --bg-app:     #e9eaee;   /* off-white surrounding the pages on screen */
+  --bg-page:    #ffffff;
+  --ink:        #1a1a1a;
+  --muted:      #555555;
+  --rule: #d8d8d8;   /* light grey for all decorative rules — top-rule,
+                        column divider, section separators, date|loc seps */
+
+  /* Typography. */
+  --font: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+
+  /* Sizes — pt-based so they translate identically to print. */
+  --size-name:     30pt;
+  --size-section:  14pt;
+  --size-jobtitle: 10pt;
+  --size-body:     10pt;
+  --size-small:    8.5pt;
+
+  /* Spacing scale — geometric ~1.4× steps, in rem so they scale
+     with root font-size in print. Use these tokens for every gap
+     and margin instead of raw rem values, so visual rhythm stays
+     coherent across the document.                                  */
+  --sp-xs:  0.25rem;     /*  4 px */
+  --sp-sm:  0.375rem;    /*  6 px */
+  --sp-md:  0.5rem;      /*  8 px */
+  --sp-lg:  0.6875rem;   /* 11 px */
+  --sp-xl:  1rem;        /* 16 px */
+  --sp-2xl: 1.5rem;      /* 24 px — outlier for inter-page / name-rule */
+
+  /* PAGE GEOMETRY — physical dimensions of the printed sheet. Stays
+     in absolute units because A4 is a physical paper size.         */
+  --page-w: 210mm;
+  --page-h: 297mm;
+  --page-margin: 0.5in;        /* Narrow margins, all sides         */
+
+  /* INTERNAL LAYOUT — two-column grid inside each page.            */
+  --sidebar-w: 2in;
+  --col-gap:   0.5in;
+
+  /* SECTION RHYTHM — total visible spacing between sibling sections
+     separated by <hr class="section-sep">. Same value in BOTH the
+     sidebar and main column; per-context margins are derived below
+     via calc(), so changing this single token re-tunes both columns.
+     Asserted at render time by render.js.                           */
+  --section-rhythm: 45px;
+
+  /* TYPOGRAPHY MICRO-TOKENS — values that recur in multiple places. */
+  --ls-wide:   0.1em;          /* letter-spacing for headings/labels */
+  --gap-entry: 0.2em;          /* vertical gap inside .entry-header  */
+}
+
+

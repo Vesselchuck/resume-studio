@@ -1,7 +1,54 @@
+# ─── Build outputs ──────────────────────────────────────────────
+# Regenerated on every `node render.js`. Each user produces their
+# own; never check these in.
+dist/
+print.pdf
+
+# ─── Private data ───────────────────────────────────────────────
+# The committed `data/resume_default.yml` is a placeholder. Real resume
+# data lives in `data/resume.local.yml`, which stays local only.
+# Its matching snapshot fixture is also private.
+data/resume.local.yml
+tests/fixtures/expected_print.local.pdf
+
+# ─── Test artifacts ─────────────────────────────────────────────
+# Diff images written when a snapshot test fails. They're useful
+# for debugging the failure but shouldn't pollute history.
+tests/fixtures/diff_page*.png
+
+# ─── Python ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+# Virtual environments, in case you ever spin one up.
+venv/
+.venv/
+env/
+# Coverage artifacts.
+htmlcov/
+.coverage
+.coverage.*
+
+# ─── Node ───────────────────────────────────────────────────────
+# Reinstalled by `npm install` from package-lock.json.
+node_modules/
+# Test coverage artifacts.
+coverage/
+.nyc_output/
+
+# ─── Secrets / environment overrides ────────────────────────────
+# Defensive — not currently used, but a common Git footgun.
+.env
+.env.*
+!.env.example
+
+# ─── Logs ───────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
 # ─── Editor / OS ────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
-*.bak
 .DS_Store
 Thumbs.db

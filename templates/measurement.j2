@@ -1,0 +1,160 @@
+{#-
+  measurement.j2 — Single-page flowing layout for the layout solver.
+
+  This template renders ALL sidebar blocks and ALL jobs/bullets in a
+  single tall page (no page breaks). The solver in render.js opens
+  this in Playwright, measures the height/position of every
+  data-measure element, and produces the placement that drives the
+  final build.
+
+  The structure mirrors the final layout (two-column body grid,
+  same widths) so measured heights are realistic. Only the
+  `body.measurement-mode` class differs, which CSS uses to disable
+  fixed page height so content can flow.
+
+  Markers:
+    data-measure="resume-header"  — page-1 header (eats vertical space)
+    data-measure="block"          — a sidebar block (the whole section)
+    data-measure="separator"      — an <hr class="section-sep">
+    data-measure="item"           — a sidebar block's heading-or-row item
+    data-measure="block-heading"  — the heading inside a sidebar block
+    data-measure="section"        — main-column section
+    data-measure="section-heading"— main column section heading
+    data-measure="summary-text"   — summary section text body
+    data-measure="job"            — a single job article
+    data-measure="job-header"     — header (title + meta) inside a job
+    data-measure="bullet"         — single bullet <li>
+    data-measure="edu-item"       — single education item
+
+  Each measurable element also has data-id (block_id, job_id) where
+  relevant so the solver can reference them in placement.json.
+-#}
+{%- import '_macros.j2' as m -%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ name.first }} {{ name.last }} — Resume (measurement)</title>
+  <meta name="description" content="{{ meta.description }}">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,700;1,500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="measurement-mode">
+
+  <!-- This is the MEASUREMENT-MODE HTML. It is NOT the final paginated
+       output. The layout solver in render.js opens this in Playwright,
+       measures positions of [data-measure] elements, and writes
+       dist/placement.json which drives the final build. -->
+  <main class="resume" aria-label="Resume (measurement)">
+
+    <article class="page" aria-label="Measurement page" data-measurement-page>
+
+      <header class="resume-header" data-measure="resume-header">
+        <h1 class="name">
+          <span class="name-first">{{ name.first }}</span>
+          <span class="name-last">{{ name.last }}</span>
+        </h1>
+      </header>
+
+      <hr class="top-rule" aria-hidden="true">
+
+      <div class="body-grid">
+
+        <aside class="sidebar" aria-label="Sidebar (measurement)">
+{% for b in sidebar_blocks -%}
+{%- if not loop.first %}
+<hr class="section-sep" data-measure="separator">
+{% endif -%}
+<section class="block" id="{{ b.id }}" data-measure="block" data-id="{{ b.id }}" data-type="{{ b.type }}">
+  <h2 class="section-heading" data-measure="block-heading">{{ b.heading | e }}</h2>
+{%- if b.type == "details" %}
+  <address class="details-list">
+{%- for row in b.rows %}
+    <div class="detail-row" data-measure="item" data-row-index="{{ loop.index0 }}">
+      <span class="detail-label">{{ row.label | e }}</span>
+      <span class="detail-value">
+{%- if row.href is defined -%}
+<a href="{{ row.href }}">{{ row.value | e }}</a>
+{%- else -%}
+{{ row.value | e }}
+{%- endif -%}
+</span>
+    </div>
+{%- endfor %}
+  </address>
+{%- elif b.type == "list" %}
+  <ul class="plain-list">
+{%- for item in b['items'] %}
+    <li data-measure="item" data-item-index="{{ loop.index0 }}">{{ item | e }}</li>
+{%- endfor %}
+  </ul>
+{%- endif %}
+</section>
+{%- endfor %}
+        </aside>
+
+        <div class="main-col">
+
+          <section class="block" data-measure="section" data-section-type="summary">
+            <h2 class="section-heading" data-measure="section-heading">{{ summary.heading | e }}</h2>
+            <p class="summary-text" data-measure="summary-text">{{ summary.text | e }}</p>
+          </section>
+
+          <hr class="section-sep" data-measure="separator">
+
+          <section class="block experience" data-measure="section" data-section-type="experience">
+            <h2 class="section-heading" data-measure="section-heading">{{ experience.heading | e }}</h2>
+{% for j in experience.jobs -%}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+<article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}" data-measure="job" data-id="{{ j.id }}">
+  <header class="entry-header" data-measure="job-header">
+    <h3 class="job-title">{{ j.title | e }}</h3>
+    <p class="entry-meta">
+      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
+{%- if j.location is defined %}
+      <span class="job-loc">{{ j.location | e }}</span>
+{%- endif %}
+    </p>
+  </header>
+{%- if j.bullets is defined %}
+  <ul class="bullets">
+{%- for bullet in j.bullets %}
+    <li data-measure="bullet" data-bullet-index="{{ loop.index0 }}">{{ bullet | e | md | safe }}</li>
+{%- endfor %}
+  </ul>
+{%- endif %}
+</article>
+{% endfor %}
+          </section>
+
+          <hr class="section-sep" data-measure="separator">
+
+          <section class="block" data-measure="section" data-section-type="education">
+            <h2 class="section-heading" data-measure="section-heading">{{ education.heading | e }}</h2>
+{%- for item in education['items'] %}
+<article class="edu-item" data-measure="edu-item">
+  <header class="entry-header">
+    <h3 class="edu-title">{{ item.title | e }}</h3>
+    <p class="edu-subtitle">{{ item.subtitle | e }}</p>
+    <p class="entry-meta">
+      <span class="job-loc">{{ item.institution | e }}</span>
+    </p>
+  </header>
+</article>
+{%- endfor %}
+          </section>
+
+        </div>
+
+      </div>
+    </article>
+
+  </main>
+
+</body>
+</html>
