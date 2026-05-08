@@ -1,10 +1,10 @@
 # Resume
 
-Version 0.3.0. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+Version 0.4.0. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Single-source-of-truth resume pipeline. Edit YAML, get a pixel-faithful
-A4 PDF. Page placement is computed automatically — no manual page-break
-management.
+US Letter PDF. Page placement is computed automatically — no manual
+page-break management.
 
 ## What it does
 
@@ -17,8 +17,8 @@ management.
    on which page, including bridging (a job's bullets split across
    pages, or a sidebar list split across pages).
 5. Renders the final paginated HTML against the solved placement.
-6. Prints to PDF via Playwright/Chromium, crops to exact ISO A4
-   (210×297mm), stamps PDF metadata.
+6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
+   (8.5×11 in), stamps PDF metadata.
 7. Pixel-diffs the result against a committed snapshot to catch
    accidental visual changes.
 
@@ -74,8 +74,8 @@ platform. If detection fails (rare), override it explicitly:
 ## Editing your resume
 
 The committed `data/resume_default.yml` is a fictional placeholder (Gaius
-Caesar, with Latin filler text). To use
-your own content without committing it, copy it to a private
+Caesar, with Latin filler text). To use your own content without committing
+it, copy it to a private
 `data/resume.local.yml` (which is gitignored) and edit there:
 
 ```bash
@@ -100,23 +100,22 @@ The build prefers `resume.local.yml` over `resume_default.yml` if both exist.
 
 ## What you can change in the YAML
 
-- **Personal info** — `name.first`, `name.last`, and
-  `meta.description` (required; used as the PDF subject)
+- **Personal info** — `name.first`, `name.last`
+- **Document metadata** — `meta.description` (required; used as the
+  PDF subject) and `meta.lang` (optional BCP-47 tag such as `en-US`,
+  written into the PDF as `/Lang`; defaults to `en-US`).
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
   Each block has a kebab-case `id` (must be unique), a `type`
   (`details` or `list`), a `heading`, and content: `details` blocks
-  take `rows` (`label`, `value`, optional `href`), `list` blocks take
-  `items`. The first 10 items of the `key-skills` block become the PDF
-  keywords.
+  take `rows` of `label`, `value` and an optional `href`; `list`
+  blocks take `items`.
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
   `mainColumn[experience].jobs`. Each job needs a unique kebab-case
-  `id`, plus `title`, `date`, `datetime` and optional `location`; set
-  `gap: true` for a career-break entry (bullets are then optional).
-  Education `items` take `title`, `subtitle` and `institution`.
+  `id`; set `gap: true` (and omit `bullets`) for a non-employment gap
+  entry.
 - **Bullets** — add or remove freely under each job's `bullets:` list.
-  The layout solver decides where page breaks land. Wrap text in
-  `**double asterisks**` to make it bold.
+  The layout solver decides where page breaks land.
 - **Page cap** — `meta.maxPages` (required, a positive integer; the
   placeholder uses 10). Lower it to force tighter layouts; the build
   fails clearly if content can't fit.
@@ -129,10 +128,10 @@ bullets across your jobs, the solver figures out where to break.
 Running `node render.js` writes:
 
 - `dist/index.html` — the rendered HTML (final mode by default)
-- `dist/styles.css` — compiled from `styles/styles.scss` via Sass
+- `dist/styles.css` — compiled from `assets/styles/styles.scss` via Sass
 - `dist/pdf_meta.json` — derived PDF metadata + data source identifier
 - `dist/placement.json` — the solver's per-page placement decisions
-- `print.pdf` — the cropped A4 PDF
+- `print.pdf` — the cropped US Letter PDF
 
 Everything in `dist/` plus `print.pdf` is gitignored.
 
@@ -140,49 +139,64 @@ Everything in `dist/` plus `print.pdf` is gitignored.
 
 ```
 .
-├── styles/                 Sass source — compiled to dist/styles.css
-│   ├── styles.scss         Entry point (@use's the partials)
-│   ├── _tokens.scss        CSS custom properties
-│   ├── _base.scss          Reset + body defaults
-│   ├── _layout.scss        Page container, body grid, divider, hrs
-│   ├── _components.scss    Name header, headings, sidebar, jobs
-│   ├── _print.scss         @media print overrides
-│   └── _measurement.scss   body.measurement-mode overrides
-├── data/                   YAML resume content
-│   ├── resume_default.yml  Placeholder (committed)
-│   └── resume.local.yml    Your real data (gitignored)
+├── assets/                    Source assets compiled into the build
+│   ├── styles/                Sass source — compiled to dist/styles.css
+│   │   ├── styles.scss        Entry point (@use's the partials)
+│   │   ├── _tokens.scss       CSS custom properties
+│   │   ├── _fonts.scss        @font-face declarations (vendored Montserrat)
+│   │   ├── _base.scss         Reset + body defaults
+│   │   ├── _layout.scss       Page container, body grid, divider, hrs
+│   │   ├── _components.scss   Name header, headings, sidebar, jobs
+│   │   ├── _print.scss        @media print overrides
+│   │   └── _measurement.scss  body.measurement-mode overrides
+│   └── fonts/                 Vendored Montserrat (canonical Google
+│       │                      Fonts version, served from disk for
+│       │                      reproducible builds — see "Why vendored"
+│       │                      below)
+│       ├── Montserrat-VariableFont_wght.woff2          Upright (100-900)
+│       ├── Montserrat-Italic-VariableFont_wght.woff2  Italic (100-900)
+│       └── OFL.txt            Font license (OFL-1.1)
+├── data/                      YAML resume content
+│   ├── resume_default.yml     Placeholder (committed)
+│   └── resume.local.yml       Real data (gitignored)
 ├── scripts/
-│   ├── build.py            YAML → HTML, two modes (final, measurement)
-│   ├── crop_pdf.py         Trim Chromium's oversized PDF to true A4
-│   ├── snapshot_pdf.py     Visual regression test
-│   ├── detect_python.js    Cross-platform Python interpreter detection
-│   ├── run_tests.js        Test runner (Python + Node)
-│   ├── check_layout.js     Post-build layout invariant checks
-│   ├── measure_dom.js      Playwright DOM measurement extractor
-│   └── solve_layout.js     Pure-function layout solver
+│   ├── build.py               YAML → HTML, two modes (final, measurement)
+│   ├── crop_pdf.py            Trim Chromium's oversized PDF to true Letter
+│   ├── snapshot_pdf.py        Visual regression test
+│   ├── detect_python.js       Cross-platform Python interpreter detection
+│   ├── run_tests.js           Test runner (Python + Node)
+│   ├── check_layout.js        Post-build layout invariant checks
+│   ├── measure_dom.js         Playwright DOM measurement extractor
+│   ├── solve_layout.js        Pure-function layout solver
+│   ├── _console.py            Shared console-output helper (Python)
+│   └── _console.js            Shared console-output helper (Node)
 ├── templates/
-│   ├── resume.j2           Final paginated template
-│   ├── measurement.j2      Single-page flowing template (solver input)
-│   └── _macros.j2          Shared rendering macros
-├── tests/                  Unit tests + visual regression fixtures
-│   ├── README.md           How to run tests
-│   ├── test_*.py, test_*.js  Unit tests
+│   ├── resume.j2              Final paginated template
+│   ├── measurement.j2         Single-page flowing template (solver input)
+│   └── _macros.j2             Shared rendering macros
+├── tests/                     Unit tests + visual regression fixtures
+│   ├── README.md              How to run tests
+│   ├── test_validate_data.py     YAML schema validation tests
+│   ├── test_markdown_filter.py   Bullet markdown filter tests
+│   ├── test_solve_layout.js      Layout solver tests
+│   ├── test_check_layout.js      Layout invariants tests (Playwright)
 │   └── fixtures/
-│       ├── .gitkeep
-│       ├── expected_print.pdf        Snapshot for the placeholder data (committed)
-│       └── expected_print.local.pdf  Snapshot for your local data (gitignored)
-├── render.js               Build orchestrator (11-step pipeline)
-├── package.json            Node dependencies (playwright, sass)
-├── requirements.txt        Python dependencies
-├── CHANGELOG.md            Release history
-└── LICENSE                 MIT
+│       ├── expected_print.pdf       Snapshot for the placeholder data
+│       ├── expected_print.local.pdf Snapshot for local data (gitignored)
+│       └── diff_page*.png           Generated on snapshot failure
+│                                    (gitignored)
+├── render.js                  Build orchestrator (11-phase pipeline)
+├── package.json               Node dependencies (playwright, sass)
+├── requirements.txt           Python dependencies
+├── CHANGELOG.md               Release history
+└── LICENSE                    MIT
 ```
 
 ## Pipeline steps (`node render.js`)
 
 ```
 0. Run all unit tests (Python + JS)
-1. Compile Sass (styles/ → dist/styles.css)
+1. Compile Sass (assets/styles/ → dist/styles.css)
 2. Build measurement HTML
 3. Open it in Playwright; extract DOM measurements
 4. Solve the layout; write dist/placement.json
@@ -190,7 +204,7 @@ Everything in `dist/` plus `print.pdf` is gitignored.
 6. Reload the final HTML
 7. Check layout invariants (page count, divider, rhythm, overflow)
 8. Print to PDF
-9. Crop to A4 and stamp metadata
+9. Crop to US Letter and stamp metadata
 10. Snapshot test (auto-bootstraps fixture on first build)
 ```
 
@@ -221,22 +235,30 @@ python scripts/snapshot_pdf.py --update-both       # both placeholder and local
 ```
 
 ```cmd
-:: Windows: current data source
-py scripts\snapshot_pdf.py --update
-:: Windows: both placeholder and local
-py scripts\snapshot_pdf.py --update-both
+:: Windows
+py scripts\snapshot_pdf.py --update                :: current data source
+py scripts\snapshot_pdf.py --update-both           :: both placeholder and local
 ```
 
 ## Configuration
 
-Three env vars affect the build:
+Environment variables that affect the build:
 
 - `PYTHON` — explicit Python interpreter (overrides auto-detection)
 - `RESUME_DATA_SOURCE=default|local` — force which data file to use,
   ignoring the local-preferred-over-default logic. Used by
   `--update-both` to refresh both fixtures in one run.
-- `SKIP_SNAPSHOT=1` — skip the snapshot test (step 10). Set by
-  `--update-both` for the builds it runs.
+- `STRICT_TESTS=1` — convert SKIP'd test suites into hard failures.
+  By default a skipped suite (e.g. `test_check_layout` when the
+  Playwright browser binary is missing) prints a yellow warning and
+  the runner exits 0. With `STRICT_TESTS=1` set, the runner exits 1
+  instead. Use this in CI to catch silently-bypassed test suites.
+- `DEBUG_MEASUREMENTS=1` — dump the solver's input measurements and
+  the final rendered column heights (developer diagnostic).
+- `SKIP_SNAPSHOT=1` — skip the visual regression test (used internally
+  by `snapshot_pdf.py --update-both`).
+- `NO_COLOR=1` / `FORCE_COLOR=1` — control ANSI output (default:
+  auto-detect from TTY).
 
 ## Requirements
 
@@ -253,7 +275,7 @@ quirks. The output of two builds on different machines wouldn't match.
 
 This pipeline takes a different path:
 
-1. **Each `<article class="page">` is a fixed 210×297mm box.** The
+1. **Each `<article class="page">` is a fixed 8.5×11 in box.** The
    screen layout IS the print layout. There is no native pagination;
    `@page` margins are zero, and Chromium just prints what it sees.
 2. **A solver decides placement deterministically.** Given identical
@@ -270,6 +292,44 @@ This pipeline takes a different path:
 
 The result: editing the YAML and re-running produces the same PDF
 on any machine, and any visible change is caught by a test.
+
+## Why vendored Montserrat
+
+The project ships its own Montserrat font files under `assets/fonts/`
+instead of loading from Google Fonts CDN. This isn't decorative — it
+fixes a real reproducibility bug.
+
+When the project loaded fonts from the CDN, three things could
+silently change the rendered output:
+
+1. **System-installed Montserrat overriding the web font.** If a
+   contributor's OS had Montserrat installed locally, Chromium
+   sometimes preferred the system version over the CDN-served file.
+   Different system Montserrat versions render glyphs at slightly
+   different widths — enough to change line-wrap decisions and
+   therefore the layout solver's output.
+2. **Different npm mirrors of Montserrat.** An earlier setup that
+   loaded Montserrat from `@fontsource/montserrat` shipped subtly
+   different outline files than the canonical Google Fonts version,
+   even though their metrics tables matched. A 14.6%
+   width divergence was measured on the same string between the two.
+3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes
+   change when fonts are re-versioned. Pinning a specific URL would
+   eventually 404; using the stable CSS endpoint would silently
+   serve a different glyph file when Google updated the version.
+
+The vendored woff2 files are the canonical Google Fonts release,
+loaded directly from disk via `@font-face url('../fonts/...')`. No
+`local()` source is declared, so system Montserrat never overrides
+the web font. The two woff2 files (~430 KB total) cover all weights
+via the variable-font `wght` axis.
+
+The Google Fonts `<link>` tag is still present in the templates as a
+graceful-degradation fallback: if `assets/fonts/` is missing for any
+reason, the browser falls through to the CDN. That fallback isn't
+guaranteed to produce a matching layout (the system-Montserrat
+override risk reappears), but it produces a readable PDF instead of
+a fallback-Helvetica disaster.
 
 ## FAQ / common gotchas
 
@@ -328,15 +388,16 @@ Not currently. The solver decides placement based on heights and the
 fixed rules (header + ≥1 bullet on origin for jobs, heading + ≥3 items
 for sidebar lists). If you want a different placement, edit content
 to change the heights involved, or trim until the solver chooses what
-you want. There is no per-job override for split points.
+you want.
 
 **The fonts look wrong on first build.**
-Montserrat is loaded from the Google Fonts CDN when Chromium loads the
-page. If
-your machine has no internet access, the build will use fallback fonts
-and the snapshot test will fail. Internet access is required at build
-time but not at PDF view time (the PDF embeds whichever fonts Chromium
-rendered with).
+Montserrat is vendored under `assets/fonts/` and loaded from disk —
+no internet required at build time. If your render still produces
+the wrong output, check that `assets/fonts/Montserrat-VariableFont_wght.woff2`
+exists. The templates still link the Google Fonts stylesheet, but
+only as a fallback for when the vendored files are missing; the
+vendored files are what reproducible builds rely on (see "Why
+vendored Montserrat" above).
 
 **Where do I put real resume data without committing it?**
 Put it in `data/resume.local.yml`. That file is gitignored; the build

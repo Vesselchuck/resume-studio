@@ -8,10 +8,20 @@
   <meta name="author" content="{{ name.first }} {{ name.last }}">
   <meta name="description" content="{{ meta.description }}">
 
+  <!-- Fonts: vendored Montserrat (assets/fonts/) is the source of
+       truth — its @font-face rules in styles.css are the LAST
+       declaration in cascade order, so they win when the woff2
+       loads successfully. The Google Fonts CSS link below is a
+       graceful-degradation fallback: if assets/fonts/ is missing
+       or the request fails, the browser uses Google's @font-face
+       rules instead. The CSS-API URL (css2?family=...) is the
+       stable, version-agnostic endpoint — Google internally
+       resolves it to current woff2 hashes, insulating us from URL
+       drift on the underlying font files. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,700;1,500&display=swap">
+        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>

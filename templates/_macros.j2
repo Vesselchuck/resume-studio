@@ -85,7 +85,7 @@
   <address class="details-list">
 {%- for row in b.rows %}
     <div class="detail-row">
-      <span class="detail-label">{{ row.label | e }}</span>
+      <span class="subgroup-label">{{ row.label | e }}</span>
       <span class="detail-value">
 {%- if row.href is defined -%}
 <a href="{{ row.href }}">{{ row.value | e }}</a>

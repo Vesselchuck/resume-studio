@@ -5,7 +5,7 @@
    bullets, education entries).
    ─────────────────────────────────────────────────────────────── */
 .resume-header {
-  margin-block-end: var(--sp-xl);
+  margin-block-end: var(--sp-lg);
   /* Compensate for Montserrat's ascender padding so the top of the
      "GAIUS" glyph sits at the page-padding edge (0.5in), not 0.05in
      below it. This negative margin must roughly equal half the
@@ -14,7 +14,7 @@
 }
 
 .name {
-  font-weight: 700;
+  font-weight: 600;
   font-size: var(--size-name);
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -25,24 +25,23 @@
 
 
 /* ─── SECTION HEADING ───────────────────────────────────── */
+/* No underline bar — spacing alone communicates section
+   boundaries. The previous 2.4em fixed-width bar produced
+   inconsistent coverage across headings of different lengths
+   (27% of "WORK EXPERIENCE", 40% of "KEY SKILLS") and read
+   as a template pattern. --section-rhythm carries the visual
+   separation load instead.                                   */
 .section-heading {
-  font-weight: 700;
+  font-weight: 600;
   font-size: var(--size-section);
   text-transform: uppercase;
   letter-spacing: var(--ls-wide);
   line-height: 1;
-  margin-block-end: var(--sp-lg);
-}
-.section-heading::after {
-  content: "";
-  display: block;
-  inline-size: 2.4em;
-  /* Whole-pixel thickness — `1.5px` rounds inconsistently between
-     1 and 2 device pixels at print depending on sub-pixel position,
-     producing visibly different underlines on different headings.   */
-  block-size: 2px;
-  background: var(--ink);
-  margin-block-start: 0.4em;
+  /* Reduced from --sp-md (8px) to --sp-xs (4px): without the underline
+     bar there is no visual anchor between heading and content below it.
+     Tighter coupling makes the heading read as belonging to its section
+     rather than floating between two rhythm zones.                     */
+  margin-block-end: var(--sp-xs);
 }
 
 
@@ -70,8 +69,14 @@
    so both label tiers (large section headings + small detail labels)
    feel like part of one typographic system that scales proportionally
    with size.                                                         */
-.detail-label {
-  font-weight: 700;
+/* Generic subgroup label — bold/tracked all-caps used for any
+   labelled cluster of items inside a sidebar block. Two contexts:
+   the DETAILS block (ADDRESS / PHONE / EMAIL above their values),
+   and the per-group headers inside grouped Key Skills lists.
+   Sized at --size-jobtitle so labels are visibly distinct from
+   their --size-body values without needing an extra token.        */
+.subgroup-label {
+  font-weight: 600;
   font-size: var(--size-jobtitle);
   line-height: 1.3;
   letter-spacing: var(--ls-wide);
@@ -79,7 +84,7 @@
 }
 .detail-value {
   font-size: var(--size-body);
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .plain-list {
@@ -87,14 +92,14 @@
   flex-direction: column;
   gap: var(--sp-sm);
   font-size: var(--size-body);
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 
 /* ─── MAIN COLUMN CONTENT ──────────────────────────────── */
 .summary-text {
   font-size: var(--size-body);
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 /* Work-experience block. Inherits the default .block gap (--sp-sm)
@@ -137,13 +142,13 @@
 .job--gap .job-title {
   font-style: italic;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 /* Job header — stacks vertically. Title sits alone on its row
    (full column width, no competing right-side element to compress
    it), and the meta line below combines date + location separated
-   by a thin vertical rule.                                          */
+   by a middle-dot character.                                        */
 .entry-header {
   display: flex;
   flex-direction: column;
@@ -157,50 +162,39 @@
   font-size: var(--size-jobtitle);
   line-height: 1.3;
 }
-.job-title, .edu-title { font-weight: 700; }
+.job-title, .edu-title { font-weight: 600; }
 .edu-subtitle          { font-weight: 400; }
 
-/* Meta row: date | location, single line. Wraps gracefully if both
-   pieces together exceed the column width (rare with date+city).   */
+/* Meta row: date · location, single line. Wraps gracefully if both
+   pieces together exceed the column width (rare with date+city).
+   Gap is zero; the .job-date::after middle-dot owns its own
+   horizontal margins, so the spacing on either side of the dot is
+   symmetric.                                                       */
 .entry-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 var(--sp-sm);
+  gap: 0;
   font-size: var(--size-small);
-  color: var(--muted);
+  color: var(--text-muted);
   line-height: 1.3;
 }
 
-/* Vertical rule between date and location, drawn as a ::after on
-   the date itself. Sits centered on the meta-row baseline.
-
-   INTENT: visually delimit the date from the location ("MMM YYYY
-   — MMM YYYY | Roma, Imperium Romanum") without using an extra HTML
-   element to carry the rule.
-
-   APPLIES WHEN: .job-date has a following sibling in .entry-meta
-   (i.e. there's a location after the date).
-
-   DOES NOT APPLY WHEN: .job-date is the last child of .entry-meta
-   (e.g. the "Transitus in Cursum Novum" gap entry has only
-   a date, no location). The :last-child suppression prevents a
-   stray trailing rule with nothing after it.                       */
+/* Meta-row separator between date and location. Uses a middle-dot
+   character (U+00B7) rather than a pseudo-element rule — softer
+   typographic texture, optically aligned with x-height instead of
+   the full text body. The :last-child suppression prevents a stray
+   trailing dot on entries that have only a date (e.g. the "Transitus in
+   Cursum Novum" gap entry).                            */
 .job-date::after {
-  content: "";
-  display: inline-block;
-  inline-size: 1px;
-  block-size: 0.85em;
-  background: var(--rule);
-  margin-inline-start: var(--sp-sm);
-  /* Center the rule on the meta-row's text middle. `vertical-align`
-     avoids the subpixel rendering inconsistency of `transform`.     */
-  vertical-align: middle;
+  content: "·";
+  margin-inline: var(--sp-sm);
+  color: var(--text-muted);
 }
 .job-date:last-child::after { display: none; }
 
 .bullets {
-  list-style: disc outside;
+  list-style: none;
   padding-inline-start: var(--sp-xl);
   margin-block-start: var(--sp-xs);
   display: flex;
@@ -209,11 +203,33 @@
 }
 .bullets li {
   font-size: var(--size-body);
-  line-height: 1.4;
+  line-height: 1.35;
+  position: relative;
 }
-.bullets li::marker {
-  color: var(--ink);
+/* En-dash marker — positioned absolutely so it sits in the
+   padding-inline-start gutter without affecting line wrapping.
+   Color is --text-muted (not --accent) to keep the accent
+   reserved for structural elements (divider, heading bars,
+   top rule) where it reads as architecture rather than
+   decoration. At --size-body (10pt) a muted dash reads as
+   refined print design rather than default browser styling. */
+.bullets li::before {
+  content: "\2013";           /* U+2013 EN DASH */
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--sp-xl));
+  color: var(--text-muted);
 }
-.bullets strong { font-weight: 700; }
+.bullets strong { font-weight: 600; }
 
 
+
+/* ─── GAP ENTRY ─────────────────────────────────────────────
+   Non-employment periods (relocation, career break, etc.).
+   opacity: 0.7 de-emphasises the entry one clear tier below
+   surrounding job entries while keeping both title and date
+   comfortably legible in color and B&W print.
+   Effective tones on white: title ≈ #535353, meta ≈ #878787.
+   Verified at 432 DPI raster in both color and greyscale.    */
+.job--gap {
+  opacity: 0.7;
+}

@@ -12,9 +12,10 @@
  *     pageGeometry: {
  *       page1Capacity: number,
  *       pageNCapacity: number,
- *       separatorHeight: number,        // <hr class="section-sep">
- *       sidebarBlockGap: number,        // flex gap inside <aside>
- *       mainColumnSectionGap: number,   // flex gap inside <main-col>
+ *       mainColSeparatorHeight: number,  // <hr> inside .main-col
+ *       sidebarSeparatorHeight: number,  // <hr> inside .sidebar
+ *       sidebarBlockGap: number,         // flex gap inside <aside>
+ *       mainColumnSectionGap: number,    // flex gap inside <main-col>
  *     },
  *     maxPages: number,
  *     sidebar: [
@@ -38,8 +39,8 @@
  *   }
  *
  * Inter-block cost (between consecutive entries on the same page):
- *   sidebar:    2 * sidebarBlockGap + separatorHeight
- *   main col:   2 * mainColumnSectionGap + separatorHeight
+ *   sidebar:    2 * sidebarBlockGap + sidebarSeparatorHeight
+ *   main col:   2 * mainColumnSectionGap + mainColSeparatorHeight
  * The flex gap appears once on each side of the <hr>.
  *
  * OUTPUT shape: see combinePages() — same as before.
@@ -130,7 +131,7 @@ function maxFittingBullets(job, offset, remaining, isContinuation, available) {
 // ─── Sidebar solver ──────────────────────────────────────────────
 
 function solveSidebar(blocks, geometry, maxPages) {
-  const interBlockCost = 2 * geometry.sidebarBlockGap + geometry.separatorHeight;
+  const interBlockCost = 2 * geometry.sidebarBlockGap + geometry.sidebarSeparatorHeight;
 
   const pages = [];
   // Each slot: { block, items_offset, items_remaining }
@@ -253,7 +254,7 @@ function solveSidebar(blocks, geometry, maxPages) {
 // that already has prior section content.
 
 function solveMainColumn(sections, geometry, maxPages) {
-  const interSectionCost = 2 * geometry.mainColumnSectionGap + geometry.separatorHeight;
+  const interSectionCost = 2 * geometry.mainColumnSectionGap + geometry.mainColSeparatorHeight;
 
   // Build units.
   const units = [];

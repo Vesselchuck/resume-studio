@@ -69,15 +69,20 @@ function test(name, fn) {
 // ─── Helpers — synthesize measurement-shaped data ───────────────
 
 /**
- * Geometry helper. interBlockCost = 2 * sidebarBlockGap + separatorHeight
+ * Geometry helper.
+ *   sidebar inter-block-cost = 2 * sidebarBlockGap + sidebarSeparatorHeight
+ *   main col inter-section-cost = 2 * mainColumnSectionGap + mainColSeparatorHeight
  * For default values: 2*0 + 0 = 0 (no overhead between blocks unless
- * specified) — keeps simple tests readable.
+ * specified) — keeps simple tests readable. Pass `sep` to set both
+ * separator heights at once, or `sbSep`/`mcSep` to differentiate.
  */
 function geometry(opts = {}) {
+  const sep = opts.sep ?? 0;
   return {
     page1Capacity: opts.page1 ?? 1000,
     pageNCapacity: opts.pageN ?? 1100,
-    separatorHeight: opts.sep ?? 0,
+    sidebarSeparatorHeight: opts.sbSep ?? sep,
+    mainColSeparatorHeight: opts.mcSep ?? sep,
     sidebarBlockGap: opts.sbGap ?? 0,
     mainColumnSectionGap: opts.mcGap ?? 0,
   };

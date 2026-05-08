@@ -16,10 +16,10 @@
  */
 
 const LAYOUT_CONSTANTS = Object.freeze({
-  // A4 at 96 DPI: 210mm = 793.7 px, 297mm = 1122.5 px (rounded to whole
-  // px because sub-pixel viewport sizing is unsupported).
-  A4_VIEWPORT_W: 794,
-  A4_VIEWPORT_H: 1123,
+  // US Letter at 96 DPI: 8.5in = 816 px, 11in = 1056 px (exact since
+  // 1in = 96 px in CSS).
+  LETTER_VIEWPORT_W: 816,
+  LETTER_VIEWPORT_H: 1056,
   // Tolerance (px) for layout-invariant geometry checks. 1 px allows for
   // browser sub-pixel rounding without false positives.
   INVARIANT_TOLERANCE_PX: 1,
@@ -37,8 +37,8 @@ async function checkLayoutInvariants(page, options = {}) {
 
   await page.emulateMedia({ media: 'print' });
   await page.setViewportSize({
-    width: LAYOUT_CONSTANTS.A4_VIEWPORT_W,
-    height: LAYOUT_CONSTANTS.A4_VIEWPORT_H,
+    width: LAYOUT_CONSTANTS.LETTER_VIEWPORT_W,
+    height: LAYOUT_CONSTANTS.LETTER_VIEWPORT_H,
   });
 
   const result = await page.evaluate((cfg) => {

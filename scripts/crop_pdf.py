@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-crop_pdf.py — Post-process Playwright's PDF: crop to ISO A4
+crop_pdf.py — Post-process Playwright's PDF: crop to US Letter
               and stamp authoritative metadata.
 
 CROP
 ────
 Chromium's `page.pdf()` quantizes page dimensions to a 0.12-pt grid,
-producing pages that are ~0.23 mm oversized in width (and ~0.01 mm
-in height). Investigation (see scripts/investigate_crop.js) confirmed
-that Chromium anchors content at the lower-left of the page and the
-excess sits as empty space at the upper-right edges.
+producing pages that are slightly oversized. Chromium anchors content
+at the lower-left of the page, so the excess sits as empty space at
+the upper-right edges.
 
 So the crop shaves the excess from the upper-right edges only. The
 lower-left corner stays put; we shrink the MediaBox upper-right
-inward until width × height equals exactly 210 × 297 mm
-(595.276 × 841.890 pt).
+inward until width × height equals exactly 8.5 × 11 in
+(612 × 792 pt).
 
 This crop has TWO important guarantees:
-  1. The page is exactly ISO A4 (210 × 297 mm).
+  1. The page is exactly US Letter (8.5 × 11 in).
   2. If the source HTML uses uniform padding (e.g. 0.5 in on all four
      sides), the visible margins in the cropped PDF will be EXACTLY
      that value on all four sides. (A symmetric/centered crop would
@@ -36,6 +35,12 @@ Chromium's defaults (Chromium / Skia/PDF) pass through, truthfully
 describing what produced the bytes. Without --meta, all metadata
 present on the input PDF is preserved as-is.
 
+The manifest's `lang` field (default 'en-US' if absent) is stamped
+onto the PDF catalog's /Lang entry — this is what assistive tech
+reads for pronunciation. Note: /Lang alone is a Level 1 a11y win;
+full screen-reader support requires PDF tagging (a structure tree),
+which Chromium's page.pdf() does not produce. See L4 in the audit.
+
 Usage:
     python3 scripts/crop_pdf.py <input.pdf> <output.pdf>
     python3 scripts/crop_pdf.py <input.pdf> <output.pdf> --meta dist/pdf_meta.json
@@ -44,24 +49,35 @@ Usage:
 Requires: pypdf (`pip install pypdf`).
 """
 
+import sys
+
+# Suppress writing of __pycache__/ next to source files. Set this
+# before any other (non-builtin) import. Equivalent to `python -B`
+# but enforces the no-cache rule even for direct invocations.
+sys.dont_write_bytecode = True
+
 import argparse
 import json
-import sys
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, TextStringObject
 
-# True ISO A4 in PDF points (1 pt = 1/72 in).
-A4_W_PT = 210 * 72 / 25.4   # 595.275590...
-A4_H_PT = 297 * 72 / 25.4   # 841.889763...
+# Local console helper.
+sys.path.insert(0, str(Path(__file__).parent))
+import _console as c  # noqa: E402
+
+# True US Letter in PDF points (1 pt = 1/72 in; Letter = 8.5 × 11 in).
+LETTER_W_PT = 8.5 * 72   # 612.0
+LETTER_H_PT = 11 * 72    # 792.0
 
 
 def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
-    """Copy reader's pages to writer with MediaBox/CropBox cropped to A4.
+    """Copy reader's pages to writer with MediaBox/CropBox cropped to Letter.
 
     Chromium anchors content at the lower-left of the page and parks
-    the ~0.64 pt of width excess (and ~0.03 pt of height excess) as
-    empty space at the upper-right edges. So we only shrink the
-    upper-right corner inward — the lower-left stays where it is.
+    the (small) width and height excess as empty space at the
+    upper-right edges. So we only shrink the upper-right corner
+    inward — the lower-left stays where it is.
     """
     for page in reader.pages:
         box = page.mediabox
@@ -70,16 +86,15 @@ def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
 
         # Total excess in each axis; will be shaved entirely from
         # the upper-right edge.
-        excess_w = cur_w - A4_W_PT  # ≈ 0.64 pt for Chromium A4 output
-        excess_h = cur_h - A4_H_PT  # ≈ 0.03 pt for Chromium A4 output
+        excess_w = cur_w - LETTER_W_PT
+        excess_h = cur_h - LETTER_H_PT
 
         if excess_w < -0.001 or excess_h < -0.001:
-            # Page is SMALLER than A4 — refuse to "negative-crop" by
+            # Page is SMALLER than Letter — refuse to "negative-crop" by
             # extending the box, which would just add blank space.
-            print(
-                f"  ⚠  page is smaller than A4 ({cur_w:.2f} × {cur_h:.2f} pt) — "
-                f"leaving as-is",
-                file=sys.stderr,
+            c.warn(
+                f"page is smaller than Letter "
+                f"({cur_w:.2f} × {cur_h:.2f} pt) — leaving as-is"
             )
             writer.add_page(page)
             continue
@@ -133,8 +148,40 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
         writer.add_metadata(info)
 
 
+def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
+    """
+    Stamp the PDF catalog's /Lang entry from the manifest.
+
+    The /Lang entry on the document's root catalog is what assistive
+    technology (screen readers, refreshable braille displays) reads to
+    pick pronunciation rules and voice. /Info's /Lang is metadata that
+    most AT does not consult.
+
+    Defaults silently to en-US if the manifest is missing or has no
+    'lang' key — better to ship a reasonable default than nothing,
+    since untagged language is treated as "unspecified" by AT and
+    can produce wrong-language pronunciation.
+
+    Note: this is a Level 1 accessibility improvement only. Without a
+    /StructTreeRoot (i.e. proper PDF tagging), reading order and
+    semantic structure are still inaccessible to AT. /Lang alone helps
+    pronunciation but does not make the PDF screen-reader-friendly.
+    """
+    lang = 'en-US'
+    if meta_path is not None:
+        try:
+            manifest = json.loads(meta_path.read_text(encoding='utf-8'))
+            value = manifest.get('lang')
+            if isinstance(value, str) and value.strip():
+                lang = value.strip()
+        except (OSError, json.JSONDecodeError):
+            # Manifest unreadable — keep the default rather than fail.
+            pass
+    writer._root_object[NameObject('/Lang')] = TextStringObject(lang)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Crop a PDF to ISO A4 and stamp metadata.")
+    parser = argparse.ArgumentParser(description="Crop a PDF to US Letter and stamp metadata.")
     parser.add_argument('input', help="Input PDF path")
     parser.add_argument('output', help="Output PDF path")
     parser.add_argument(
@@ -146,7 +193,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.meta is not None and not args.meta.exists():
-        print(f"ERROR: --meta file not found: {args.meta}", file=sys.stderr)
+        c.err(f"--meta file not found: {args.meta}")
         return 2
 
     reader = PdfReader(args.input)
@@ -154,18 +201,51 @@ def main() -> int:
 
     crop_pages(reader, writer)
     apply_metadata(writer, reader, args.meta)
+    apply_language(writer, args.meta)
 
-    with open(args.output, 'wb') as f:
-        writer.write(f)
+    try:
+        with open(args.output, 'wb') as f:
+            writer.write(f)
+    except PermissionError:
+        # Most common cause on Windows: a PDF viewer (Adobe Reader,
+        # Edge, Chrome's built-in viewer, SumatraPDF etc.) holds a
+        # write lock on the file while displaying it. Linux/macOS
+        # viewers usually don't take this lock, but some IDE PDF
+        # previews on any platform will. Print actionable guidance
+        # instead of a raw stack trace.
+        c.err(f"Permission denied writing {args.output}.")
+        c.detail("Another program is holding the file open. Most often this is")
+        c.detail("a PDF viewer (Adobe Reader, Edge, Chrome, SumatraPDF, an IDE")
+        c.detail("preview pane). Close the viewer and re-run.")
+        return 1
 
-    # Report final dimensions for visibility.
+    # Report final dimensions for visibility. The relative-to-cwd display
+    # path keeps the output uniform with build.py and snapshot_pdf.py.
     final = PdfReader(args.output)
     p0 = final.pages[0].mediabox
-    w_mm = float(p0.width) * 25.4 / 72
-    h_mm = float(p0.height) * 25.4 / 72
-    print(f"✓ Cropped {len(final.pages)} page(s) to {w_mm:.3f} × {h_mm:.3f} mm")
+    w_in = float(p0.width) / 72
+    h_in = float(p0.height) / 72
+    n = len(final.pages)
+    page_word = 'page' if n == 1 else 'pages'
+    c.ok_pair("Cropped", f"{n} {page_word}, {w_in:g} × {h_in:g} in (US Letter)")
+
+    # crop_pdf does two distinct stamps — /Info dict (title/author/
+    # subject/keywords) from the manifest, and /Lang catalog entry,
+    # both derived from pdf_meta.json. The lang value is part of the
+    # manifest, so the metadata line implicitly covers it; no need
+    # to spell it out in the log.
     if args.meta is not None:
-        print(f"✓ Stamped metadata from {args.meta}")
+        try:
+            display_meta = args.meta.relative_to(Path.cwd())
+        except ValueError:
+            display_meta = args.meta
+        c.ok_pair("Stamped metadata", str(display_meta))
+    else:
+        # No --meta arg: /Lang may still have been stamped via the
+        # default fallback. Report it standalone if so.
+        catalog_lang = final.trailer['/Root'].get('/Lang')
+        if catalog_lang is not None:
+            c.ok_pair("Stamped /Lang", str(catalog_lang))
     return 0
 
 

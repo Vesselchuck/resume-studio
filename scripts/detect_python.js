@@ -11,6 +11,7 @@
  */
 
 const { execFileSync } = require('child_process');
+const c = require('./_console');
 
 function detectPython() {
   if (process.env.PYTHON) return process.env.PYTHON;
@@ -32,12 +33,13 @@ function detectPython() {
       // try the next candidate.
     }
   }
-  console.error('\n❌ NO PYTHON INTERPRETER FOUND');
-  console.error(`Tried: ${candidates.join(', ')}`);
-  console.error('\nInstall Python 3 or set the PYTHON env var explicitly:');
-  console.error('  bash/zsh:    PYTHON=python3.12 node render.js');
-  console.error('  cmd.exe:     set PYTHON=py && node render.js');
-  console.error('  PowerShell:  $env:PYTHON="py"; node render.js');
+  c.err('No Python interpreter found');
+  c.detail(`Tried: ${candidates.join(', ')}`);
+  c.detail('');
+  c.detail('Install Python 3 or set the PYTHON env var explicitly:');
+  c.detail('  bash/zsh:    PYTHON=python3.12 node render.js');
+  c.detail('  cmd.exe:     set PYTHON=py && node render.js');
+  c.detail('  PowerShell:  $env:PYTHON="py"; node render.js');
   process.exit(1);
 }
 

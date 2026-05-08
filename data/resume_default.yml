@@ -22,6 +22,10 @@ meta:
   # the build fails. Increase only if your content genuinely needs
   # more space; the solver is conservative by design.
   maxPages: 10
+  # BCP-47 language tag. Stamped onto the PDF catalog as /Lang so
+  # screen readers and other assistive tech pick correct
+  # pronunciation rules. Defaults to en-US if absent.
+  lang: en-US
 
 # Sidebar — single flat list of blocks. Order = visual order. The
 # layout solver places them on pages and may split a block across
@@ -46,15 +50,18 @@ sidebar:
       type: list
       heading: Key Skills
       items:
+        # Duis Justo
         - Vestibulum Vel Mattis Mauris
         - Suspendisse Mollis Dolor
         - Nullam Maximus Dolor
         - Nullam Posuere Aliquet
         - In Maximus Justo Nec
         - Aliquam Ac Diam Quis
+        # Aliquam Non
         - Pellentesque Egestas Turpis
         - Suspendisse Non Turpis
         - Quisque Ut Eleifend Massa
+        # Vestibulum Ante
         - Nullam Sed Neque Nulla
         - Morbi Placerat Orci
         - Morbi Pharetra Blandit
@@ -62,14 +69,26 @@ sidebar:
         - Morbi Ac Tortor Mauris
         - Fusce Pharetra Sodales
         - Sed Quis Imperdiet Magna
+        # Donec Justo
         - Vestibulum A Est Non
         - Aliquam Vehicula Blandit
         - Fusce Dapibus Dignissim Feugiat
         - Pellentesque Elementum Turpis
+        # Mauris Risus
         - Cras Blandit Orci Lectus
         - Duis Viverra Varius Dolor
         - Curabitur Pharetra Leo Quam
         - Nam Tincidunt Enim
+        - Integer Dignissim Tempor
+        - Proin Posuere Nulla
+        - Etiam Bibendum Velit
+        - Maecenas Dictum Ex
+        - Fusce Et Scelerisque
+        - Nulla Viverra Est
+        - Praesent Iaculis Nulla
+        - Sed Finibus Accumsan
+        - Duis Commodo Massa
+        - Lorem Sit Consectetur
 
     - id: languages
       type: list
@@ -79,9 +98,9 @@ sidebar:
         - Lingua (Gradus Scientiae)
         - Lingua (Gradus Scientiae)
 
-    - id: professional-development
+    - id: certifications
       type: list
-      heading: Professional Development
+      heading: Certifications
       items:
         - Aliquam Ut Nulla Ipsum
         - In Vehicula Orci Sed
@@ -89,6 +108,7 @@ sidebar:
         - Morbi Consequat Vitae Nulla
         - Aliquam Metus Odio Vulputate
         - Aenean Ullamcorper Dignissim
+        - Pellentesque Sit Amet Risus
 
 # Main column — flows continuously through the document. Sections
 # appear in the order listed. The layout solver places them across
@@ -104,8 +124,7 @@ mainColumn:
       nisl maximus rutrum quis ut elit. Lorem ipsum dolor sit amet,
       consectetur adipiscing elit. Maecenas et efficitur elit, in imperdiet
       nisi. Pellentesque tempus enim vitae cursus elementum. Praesent molestie
-      risus sed nunc lacinia suscipit. Praesent iaculis nulla. Curabitur
-      vehicula dapibus mauris, vel imperdiet diam sagittis eu.
+      risus sed nunc lacinia suscipit. Praesent iaculis nulla.
 
   - type: experience
     heading: Work Experience

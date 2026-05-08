@@ -1,0 +1,62 @@
+/* ───────────────────────────────────────────────────────────────
+   FONTS — Vendored Montserrat (canonical Google Fonts version),
+   loaded from assets/fonts/ for reproducibility across machines.
+
+   WHY VENDORED INSTEAD OF GOOGLE FONTS CDN
+   ─────────────────────────────────────────
+   The previous CDN-only setup produced different rendered widths
+   on different machines because system-installed Montserrat (when
+   present) silently overrode the web font, and because some npm
+   mirrors of Montserrat ship subtly different outline files than
+   Google Fonts. Both effects diverged the layout solver's per-job
+   height measurements from the final printed PDF, breaking the
+   "what the solver fits == what fits on paper" contract.
+
+   This partial fixes that by declaring ONLY local file URLs in the
+   src: chain. local() is intentionally absent — system fonts must
+   never override the vendored web font.
+
+   FALLBACK LAYER
+   ──────────────
+   Templates also load Google Fonts CSS via <link rel="stylesheet">.
+   That declares the SAME font-family with its own @font-face rules.
+   This @font-face partial is included AFTER the Google Fonts link
+   in cascade order (because @use 'fonts' is in styles.scss which is
+   loaded second), so the vendored declaration wins when the woff2
+   loads successfully. If assets/fonts/ is missing, Google's rules
+   take over instead of falling all the way to Helvetica Neue.
+   The Google fallback may produce slightly different metrics
+   (system Montserrat could activate via local()), so the build
+   should be considered "correct" only when running off vendored —
+   the snapshot test catches divergence. The fallback is for
+   graceful runtime degradation, not for production builds.
+
+   VARIABLE FONT
+   ─────────────
+   Two woff2 files cover all weights via the `wght` axis: one for
+   upright (100-900), one for italic (100-900). The font-weight
+   range syntax (`100 900`) lets a single @font-face declaration
+   serve every numeric weight in CSS. ~205 KB upright + ~222 KB
+   italic; loaded once per build.
+
+   Paths are relative to dist/styles.css (Sass compiles into dist/),
+   so ../assets/fonts/* resolves to assets/fonts/* at the project
+   root. Browsers normalise the relative URL against the stylesheet
+   location, so this works whether the page is opened via file:// or
+   served over HTTP.                                                   */
+
+@font-face {
+  font-family: 'Montserrat';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url('../assets/fonts/Montserrat-VariableFont_wght.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Montserrat';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: block;
+  src: url('../assets/fonts/Montserrat-Italic-VariableFont_wght.woff2') format('woff2-variations');
+}
