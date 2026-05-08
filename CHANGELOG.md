@@ -41,6 +41,50 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.4.0] — 2026-05-08
+
+*Breaking: the PDF changed from A4 to US Letter, and the styles moved.*
+
+- **Changed — Breaking.** The page size is US Letter (8.5 × 11 in)
+  instead of A4. This covers the page tokens, `@page`, printing,
+  cropping and the layout checks. A 0.3.0 fixture fails until it is
+  refreshed.
+- **Changed — Breaking.** The Sass sources moved from `styles/` to
+  `assets/styles/`. Anything still edited in the old folder is ignored.
+- **Changed.** Several CSS custom properties and one class were
+  renamed: `--ink` → `--text-primary`, `--rule` → `--border-rule`, and
+  others; `.detail-label` → `.subgroup-label`.
+- **Added.** Montserrat is included in the project and no longer loaded
+  from the network. A system-installed copy had different glyph widths
+  and changed where pages broke.
+- **Added.** An optional `meta.lang` field, written into the PDF as
+  `/Lang` so screen readers pick the right pronunciation. It defaults to
+  `en-US`.
+- **Added.** Matching console helpers in Python and Node:
+  - status lines and phase banners
+  - `NO_COLOR` / `FORCE_COLOR` support
+- **Added.** More environment variables:
+  - `STRICT_TESTS` fails the run if any test suite is skipped.
+  - `DEBUG_MEASUREMENTS` prints what the solver measured.
+- **Added.** `tests/test_check_layout.js`, and monochrome-print colors
+  that hold up on black-and-white printers.
+- **Changed.** Redesign:
+  - a deep slate-green accent
+  - thinner type
+  - tighter section spacing
+  - en-dash bullets
+  - a middle dot between date and location
+- **Changed.** `render.js` is split into named phases, and its log is
+  grouped under banners.
+- **Fixed.** The layout check always expected two pages, so any resume
+  with a different page count failed.
+- **Fixed.** Job heights were measured too short: two margins were
+  never counted.
+- **Fixed.** Both columns were charged the separator height of
+  whichever came first.
+- **Fixed.** If a PDF viewer had an output file open, the build crashed
+  with a traceback. It now names the file to close.
+
 ## [0.3.0] — 2026-05-03
 
 *The first release with an interface to depend on: a YAML data format,
@@ -109,6 +153,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.4.0]: #040--2026-05-08
 [0.3.0]: #030--2026-05-03
 [0.2.0]: #020--2026-04-25
 [0.1.0]: #010--2026-04-20

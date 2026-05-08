@@ -50,5 +50,6 @@ npm-debug.log*
 .vscode/
 .idea/
 *.swp
+*.bak
 .DS_Store
 Thumbs.db

@@ -26,6 +26,14 @@ Run via `node render.js`, which calls this first; or directly with
 """
 
 import sys
+
+# Suppress writing of __pycache__/ next to source files. Set this
+# before any other (non-builtin) import so child imports also
+# inherit the flag. Equivalent to running with `python -B` but
+# enforces the no-cache rule even for direct invocations like
+# `python scripts/build.py`.
+sys.dont_write_bytecode = True
+
 import os
 import re
 import json
@@ -34,6 +42,11 @@ from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, select_autoescape, StrictUndefined
+
+# Local console helper (sibling module). Inserted at import time so
+# the same `c.ok()` / `c.err()` API is available everywhere.
+sys.path.insert(0, str(Path(__file__).parent))
+import _console as c  # noqa: E402
 
 
 ROOT = Path(__file__).parent.parent      # this script lives in scripts/
@@ -48,6 +61,23 @@ OUT_FILE = ROOT / "dist" / "index.html"
 DATA_FILE_LOCAL = DATA_DIR / "resume.local.yml"
 DATA_FILE_DEFAULT = DATA_DIR / "resume_default.yml"
 PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
+
+
+def fail(msg: str) -> None:
+    """
+    Emit a coloured error headline (and any subsequent newline-
+    separated detail lines) via _console, then exit non-zero.
+
+    Replaces the old `sys.exit('ERROR: ...')` pattern. The message
+    string can be multi-line; the first line becomes the headline,
+    further lines become indented detail.
+    """
+    lines = msg.splitlines()
+    if lines:
+        c.err(lines[0])
+        for line in lines[1:]:
+            c.detail(line)
+    sys.exit(1)
 
 
 def markdown_filter(text):
@@ -92,23 +122,23 @@ def load_data():
     override = os.environ.get('RESUME_DATA_SOURCE', '').strip().lower()
     if override == 'local':
         if not DATA_FILE_LOCAL.exists():
-            sys.exit(
-                f"ERROR: RESUME_DATA_SOURCE=local but no local data file at "
+            fail(
+                f"RESUME_DATA_SOURCE=local but no local data file at "
                 f"{DATA_FILE_LOCAL.relative_to(ROOT)}"
             )
         path = DATA_FILE_LOCAL
         source = 'local'
     elif override == 'default':
         if not DATA_FILE_DEFAULT.exists():
-            sys.exit(
-                f"ERROR: RESUME_DATA_SOURCE=default but no default data file at "
+            fail(
+                f"RESUME_DATA_SOURCE=default but no default data file at "
                 f"{DATA_FILE_DEFAULT.relative_to(ROOT)}"
             )
         path = DATA_FILE_DEFAULT
         source = 'default'
     elif override:
-        sys.exit(
-            f"ERROR: invalid RESUME_DATA_SOURCE={override!r}; "
+        fail(
+            f"invalid RESUME_DATA_SOURCE={override!r}; "
             f"expected 'default', 'local', or unset"
         )
     elif DATA_FILE_LOCAL.exists():
@@ -118,14 +148,19 @@ def load_data():
         path = DATA_FILE_DEFAULT
         source = 'default'
     else:
-        sys.exit(
-            f"ERROR: no data file found. Expected one of:\n"
+        fail(
+            f"no data file found. Expected one of:\n"
             f"  {DATA_FILE_LOCAL.relative_to(ROOT)}\n"
             f"  {DATA_FILE_DEFAULT.relative_to(ROOT)}"
         )
-    print(f"✓ Loaded {path.relative_to(ROOT)}")
+    c.ok_pair("Loaded data", str(path.relative_to(ROOT)))
     with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        fail(
+            f"{path.relative_to(ROOT)} is empty or not a YAML "
+            f"mapping at the top level (parsed as {type(data).__name__})."
+        )
     data['_data_source'] = source
     return data
 
@@ -165,6 +200,11 @@ def derive_pdf_metadata(data):
         'author':   name,
         'subject':  description,
         'keywords': ', '.join(keywords),
+        # BCP-47 language tag for the document. Optional in YAML;
+        # defaults to en-US. Stamped into the PDF catalog as /Lang
+        # by crop_pdf.py — assistive tech (screen readers, refresh-
+        # able braille) reads this to pick pronunciation/voice.
+        'lang':     (data.get('meta', {}).get('lang') or 'en-US').strip(),
         # Whether the build used the placeholder template data or a
         # local override. Consumed by snapshot_pdf.py so the visual
         # regression test compares against the matching fixture.
@@ -332,8 +372,8 @@ def check_no_module_collisions():
     overlap = scripts_modules & tests_modules
     if overlap:
         names = ", ".join(sorted(overlap))
-        sys.exit(
-            f"ERROR: module name collision between scripts/ and tests/: {names}\n"
+        fail(
+            f"module name collision between scripts/ and tests/: {names}\n"
             f"This breaks Python's import resolution. Delete the duplicate(s) "
             f"in whichever directory shouldn't have them."
         )
@@ -346,14 +386,14 @@ def build(mode='final'):
     mode='measurement': single-page flowing layout for the solver.
     """
     if mode not in ('final', 'measurement'):
-        sys.exit(f"ERROR: unknown build mode {mode!r}; expected 'final' or 'measurement'")
+        fail(f"unknown build mode {mode!r}; expected 'final' or 'measurement'")
 
     check_no_module_collisions()
     data = load_data()
     try:
         validate_data(data)
     except SchemaError as e:
-        sys.exit(f"ERROR: invalid resume data — {e}")
+        fail(f"invalid resume data — {e}")
 
     # Resolve named sections — schema guarantees exactly one of each.
     sections_by_type = {s["type"]: s for s in data["mainColumn"]}
@@ -400,16 +440,19 @@ def build(mode='final'):
         # will fail with a clear message.
         placement_path = ROOT / "dist" / "placement.json"
         if not placement_path.exists():
-            sys.exit(
-                f"ERROR: {placement_path.relative_to(ROOT)} not found.\n"
+            fail(
+                f"{placement_path.relative_to(ROOT)} not found.\n"
                 f"Final-mode build requires the layout solver's placement.\n"
                 f"Run `node render.js` to produce it, or `python "
                 f"{Path(__file__).relative_to(ROOT)} --mode=measurement` "
                 f"to generate the measurement HTML for inspection."
             )
         placement = json.loads(placement_path.read_text(encoding='utf-8'))
-        print(f"✓ Loaded placement from {placement_path.relative_to(ROOT)} "
-              f"({len(placement.get('pages', []))} page(s))")
+        n_pages = len(placement.get('pages', []))
+        page_word = 'page' if n_pages == 1 else 'pages'
+        c.ok_pair("Loaded placement",
+                  f"{placement_path.relative_to(ROOT)} "
+                  f"({n_pages} {page_word})")
         template = env.get_template("resume.j2")
         rendered = template.render(
             name=data["name"],
@@ -423,9 +466,16 @@ def build(mode='final'):
         )
 
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    OUT_FILE.write_text(rendered, encoding="utf-8")
+    try:
+        OUT_FILE.write_text(rendered, encoding="utf-8")
+    except PermissionError:
+        fail(
+            f"Permission denied writing {OUT_FILE}.\n"
+            f"Another program is holding the file open (most likely a browser tab\n"
+            f"or editor previewing the rendered HTML). Close it and re-run."
+        )
     # NOTE: dist/styles.css is produced by Sass (compiled from
-    # styles/styles.scss in render.js step 1), not copied here.
+    # assets/styles/styles.scss in render.js step 1), not copied here.
     # Direct invocations of build.py (`python scripts/build.py ...`)
     # without going through render.js will leave dist/styles.css
     # missing or stale; the rendered HTML will reference a missing
@@ -435,14 +485,23 @@ def build(mode='final'):
     # In measurement mode we still emit it so render.js can read
     # data_source consistently regardless of mode.
     pdf_meta = derive_pdf_metadata(data)
-    PDF_META_FILE.write_text(
-        json.dumps(pdf_meta, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(f"✓ Wrote {OUT_FILE.relative_to(ROOT)} "
-          f"({len(rendered)} bytes, {rendered.count(chr(10))} lines) "
-          f"[mode={mode}]")
-    print(f"✓ Wrote {PDF_META_FILE.relative_to(ROOT)}")
+    try:
+        PDF_META_FILE.write_text(
+            json.dumps(pdf_meta, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except PermissionError:
+        fail(
+            f"Permission denied writing {PDF_META_FILE}.\n"
+            f"Close any program holding the file open and re-run."
+        )
+    kb = len(rendered.encode('utf-8')) / 1024
+    c.ok_pair("Wrote HTML", f"{OUT_FILE.relative_to(ROOT)} ({kb:.1f} KB)")
+    # Measurement mode is the first pass that produces pdf_meta.json;
+    # final mode rewrites it (typically with identical content). Use
+    # different verbs so the user can tell them apart in the log.
+    metadata_label = "Wrote metadata" if mode == 'measurement' else "Refreshed metadata"
+    c.ok_pair(metadata_label, str(PDF_META_FILE.relative_to(ROOT)))
 
 
 def main():

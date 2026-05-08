@@ -33,12 +33,17 @@
  *   sidebarBlockGap: flex gap between sidebar blocks (between
  *                    consecutive <section> children of <aside>).
  *   mainColumnSectionGap: flex gap between main-col sections.
- *   separatorHeight: rendered height of <hr class="section-sep">,
- *                    INCLUDING its own margins (which compensate to
- *                    --section-rhythm for visual consistency).
+ *   mainColSeparatorHeight: rendered height of <hr class="section-sep">
+ *                           inside .main-col, INCLUDING its own margins
+ *                           (which compensate to --section-rhythm).
+ *   sidebarSeparatorHeight: same, for the sidebar's <hr>. Differs from
+ *                           the main-col value because the rhythm calc
+ *                           subtracts a different parent gap per context
+ *                           (see assets/styles/_layout.scss .section-sep rules).
  *
  * Inter-block spacing on a page = separatorHeight + 2 * blockGap
- * (the gap appears once on each side of the <hr>).
+ * (the gap appears once on each side of the <hr>; use the column-
+ * appropriate separator height).
  */
 async function measurePageGeometry(page) {
   return await page.evaluate(() => {
@@ -53,8 +58,8 @@ async function measurePageGeometry(page) {
     const padTop = parsePx(cs.paddingTop);
     const padBottom = parsePx(cs.paddingBottom);
 
-    // Total pixel height of one A4 page. Read from the CSS variable
-    // --page-h (e.g. "297mm") rather than hardcoding so any
+    // Total pixel height of one printed page. Read from the CSS
+    // variable --page-h (e.g. "11in") rather than hardcoding so any
     // stylesheet change auto-propagates.
     const rootStyle = window.getComputedStyle(document.documentElement);
     const pageHeightStr = rootStyle.getPropertyValue('--page-h').trim();
@@ -76,16 +81,22 @@ async function measurePageGeometry(page) {
     const page1Capacity = pageHeightPx - padTop - padBottom - headerOffset;
     const pageNCapacity = pageHeightPx - padTop - padBottom;
 
-    // Separator: includes its own margins (margin-block compensates
-    // to total --section-rhythm visually).
-    const sepEl = document.querySelector('hr.section-sep');
-    let separatorHeight = 0;
-    if (sepEl) {
-      const sepCS = window.getComputedStyle(sepEl);
-      separatorHeight = sepEl.getBoundingClientRect().height
+    // Per-column separator: the rhythm calc subtracts a different parent
+    // gap in each context (--sp-lg in main-col, --sp-xl in sidebar), so
+    // the two HRs have different total heights for the same
+    // --section-rhythm token. Measure each column's separator
+    // independently and let the solver charge the right cost per column.
+    const measureHr = (el) => {
+      if (!el) return 0;
+      const sepCS = window.getComputedStyle(el);
+      return el.getBoundingClientRect().height
         + parsePx(sepCS.marginTop)
         + parsePx(sepCS.marginBottom);
-    }
+    };
+    const mainColSepEl = document.querySelector('.main-col hr.section-sep');
+    const sidebarSepEl = document.querySelector('.sidebar hr.section-sep');
+    const mainColSeparatorHeight = measureHr(mainColSepEl);
+    const sidebarSeparatorHeight = measureHr(sidebarSepEl);
 
     // Flex gap on the sidebar/main containers. Computed style returns
     // the resolved pixel value (e.g. "16px") or "normal" (= 0).
@@ -97,7 +108,8 @@ async function measurePageGeometry(page) {
     return {
       page1Capacity,
       pageNCapacity,
-      separatorHeight,
+      mainColSeparatorHeight,
+      sidebarSeparatorHeight,
       sidebarBlockGap,
       mainColumnSectionGap,
     };
@@ -236,15 +248,27 @@ async function measureMainColumn(page) {
         sections.push({ kind: sectionType, headingHeight, totalHeight });
       } else if (sectionType === 'experience') {
         // .block (.experience) is a flex column with row-gap between
-        // heading and the first job, AND between consecutive jobs
-        // (since jobs are <article> siblings with no separator between
-        // them — only the .experience parent's flex gap applies).
-        // Our CSS uses --sp-xs for inter-job; same row-gap value.
+        // heading and consecutive jobs. CSS ALSO defines an
+        // adjacent-sibling rule `.experience .job + .job { margin-block-start }`
+        // to add EXTRA spacing between consecutive jobs only (so the
+        // heading-to-first-job distance can match other sections while
+        // inter-job distance is larger). We capture that extra margin
+        // by reading the second job's marginTop and adding it to the
+        // flex gap.
         const sectionRowGap = parsePx(sCS.rowGap);
         const headingToJobsGap = sectionRowGap;
-        const jobGap = sectionRowGap;
 
         const jobEls = sEl.querySelectorAll('[data-measure="job"]');
+        // Inter-job gap = parent flex gap + adjacent-sibling margin
+        // applied to .job + .job. We read marginTop on the second job
+        // if there is one; first job has no preceding sibling-margin.
+        let extraJobMarginTop = 0;
+        if (jobEls.length >= 2) {
+          const secondJobCS = window.getComputedStyle(jobEls[1]);
+          extraJobMarginTop = parsePx(secondJobCS.marginTop);
+        }
+        const jobGap = sectionRowGap + extraJobMarginTop;
+
         const jobs = [];
         for (const jobEl of jobEls) {
           const id = jobEl.dataset.id;
@@ -255,11 +279,15 @@ async function measureMainColumn(page) {
           const headerEl = jobEl.querySelector('[data-measure="job-header"]');
           const headerHeight = headerEl ? elBlockHeight(headerEl) : 0;
 
-          // Bullets list: its row-gap is the inter-bullet gap.
-          // .job is also a flex column; gap from header to bullets is
-          // the .job parent's row-gap.
-          const headerToBulletsGap = parsePx(jobCS.rowGap);
+          // Header-to-bullets gap = .job flex gap PLUS .bullets'
+          // margin-block-start (the CSS layers both for visual tuning).
+          // We capture the actual visible spacing by summing them.
           const bulletsList = jobEl.querySelector('.bullets');
+          const jobFlexGap = parsePx(jobCS.rowGap);
+          const bulletsMarginTop = bulletsList
+            ? parsePx(window.getComputedStyle(bulletsList).marginTop)
+            : 0;
+          const headerToBulletsGap = jobFlexGap + bulletsMarginTop;
           const bulletGap = bulletsList
             ? parsePx(window.getComputedStyle(bulletsList).rowGap)
             : 0;

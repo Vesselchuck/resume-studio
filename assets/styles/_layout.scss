@@ -1,6 +1,6 @@
 /* ───────────────────────────────────────────────────────────────
    LAYOUT — page container, horizontal rules, body grid.
-   The structural skeleton: each .page is a fixed A4 sheet,
+   The structural skeleton: each .page is a fixed Letter sheet,
    .body-grid is its two-column layout (sidebar + main), and
    the column divider is .body-grid::after pinned to the page
    bottom-margin via flex sizing.
@@ -9,12 +9,12 @@ main.resume {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-2xl);
+  gap: 1.5rem;
   padding-block: 2rem;
 }
 
-/* The crucial element — a fixed-size A4 sheet. Every page is
-   exactly 210×297 mm, regardless of viewport. On screen we add a
+/* The crucial element — a fixed-size Letter sheet. Every page is
+   exactly 8.5 × 11 in, regardless of viewport. On screen we add a
    subtle shadow + border so the pages look like physical sheets
    floating on a soft grey backdrop. In print these decorations
    disappear.                                                       */
@@ -23,8 +23,8 @@ main.resume {
   inline-size: var(--page-w);
   block-size:  var(--page-h);
   padding: var(--page-margin);
-  background: var(--bg-page);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  background: var(--surface-page);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 8px 32px rgba(0, 0, 0, 0.10);
   /* Critical: clip overflow so editors visually see when content
      bleeds off a page (their cue to move things to the next page). */
   overflow: hidden;
@@ -35,10 +35,18 @@ main.resume {
 
 
 /* ─── HORIZONTAL RULES ──────────────────────────────────── */
+/* All rules use border rather than background + block-size.
+   Chromium's PDF renderer rasterizes filled rectangles
+   (background approach) through different internal paths for
+   horizontal vs vertical elements, producing visibly unequal
+   weights from the same value. border is rendered as a PDF
+   stroke operation — orientation-agnostic, consistent weight
+   in both directions guaranteed.                            */
 .top-rule {
-  block-size: 1px;
-  background: var(--rule);
-  margin-block-end: var(--sp-2xl);
+  block-size: 0;
+  border: 0;
+  border-top: var(--accent-rule) solid var(--accent);
+  margin-block-end: 1.5rem;
 }
 
 /* Section separator — thin horizontal rule between major sections.
@@ -46,22 +54,26 @@ main.resume {
    and .main-col (between Summary/Work-Exp/Education).
 
    --section-rhythm encodes the total visible distance between two
-   sibling sections (parent_gap + margin-top + 1px + margin-bottom +
-   parent_gap). Solving for margin gives:
-     margin = (rhythm - 1px) / 2 - parent_gap
-   The two contexts differ only in `parent_gap` (--sp-lg in main col,
-   --sp-xl in sidebar), so the same rhythm produces different margins
-   automatically. Change --section-rhythm to retune both at once.    */
+   sibling sections (parent_gap + margin-top + rule + margin-bottom +
+   parent_gap). With both columns at gap: 0, the hr margins carry the
+   full rhythm budget — no flex gap to subtract, no per-context
+   correction needed. One formula works for both columns:
+     margin = (rhythm - --accent-rule) / 2
+   Change --section-rhythm to retune both columns simultaneously.
+
+   Thickness uses --accent-rule for print-accurate consistency
+   with .top-rule and .body-grid::after. Color stays --border-rule
+   (not --accent) — section separators repeat 3–5× per page and
+   giving them accent color would flood the document with green lines,
+   collapsing the visual hierarchy between structural frame elements
+   (top-rule, column divider) and content separators.                */
 .section-sep {
-  block-size: 1px;
-  background: var(--rule);
+  block-size: 0;
   border: 0;
-  /* main-col context: parent gap is --sp-lg. */
-  margin-block: calc((var(--section-rhythm) - 1px) / 2 - var(--sp-lg));
-}
-.sidebar > .section-sep {
-  /* sidebar context: parent gap is --sp-xl. */
-  margin-block: calc((var(--section-rhythm) - 1px) / 2 - var(--sp-xl));
+  border-top: var(--accent-rule) solid var(--border-rule);
+  /* Single unified formula — works identically in sidebar and main-col
+     because both columns now have gap: 0. No context override needed. */
+  margin-block: calc((var(--section-rhythm) - var(--accent-rule)) / 2);
 }
 
 
@@ -107,24 +119,27 @@ main.resume {
   content: "";
   position: absolute;
   inset-block: 0;            /* full grid height — see invariant above */
-  /* Sit precisely in the middle of the column gap. */
-  inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2 - 0.5px);
-  inline-size: 1px;
-  background: var(--rule);
+  /* Centred in the column gap. With border-left the element has
+     inline-size: 0 — position it at the exact gap midpoint with
+     no offset correction needed.                               */
+  inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2);
+  inline-size: 0;
+  border: 0;
+  border-left: var(--accent-rule) solid var(--accent);
   pointer-events: none;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-xl);
+  gap: 0;
   min-inline-size: 0;
 }
 
 .main-col {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-lg);
+  gap: 0;
   min-inline-size: 0;
 }
 

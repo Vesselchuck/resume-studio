@@ -69,12 +69,22 @@ Requirements
   hint instead of an ImportError traceback at module-load time.
 """
 
+import sys
+
+# Suppress writing of __pycache__/ next to source files. Set this
+# before any other (non-builtin) import. Equivalent to `python -B`
+# but enforces the no-cache rule even for direct invocations.
+sys.dont_write_bytecode = True
+
 import argparse
 import json
 import os
 import shutil
-import sys
 from pathlib import Path
+
+# Local console helper.
+sys.path.insert(0, str(Path(__file__).parent))
+import _console as c  # noqa: E402
 
 
 ROOT = Path(__file__).parent.parent          # project root (scripts/ → ..)
@@ -104,6 +114,31 @@ def resolve_fixture_path():
         source = 'default'
     return LOCAL_FIXTURE if source == 'local' else DEFAULT_FIXTURE
 
+
+def safe_copy(src: Path, dst: Path) -> bool:
+    """
+    Copy `src` to `dst` with metadata, and convert PermissionError
+    into a friendly stderr message instead of a traceback.
+
+    Returns True on success, False on permission error. Callers
+    should propagate False as a non-zero exit code.
+
+    Most common cause on Windows: `dst` is the snapshot fixture or
+    print.pdf that's currently open in a PDF viewer. The viewer
+    holds a write lock on the file. Linux/macOS viewers usually
+    don't take this lock, but some IDE preview panes do on every
+    platform.
+    """
+    try:
+        shutil.copy2(src, dst)
+        return True
+    except PermissionError:
+        c.err(f"Permission denied writing {dst}.")
+        c.detail("Another program is holding the file open. Most often this is")
+        c.detail("a PDF viewer (Adobe Reader, Edge, Chrome, SumatraPDF, an IDE")
+        c.detail("preview pane). Close the viewer and re-run.")
+        return False
+
 # Rendering DPI for the comparison. 150 is enough to catch any human-
 # visible difference; higher DPIs slow the test without adding signal.
 RENDER_DPI = 150
@@ -128,13 +163,15 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int):
     """
     Compare two same-page images.
 
-    Returns (ok, message).
+    Returns (ok, label, value) where label is the column heading
+    (e.g. "Page 1") and value is the result text. Splitting them
+    lets the caller emit aligned `c.ok_pair(label, value)` lines.
     Writes diff_pageN.png on failure.
     """
+    label = f"Page {page_num}"
     if actual.size != expected.size:
-        return False, (
-            f"page {page_num}: size mismatch — "
-            f"actual {actual.size}, expected {expected.size}"
+        return False, label, (
+            f"size mismatch — actual {actual.size}, expected {expected.size}"
         )
 
     diff = ImageChops.difference(actual, expected)
@@ -145,7 +182,7 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int):
 
     bbox = diff_max.getbbox()
     if bbox is None:
-        return True, f"page {page_num}: identical"
+        return True, label, "identical"
 
     # Count pixels exceeding the per-channel tolerance.
     # `tobytes()` is the long-term-stable Pillow API for flat byte
@@ -156,8 +193,8 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int):
     fraction = differing_pixels / total_pixels
 
     if fraction <= MAX_DIFF_FRACTION:
-        return True, (
-            f"page {page_num}: within tolerance "
+        return True, label, (
+            f"within tolerance "
             f"({differing_pixels}/{total_pixels} = {fraction:.4%} differ)"
         )
 
@@ -172,10 +209,10 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int):
     out_path = FIXTURE_DIR / f"diff_page{page_num}.png"
     side_by_side.save(out_path)
 
-    return False, (
-        f"page {page_num}: REGRESSION — "
-        f"{differing_pixels}/{total_pixels} pixels differ ({fraction:.4%}, "
-        f"limit {MAX_DIFF_FRACTION:.4%}). Diff written to {out_path}"
+    return False, label, (
+        f"REGRESSION — {differing_pixels}/{total_pixels} pixels differ "
+        f"({fraction:.4%}, limit {MAX_DIFF_FRACTION:.4%}). "
+        f"Diff written to {out_path}"
     )
 
 
@@ -207,8 +244,7 @@ def update_both_fixtures():
             env=env,
         )
         if result.returncode != 0:
-            print(f"ERROR: render.js failed for source={source!r} "
-                  f"(exit {result.returncode})", file=sys.stderr)
+            c.err(f"render.js failed for source={source!r} (exit {result.returncode})")
             return False
         return True
 
@@ -216,38 +252,38 @@ def update_both_fixtures():
 
     # Step 1: default data.
     if not default_yml.exists():
-        print(f"ERROR: {default_yml.relative_to(ROOT)} not found.",
-              file=sys.stderr)
+        c.err(f"{default_yml.relative_to(ROOT)} not found.")
         return 2
-    print(f"\n─── Building with default data ({default_yml.relative_to(ROOT)}) ───")
+    c.info(f"Building with default data ({default_yml.relative_to(ROOT)})")
     if not run_build('default'):
         return 1
     if not PRINT_PDF.exists():
-        print(f"ERROR: {PRINT_PDF.relative_to(ROOT)} missing after build.",
-              file=sys.stderr)
+        c.err(f"{PRINT_PDF.relative_to(ROOT)} missing after build.")
         return 1
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(PRINT_PDF, DEFAULT_FIXTURE)
+    if not safe_copy(PRINT_PDF, DEFAULT_FIXTURE):
+        return 1
     updated.append(DEFAULT_FIXTURE)
-    print(f"✓ Updated fixture: {DEFAULT_FIXTURE.relative_to(ROOT)}")
+    c.ok_pair("Updated fixture", str(DEFAULT_FIXTURE.relative_to(ROOT)))
 
     # Step 2: local data, if present.
     if local_yml.exists():
-        print(f"\n─── Building with local data ({local_yml.relative_to(ROOT)}) ───")
+        c.info(f"Building with local data ({local_yml.relative_to(ROOT)})")
         if not run_build('local'):
             return 1
         if not PRINT_PDF.exists():
-            print(f"ERROR: {PRINT_PDF.relative_to(ROOT)} missing after build.",
-                  file=sys.stderr)
+            c.err(f"{PRINT_PDF.relative_to(ROOT)} missing after build.")
             return 1
-        shutil.copy2(PRINT_PDF, LOCAL_FIXTURE)
+        if not safe_copy(PRINT_PDF, LOCAL_FIXTURE):
+            return 1
         updated.append(LOCAL_FIXTURE)
-        print(f"✓ Updated fixture: {LOCAL_FIXTURE.relative_to(ROOT)}")
+        c.ok_pair("Updated fixture", str(LOCAL_FIXTURE.relative_to(ROOT)))
     else:
-        print(f"\nℹ  No local data file at {local_yml.relative_to(ROOT)}; "
-              f"skipped local fixture refresh.")
+        c.info(f"No local data file at {local_yml.relative_to(ROOT)}; "
+               f"skipped local fixture refresh.")
 
-    print(f"\n─── Done. Refreshed {len(updated)} fixture(s). ───")
+    plural = 'fixture' if len(updated) == 1 else 'fixtures'
+    c.ok(f"Refreshed {len(updated)} {plural}.")
     return 0
 
 
@@ -277,38 +313,34 @@ def main() -> int:
 
     if args.update_both:
         if args.update or args.auto_bootstrap:
-            print("ERROR: --update-both is mutually exclusive with --update "
-                  "and --auto-bootstrap", file=sys.stderr)
+            c.err("--update-both is mutually exclusive with --update and --auto-bootstrap")
             return 2
         return update_both_fixtures()
 
     if not PRINT_PDF.exists():
-        print(f"ERROR: {PRINT_PDF.relative_to(ROOT)} not found. "
-              f"Run `node render.js` first.", file=sys.stderr)
+        c.err(f"{PRINT_PDF.relative_to(ROOT)} not found. Run `node render.js` first.")
         return 2
 
     expected_pdf = resolve_fixture_path()
 
     if args.update:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(PRINT_PDF, expected_pdf)
-        print(f"✓ Updated fixture: {expected_pdf.relative_to(ROOT)}")
+        if not safe_copy(PRINT_PDF, expected_pdf):
+            return 1
+        c.ok_pair("Updated fixture", str(expected_pdf.relative_to(ROOT)))
         return 0
 
     if not expected_pdf.exists():
         if args.auto_bootstrap:
             FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(PRINT_PDF, expected_pdf)
-            print(f"ℹ  Snapshot fixture created (first build): "
-                  f"{expected_pdf.relative_to(ROOT)}")
-            print(f"   Subsequent builds will diff against this fixture.")
-            print(f"   To refresh after an intentional change: "
-                  f"python scripts/snapshot_pdf.py --update")
+            if not safe_copy(PRINT_PDF, expected_pdf):
+                return 1
+            c.info_pair("Created fixture", str(expected_pdf.relative_to(ROOT)))
+            c.info_pair("Update with", "python scripts/snapshot_pdf.py --update")
             return 0
-        print(f"ERROR: fixture missing at {expected_pdf.relative_to(ROOT)}.\n"
-              f"To create it from the current print.pdf, run:\n"
-              f"  python {Path(__file__).relative_to(ROOT)} --update",
-              file=sys.stderr)
+        c.err(f"fixture missing at {expected_pdf.relative_to(ROOT)}.")
+        c.detail("To create it from the current print.pdf, run:")
+        c.detail(f"  python {Path(__file__).relative_to(ROOT)} --update")
         return 2
 
     # Lazy-import the heavy snapshot deps. If they're missing, fail
@@ -317,29 +349,25 @@ def main() -> int:
         import pypdfium2 as pdfium
         from PIL import Image, ImageChops
     except ImportError as e:
-        print(
-            f"ERROR: snapshot test requires extra dependencies.\n"
-            f"Install with:  pip install -r requirements.txt\n"
-            f"\nMissing: {e.name}",
-            file=sys.stderr,
-        )
+        c.err("snapshot test requires extra dependencies.")
+        c.detail("Install with:  pip install -r requirements.txt")
+        c.detail(f"Missing: {e.name}")
         return 2
 
     actual_pages = render_pdf_pages(pdfium, PRINT_PDF)
     expected_pages = render_pdf_pages(pdfium, expected_pdf)
 
     if len(actual_pages) != len(expected_pages):
-        print(f"❌ FAIL: page count differs — "
-              f"actual {len(actual_pages)}, expected {len(expected_pages)}",
-              file=sys.stderr)
+        c.err(f"page count differs — actual {len(actual_pages)}, expected {len(expected_pages)}")
         return 1
 
     all_ok = True
     for i, (a, e) in enumerate(zip(actual_pages, expected_pages), start=1):
-        ok, msg = diff_images(Image, ImageChops, a, e, i)
-        symbol = "✓" if ok else "❌"
-        print(f"{symbol} {msg}")
-        if not ok:
+        ok, label, value = diff_images(Image, ImageChops, a, e, i)
+        if ok:
+            c.ok_pair(label, value)
+        else:
+            c.err_pair(label, value)
             all_ok = False
 
     return 0 if all_ok else 1

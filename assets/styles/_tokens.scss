@@ -1,0 +1,85 @@
+/* ───────────────────────────────────────────────────────────────
+   TOKENS — CSS custom properties (page geometry, spacing scale,
+   typography, colours). Referenced as var(--name) by every other
+   partial. No Sass variables; values stay in :root so they work
+   at runtime and can be inspected/overridden via dev tools.
+
+   Naming convention: role-based. Text colours are --text-*,
+   surfaces are --surface-*, borders are --border-*. This lets us
+   add a tertiary text colour or a third surface later without
+   reorganising the system.
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  /* Colour. */
+  --surface-app:    #e9eaee;   /* off-white surrounding the pages on screen */
+  --surface-page:   #ffffff;
+  --text-primary:   #1a1a1a;
+  --text-muted:     #555555;
+  --border-rule:    #d8d8d8;   /* thin separator rules between sections,
+                                  date/location separators, etc. */
+  --accent:         #2d4a3e;   /* deep slate-green; structural accent.
+                                  Applied to: top rule, column divider,
+                                  section heading bars, link interactions.
+                                  Luminance ≈ 20% — survives greyscale
+                                  conversion without a monochrome override. */
+  --accent-rule:    2pt;       /* shared thickness for all rules (top rule,
+                                  column divider, section separator).
+                                  Must be a whole-number pt value: fractional
+                                  pt values (e.g. 1.5pt) land at non-integer
+                                  PDF coordinates and anti-alias differently
+                                  for horizontal vs vertical lines depending
+                                  on each element's position in the layout.
+                                  1pt is the atomic PDF coordinate unit —
+                                  both edges span exactly one PDF unit,
+                                  minimising the H/V anti-aliasing disparity.
+                                  Next clean option up is 2pt if 1pt is too
+                                  thin; there is no consistent option at
+                                  1.5pt.                                    */
+
+  /* Typography. */
+  --font: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+
+  /* Sizes — pt-based so they translate identically to print.
+     Job title is intentionally LARGER than body so the type scale
+     genuinely encodes hierarchy (not just font-weight). */
+  --size-name:     30pt;
+  --size-section:  14pt;
+  --size-jobtitle: 11pt;
+  --size-body:     10pt;
+  --size-small:    8.5pt;
+
+  /* Spacing scale — geometric ~1.4× steps, in rem so they scale
+     with root font-size in print. Use these tokens for every gap
+     and margin instead of raw rem values, so visual rhythm stays
+     coherent across the document.                                  */
+  --sp-xs:  0.25rem;     /*  4 px */
+  --sp-sm:  0.375rem;    /*  6 px */
+  --sp-md:  0.5rem;      /*  8 px */
+  --sp-lg:  0.6875rem;   /* 11 px */
+  --sp-xl:  1rem;        /* 16 px */
+
+  /* PAGE GEOMETRY — physical dimensions of the printed sheet. Stays
+     in absolute units because Letter is a physical paper size.     */
+  --page-w: 8.5in;
+  --page-h: 11in;
+  --page-margin: 0.5in;        /* Narrow margins, all sides         */
+
+  /* INTERNAL LAYOUT — two-column grid inside each page.            */
+  --sidebar-w: 2in;
+  --col-gap:   0.5in;
+
+  /* SECTION RHYTHM — total visible distance between sibling sections
+     separated by <hr class="section-sep">. Both columns have gap: 0
+     so the hr margins carry the full budget with no flex gap to
+     subtract. Formula: margin-block = (rhythm - --accent-rule) / 2.
+     One token, one formula, unified across sidebar and main column.
+     Reduced from 35px to 26px after removing section heading underline
+     bars: the bars previously filled visual weight in the heading zone,
+     making 35px feel appropriate. Without them the heading text has no
+     anchor below it and the rhythm reads as excessive empty air.       */
+  --section-rhythm: 26px;
+
+  /* TYPOGRAPHY MICRO-TOKENS — values that recur in multiple places. */
+  --ls-wide:   0.1em;          /* letter-spacing for headings/labels */
+  --gap-entry: 0.2em;          /* vertical gap inside .entry-header  */
+}

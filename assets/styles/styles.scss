@@ -1,10 +1,10 @@
 /* ══════════════════════════════════════════════════════════════
-   PAGE-BASED RESUME (FIXED A4)
+   PAGE-BASED RESUME (FIXED US LETTER)
    ──────────────────────────────────────────────────────────────
 
    ARCHITECTURE
    ────────────
-   Each <article class="page"> is a fixed 210×297 mm sheet with
+   Each <article class="page"> is a fixed 8.5 × 11 in sheet with
    0.5in inner padding matching the printed margins. The screen
    layout IS the print layout — Ctrl/Cmd+P → Save as PDF in any
    Chromium browser produces a pixel-faithful PDF.
@@ -29,7 +29,7 @@
 
    PRINTING STRATEGY
    ─────────────────
-     • @page { size: A4; margin: 0 } removes browser-imposed
+     • @page { size: letter; margin: 0 } removes browser-imposed
        margins (each .page already has the right padding).
      • Each .page is its own print sheet via page-break-after.
      • No layout-changing @media print rules — screen and print
@@ -60,12 +60,45 @@
    are computed from it via calc(). This is also asserted at render
    time by render.js.
 
+   DESIGN PHILOSOPHY
+   ─────────────────
+   The visual language is print-first minimalism. Concretely:
+
+     • Hierarchy is established by typography (size + weight + case
+       + tracking), not by decorative elements. The name relies on
+       its size (30pt); section headings rely on weight + tracking
+       + a short underline rule; job titles rely on weight alone.
+     • Colour is restrained: one ink, one muted, one separator-rule,
+       plus paper. Five tokens total. Adding a third text colour or
+       an accent should be deliberate and earned, not casual.
+     • Whitespace does the work of separation between groups. The
+       --section-rhythm token gives both columns identical visible
+       gaps without any extra rules. Inter-block spacing inside a
+       column relies on flex gap, not borders.
+     • Spacing is geometric (--sp-xs through --sp-xl, ~1.4× steps)
+       and exhaustive: every gap and margin uses a token, never a
+       raw rem/px value. This keeps visual rhythm predictable as
+       the design evolves.
+     • The pt-based type scale and rem-based spacing scale are
+       intentionally different: type sizes are physical (the printed
+       point size matters and must not float with viewport), spacing
+       is relative (so changing root font-size scales rhythm with
+       it).
+
+   The aesthetic intent is "looks correct after 10 seconds, holds
+   up after 60 seconds." A recruiter scanning at speed sees clear
+   hierarchy; a recruiter reading carefully sees a coherent system.
+   No element is added solely to fill space.
+
    DESIGN TOKENS
    ─────────────
    All gaps and margins use the spacing scale (--sp-xs through
-   --sp-2xl, geometric ~1.4× steps). Page-geometry tokens are in
-   absolute units (mm/in) because they're physical print dimensions.
-   Type tokens are in pt for print fidelity.
+   --sp-xl, geometric ~1.4× steps). Page-geometry tokens are in
+   absolute units (in) because they're physical print dimensions.
+   Type tokens are in pt for print fidelity. Colour tokens follow
+   role-based naming (--text-primary, --text-muted, --border-rule,
+   --surface-app, --surface-page) so the system extends predictably
+   if a third text colour or an accent is added later.
 
    FILE ORGANIZATION
    ─────────────────
@@ -75,6 +108,8 @@
 
      _tokens.scss        CSS custom properties (page geometry,
                          spacing scale, typography, colors)
+     _fonts.scss         @font-face declarations for the vendored
+                         Montserrat (loaded from assets/fonts/)
      _base.scss          reset + body defaults
      _layout.scss        page container, body-grid, divider, hrs
      _components.scss    name header, section headings, blocks,
@@ -89,6 +124,7 @@
 
    ══════════════════════════════════════════════════════════════ */
 
+@use 'fonts';
 @use 'tokens';
 @use 'base';
 @use 'layout';

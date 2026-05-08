@@ -16,17 +16,28 @@ body {
   font-family: var(--font);
   font-weight: 400;
   font-size: var(--size-body);
-  line-height: 1.4;
-  color: var(--ink);
-  background: var(--bg-app);
+  line-height: 1.35;
+  color: var(--text-primary);
+  background: var(--surface-app);
   font-feature-settings: "kern", "liga";
 }
 
 ul, ol { list-style: none; }
 address { font-style: normal; }
 h1, h2, h3, h4 { font-weight: inherit; line-height: 1.2; }
-strong { font-weight: 700; }
-hr { border: 0; }
+strong { font-weight: 600; }
+/* Reset <hr> UA defaults. Chromium's UA stylesheet gives <hr>
+   border-style: inset, color: gray, and overflow: hidden.
+   appearance: none removes the UA-level rendering shortcut;
+   overflow: visible ensures border declarations aren't clipped
+   at a zero block-size content box.                          */
+hr {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  overflow: visible;
+  color: inherit;
+}
 
 a {
   color: inherit;
@@ -34,12 +45,12 @@ a {
   border-block-end: 1px solid transparent;
   transition: border-color 160ms ease;
 }
-a:hover, a:focus-visible { border-block-end-color: currentColor; }
+a:hover, a:focus-visible { border-block-end-color: var(--accent); }
 a:focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-block-end-color: transparent;
 }
-::selection { background: var(--ink); color: var(--bg-page); }
+::selection { background: var(--text-primary); color: var(--surface-page); }
 
 
