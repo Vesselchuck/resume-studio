@@ -1,6 +1,6 @@
 # Resume
 
-Version 0.4.0. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+Version 0.4.1. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Single-source-of-truth resume pipeline. Edit YAML, get a pixel-faithful
 US Letter PDF. Page placement is computed automatically — no manual
@@ -74,8 +74,8 @@ platform. If detection fails (rare), override it explicitly:
 ## Editing your resume
 
 The committed `data/resume_default.yml` is a fictional placeholder (Gaius
-Caesar, with Latin filler text). To use your own content without committing
-it, copy it to a private
+Caesar, with Latin filler text). To use
+your own content without committing it, copy it to a private
 `data/resume.local.yml` (which is gitignored) and edit there:
 
 ```bash
@@ -100,25 +100,31 @@ The build prefers `resume.local.yml` over `resume_default.yml` if both exist.
 
 ## What you can change in the YAML
 
-- **Personal info** — `name.first`, `name.last`
-- **Document metadata** — `meta.description` (required; used as the
-  PDF subject) and `meta.lang` (optional BCP-47 tag such as `en-US`,
-  written into the PDF as `/Lang`; defaults to `en-US`).
+- **Personal info** — `name.first`, `name.last`, plus an optional
+  `role` (a short line under the name).
+- **Header contact** — optional `contact` block: an `address` line and
+  `rows`, each with a `value` and an optional `href` (e.g. `mailto:` or
+  `tel:` link). Shown on the right of the page header.
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
   Each block has a kebab-case `id` (must be unique), a `type`
-  (`details` or `list`), a `heading`, and content: `details` blocks
-  take `rows` of `label`, `value` and an optional `href`; `list`
-  blocks take `items`.
+  (`details` or `list`), a `heading`, and content: `rows` of
+  `label`/`value` (optional `href`) for `details`, or `items` for
+  `list`. A list item can be a `{group: "…"}` entry, which renders as a
+  subheading inside the list (group entries are left out of the PDF
+  keywords).
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
-  `mainColumn[experience].jobs`. Each job needs a unique kebab-case
-  `id`; set `gap: true` (and omit `bullets`) for a non-employment gap
-  entry.
+  `mainColumn[experience].jobs`. Each job has a unique kebab-case
+  `id`, a `title`, `date`/`datetime`, an optional `location`, and
+  `bullets`; set `gap: true` (no bullets needed) for a career-gap entry.
 - **Bullets** — add or remove freely under each job's `bullets:` list.
-  The layout solver decides where page breaks land.
-- **Page cap** — `meta.maxPages` (required, a positive integer; the
-  placeholder uses 10). Lower it to force tighter layouts; the build
-  fails clearly if content can't fit.
+  The layout solver decides where page breaks land. Wrap text in
+  `**bold**` to emphasize it (works in bullets and the summary text).
+- **Page cap** — `meta.maxPages` (required; the placeholder uses 10). Lower it to force
+  tighter layouts; the build fails clearly if content can't fit.
+- **PDF metadata** — `meta.description` (required) becomes the PDF
+  subject; optional `meta.lang` (default `en-US`) is stamped as the
+  PDF's `/Lang`.
 
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
@@ -157,7 +163,7 @@ Everything in `dist/` plus `print.pdf` is gitignored.
 │       ├── Montserrat-Italic-VariableFont_wght.woff2  Italic (100-900)
 │       └── OFL.txt            Font license (OFL-1.1)
 ├── data/                      YAML resume content
-│   ├── resume_default.yml     Placeholder (committed)
+│   ├── resume_default.yml     Placeholder, Gaius Caesar (committed)
 │   └── resume.local.yml       Real data (gitignored)
 ├── scripts/
 │   ├── build.py               YAML → HTML, two modes (final, measurement)
@@ -311,15 +317,16 @@ silently change the rendered output:
 2. **Different npm mirrors of Montserrat.** An earlier setup that
    loaded Montserrat from `@fontsource/montserrat` shipped subtly
    different outline files than the canonical Google Fonts version,
-   even though their metrics tables matched. A 14.6%
-   width divergence was measured on the same string between the two.
+   even though their metrics tables matched. A 14.6% width divergence
+   was measured on the same string between the two.
 3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes
    change when fonts are re-versioned. Pinning a specific URL would
    eventually 404; using the stable CSS endpoint would silently
    serve a different glyph file when Google updated the version.
 
 The vendored woff2 files are the canonical Google Fonts release,
-loaded directly from disk via `@font-face url('../fonts/...')`. No
+loaded directly from disk via `@font-face url('../assets/fonts/...')`
+(relative to `dist/styles.css`). No
 `local()` source is declared, so system Montserrat never overrides
 the web font. The two woff2 files (~430 KB total) cover all weights
 via the variable-font `wght` axis.
@@ -362,14 +369,14 @@ full pipeline twice with each data source forced.
 **The build fails with "content-overflow" on a page.**
 The solver produced a placement that doesn't actually fit. This usually
 means a measurement is off — frequently due to a CSS change that altered
-spacing without anyone noticing. The error message includes the offending
+spacing unintentionally. The error message includes the offending
 column, page, and culprit element id. If you can't find an obvious
 cause, file a bug or report — this should not happen with reasonable
 content; if it does, the solver or `measure_dom.js` has a bug.
 
 **The build fails with "exceeds maxPages".**
 Your content doesn't fit in the configured cap. Either increase
-`meta.maxPages` in the YAML (the placeholder uses 10) or trim content. The error
+`meta.maxPages` in the YAML (the placeholder sets 10) or trim content. The error
 identifies which column ran out of pages.
 
 **`pip install -r requirements.txt` fails to install Pillow on a new Python version.**
@@ -388,16 +395,16 @@ Not currently. The solver decides placement based on heights and the
 fixed rules (header + ≥1 bullet on origin for jobs, heading + ≥3 items
 for sidebar lists). If you want a different placement, edit content
 to change the heights involved, or trim until the solver chooses what
-you want.
+you want. Future versions may add `splitAfter:` overrides on jobs but
+this isn't currently implemented and adds complexity.
 
 **The fonts look wrong on first build.**
 Montserrat is vendored under `assets/fonts/` and loaded from disk —
 no internet required at build time. If your render still produces
 the wrong output, check that `assets/fonts/Montserrat-VariableFont_wght.woff2`
-exists. The templates still link the Google Fonts stylesheet, but
-only as a fallback for when the vendored files are missing; the
-vendored files are what reproducible builds rely on (see "Why
-vendored Montserrat" above).
+exists. The templates still link the Google Fonts CDN, but only as a
+fallback for when the vendored files are missing; the build does not
+rely on it (see "Why vendored Montserrat" above).
 
 **Where do I put real resume data without committing it?**
 Put it in `data/resume.local.yml`. That file is gitignored; the build

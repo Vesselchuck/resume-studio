@@ -49,7 +49,7 @@
 {%- else -%}
 <article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}">
   <header class="entry-header">
-    <h3 class="job-title">{{ j.title | e }}</h3>
+    <h3 class="entry-title">{{ j.title | e }}</h3>
     <p class="entry-meta">
       <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
 {%- if j.location is defined %}
@@ -101,7 +101,11 @@
                  else b['items'][entry.items_offset:entry.items_offset + entry.items_limit]) -%}
   <ul class="plain-list">
 {%- for item in items %}
-    <li>{{ item | e }}</li>
+{%- if item is mapping %}
+    <li class="list-group-heading entry-title" data-measure="item">{{ item.group | e }}</li>
+{%- else %}
+    <li data-measure="item">{{ item | e }}</li>
+{%- endif %}
 {%- endfor %}
   </ul>
 {%- endif %}
@@ -127,7 +131,7 @@
 {% macro render_edu_item(item) %}
 <article class="edu-item">
   <header class="entry-header">
-    <h3 class="edu-title">{{ item.title | e }}</h3>
+    <h3 class="entry-title">{{ item.title | e }}</h3>
     <p class="edu-subtitle">{{ item.subtitle | e }}</p>
     <p class="entry-meta">
       <span class="job-loc">{{ item.institution | e }}</span>
@@ -147,7 +151,7 @@
 {%- if not section.continuation_of %}
   <h2 class="section-heading">{{ summary.heading | e }}</h2>
 {%- endif %}
-  <p class="summary-text">{{ summary.text | e }}</p>
+  <p class="summary-text">{{ summary.text | e | md | safe }}</p>
 </section>
 {%- elif section.type == "experience" -%}
 <section class="block experience"

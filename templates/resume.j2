@@ -45,10 +45,29 @@
 
 {%- if loop.first %}
       <header class="resume-header">
-        <h1 class="name">
-          <span class="name-first">{{ name.first }}</span>
-          <span class="name-last">{{ name.last }}</span>
-        </h1>
+        <div class="header-left">
+          <h1 class="name">
+            <span class="name-first">{{ name.first }}</span>
+            <span class="name-last">{{ name.last }}</span>
+          </h1>
+{%- if role %}
+          <p class="name-role">{{ role | e }}</p>
+{%- endif %}
+        </div>
+{%- if contact %}
+        <address class="header-contact">
+{%- if contact.address %}
+          <span class="header-contact-address">{{ contact.address | e }}</span>
+{%- endif %}
+{%- for item in contact.rows %}
+          <span class="header-contact-item">
+{%- if item.href %}<a href="{{ item.href | e }}">{{ item.value | e }}</a>
+{%- else %}{{ item.value | e }}
+{%- endif %}
+          </span>
+{%- endfor %}
+        </address>
+{%- endif %}
       </header>
 
       <hr class="top-rule" aria-hidden="true">

@@ -65,10 +65,29 @@
     <article class="page" aria-label="Measurement page" data-measurement-page>
 
       <header class="resume-header" data-measure="resume-header">
-        <h1 class="name">
-          <span class="name-first">{{ name.first }}</span>
-          <span class="name-last">{{ name.last }}</span>
-        </h1>
+        <div class="header-left">
+          <h1 class="name">
+            <span class="name-first">{{ name.first }}</span>
+            <span class="name-last">{{ name.last }}</span>
+          </h1>
+{%- if role %}
+          <p class="name-role">{{ role | e }}</p>
+{%- endif %}
+        </div>
+{%- if contact %}
+        <address class="header-contact">
+{%- if contact.address %}
+          <span class="header-contact-address">{{ contact.address | e }}</span>
+{%- endif %}
+{%- for item in contact.rows %}
+          <span class="header-contact-item">
+{%- if item.href %}<a href="{{ item.href | e }}">{{ item.value | e }}</a>
+{%- else %}{{ item.value | e }}
+{%- endif %}
+          </span>
+{%- endfor %}
+        </address>
+{%- endif %}
       </header>
 
       <hr class="top-rule" aria-hidden="true">
@@ -112,7 +131,7 @@
 
           <section class="block" data-measure="section" data-section-type="summary">
             <h2 class="section-heading" data-measure="section-heading">{{ summary.heading | e }}</h2>
-            <p class="summary-text" data-measure="summary-text">{{ summary.text | e }}</p>
+            <p class="summary-text" data-measure="summary-text">{{ summary.text | e | md | safe }}</p>
           </section>
 
           <hr class="section-sep" data-measure="separator">
@@ -123,7 +142,7 @@
 {%- if not loop.first %}{{ "\n" }}{% endif %}
 <article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}" data-measure="job" data-id="{{ j.id }}">
   <header class="entry-header" data-measure="job-header">
-    <h3 class="job-title">{{ j.title | e }}</h3>
+    <h3 class="entry-title">{{ j.title | e }}</h3>
     <p class="entry-meta">
       <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
 {%- if j.location is defined %}
@@ -149,7 +168,7 @@
 {%- for item in education['items'] %}
 <article class="edu-item" data-measure="edu-item">
   <header class="entry-header">
-    <h3 class="edu-title">{{ item.title | e }}</h3>
+    <h3 class="entry-title">{{ item.title | e }}</h3>
     <p class="edu-subtitle">{{ item.subtitle | e }}</p>
     <p class="entry-meta">
       <span class="job-loc">{{ item.institution | e }}</span>
