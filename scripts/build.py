@@ -184,12 +184,16 @@ def derive_pdf_metadata(data):
 
     # Pull keywords from the sidebar's "Key Skills" block (id='key-skills'
     # if the convention holds; falls back to heading match).
+    # Items may be plain strings or {group: "..."} dicts — skip dicts.
     keywords = []
     try:
         for block in data['sidebar']['blocks']:
             if block.get('id') == 'key-skills' or \
                block.get('heading', '').strip().lower() == 'key skills':
-                keywords = list(block.get('items', []))[:10]
+                keywords = [
+                    item for item in block.get('items', [])
+                    if isinstance(item, str)
+                ][:10]
                 break
     except (KeyError, TypeError):
         # Schema didn't match — fall through with empty keywords.
@@ -427,6 +431,8 @@ def build(mode='final'):
         template = env.get_template("measurement.j2")
         rendered = template.render(
             name=data["name"],
+            role=data.get("role"),
+            contact=data.get("contact"),
             meta=data["meta"],
             summary=summary,
             experience=experience,
@@ -456,6 +462,8 @@ def build(mode='final'):
         template = env.get_template("resume.j2")
         rendered = template.render(
             name=data["name"],
+            role=data.get("role"),
+            contact=data.get("contact"),
             meta=data["meta"],
             summary=summary,
             experience=experience,

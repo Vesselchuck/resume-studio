@@ -5,23 +5,63 @@
    bullets, education entries).
    ─────────────────────────────────────────────────────────────── */
 .resume-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  /* Align contact strip to the bottom of the header so it sits
+     near the top rule — name dominates the top, contact info
+     anchors quietly at the bottom right before the rule.       */
+  align-items: flex-end;
   margin-block-end: var(--sp-lg);
-  /* Compensate for Montserrat's ascender padding so the top of the
-     "GAIUS" glyph sits at the page-padding edge (0.5in), not 0.05in
-     below it. This negative margin must roughly equal half the
-     line-height's leading minus the cap-height offset.              */
+  /* Compensate for Montserrat's ascender padding so the top of
+     the name glyph sits at the page-padding edge (0.5in).      */
   margin-block-start: -0.05in;
+}
+
+/* Left column: name + role stacked. */
+.header-left {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Right column: contact info, right-aligned, bottom-anchored.
+   Rendered as <address> — font-style: normal reset in _base.scss. */
+.header-contact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-xs);
+  font-size: var(--size-small);
+  color: var(--text-muted);
+  line-height: 1.3;
+  text-align: right;
 }
 
 .name {
   font-weight: 600;
   font-size: var(--size-name);
-  text-transform: uppercase;
+  /* No text-transform: uppercase — mixed case is more personal and
+     avoids the "template" signal that all-caps names carry. The
+     weight and size alone provide sufficient dominance.            */
   letter-spacing: 0.02em;
   line-height: 0.98;
 }
-.name-first, .name-last { display: block; }
-.name-last { margin-block-start: 0.05em; }
+/* Name flows inline on one line — spans are inline by default.
+   display: block removed; margin-block-start removed.             */
+.name-first, .name-last { display: inline; }
+
+/* Role line — small uppercase label in accent color. Uppercase is
+   appropriate here as a structured designation, not a personal name.
+   Sits below the name as the professional identifier.              */
+.name-role {
+  font-size: var(--size-small);
+  font-weight: 500;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  line-height: 1;
+  margin-block-start: var(--sp-sm);
+}
 
 
 /* ─── SECTION HEADING ───────────────────────────────────── */
@@ -34,6 +74,11 @@
 .section-heading {
   font-weight: 600;
   font-size: var(--size-section);
+  /* Accent color migrates the brand into content territory — the
+     accent now appears not just in structural framing (top rule,
+     column divider) but in the section labels themselves, making
+     it feel integrated rather than purely decorative.            */
+  color: var(--accent);
   text-transform: uppercase;
   letter-spacing: var(--ls-wide);
   line-height: 1;
@@ -60,9 +105,9 @@
   flex-direction: column;
 }
 /* Detail label (ADDRESS, PHONE, EMAIL in the sidebar). Visually a
-   peer of .job-title — same weight, same size, same line-height,
+   peer of .entry-title — same weight, same size, same line-height,
    same color — except set in UPPERCASE to mark it as a field-label
-   rather than an entry title. Sharing the size token with .job-title
+   rather than an entry title. Sharing the size token with .entry-title
    means future size changes touch one variable, not two.
 
    Letter-spacing of 0.1em matches .section-heading's tracking ratio
@@ -95,11 +140,39 @@
   line-height: 1.35;
 }
 
+/* Sub-group heading inside a plain-list — uses .entry-title styling
+   (sentence case, weight 600, body-larger size) so the sidebar's
+   group labels share the same visual category as job and education
+   entry titles. The reader's eye learns "title means content block
+   below" once and applies it everywhere.
+
+   Extra top margin separates each group from the items above it;
+   suppressed on the first child so the block doesn't open with
+   extra air after its section heading.                            */
+.list-group-heading {
+  list-style: none;
+  margin-block-start: var(--sp-sm);
+}
+.plain-list > .list-group-heading:first-child {
+  margin-block-start: 0;
+}
+
 
 /* ─── MAIN COLUMN CONTENT ──────────────────────────────── */
+/* Editorial lead treatment for the summary paragraph.
+   - Slightly larger than body (11pt vs 10pt) — signals "lead"
+   - Lighter weight (350 vs 400) — counterintuitive but it works
+     at the larger size; produces airy, confident editorial feel
+     used by The Economist and The New Yorker for lead paragraphs
+   - Bold lead-in via **markdown** in resume_default.yml renders as
+     <strong> at weight 600, creating a 250-unit weight contrast
+     against the 350 surrounding text — strong attention hook
+   The combination differentiates the summary as the document's
+   positioning statement without adding any new visual elements. */
 .summary-text {
-  font-size: var(--size-body);
-  line-height: 1.35;
+  font-size: var(--size-jobtitle);
+  font-weight: 350;
+  line-height: 1.4;
 }
 
 /* Work-experience block. Inherits the default .block gap (--sp-sm)
@@ -139,7 +212,7 @@
    break, sabbatical, parental leave, etc.). Italicized and rendered
    in muted grey so it reads visually as a soft note in the timeline
    rather than a role with the same weight as employment.            */
-.job--gap .job-title {
+.job--gap .entry-title {
   font-style: italic;
   font-weight: 500;
   color: var(--text-muted);
@@ -155,29 +228,35 @@
   gap: var(--gap-entry);
 }
 
-/* Job and education titles + the education subtitle share size and
-   leading. Titles are bold; the subtitle (specialization line below
-   the degree) is regular weight. Color inherits from body.          */
-.job-title, .edu-title, .edu-subtitle {
+/* Entry titles — used by jobs, education entries, and sidebar list
+   group headings. One unified class, one shared treatment, applied
+   anywhere a content block needs an entry-level title.
+
+   .edu-subtitle is the education-only specialization line, kept at
+   the same size but regular weight to read as a subordinate clause
+   under the degree title.                                          */
+.entry-title, .edu-subtitle {
   font-size: var(--size-jobtitle);
   line-height: 1.3;
 }
-.job-title, .edu-title { font-weight: 600; }
-.edu-subtitle          { font-weight: 400; }
+.entry-title  { font-weight: 600; }
+.edu-subtitle { font-weight: 400; }
 
 /* Meta row: date · location, single line. Wraps gracefully if both
    pieces together exceed the column width (rare with date+city).
    Gap is zero; the .job-date::after middle-dot owns its own
    horizontal margins, so the spacing on either side of the dot is
-   symmetric.                                                       */
+   symmetric. Size matches body so each job entry uses two type
+   sizes (title + everything else) instead of three — cleaner
+   visual hierarchy.                                                 */
 .entry-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0;
-  font-size: var(--size-small);
+  font-size: var(--size-body);
   color: var(--text-muted);
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 /* Meta-row separator between date and location. Uses a middle-dot

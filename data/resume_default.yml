@@ -13,6 +13,18 @@ name:
   first: Gaius
   last: Caesar
 
+role: "Imperator Romanus"
+
+# Contact info — rendered in the page header (right-aligned), not
+# the sidebar. address is shown on its own line; items are clickable.
+contact:
+  address: Roma, Imperium Romanum
+  rows:
+    - value: (000) 000-0000
+      href: "tel:+10000000000"
+    - value: gcaesar@email.com
+      href: "mailto:gcaesar@email.com"
+
 meta:
   description: >-
     Resume of Gaius Caesar — sed gravida elit velit, in pharetra
@@ -33,35 +45,22 @@ meta:
 # page; ≥1 item on the receiving page).
 sidebar:
   blocks:
-    - id: details
-      type: details
-      heading: Details
-      rows:
-        - label: Address
-          value: Roma, Imperium Romanum
-        - label: Phone
-          value: (000) 000-0000
-          href: "tel:+10000000000"
-        - label: Email
-          value: gcaesar@email.com
-          href: "mailto:gcaesar@email.com"
-
     - id: key-skills
       type: list
       heading: Key Skills
       items:
-        # Duis Justo
+        - group: "Duis Justo"
         - Vestibulum Vel Mattis Mauris
         - Suspendisse Mollis Dolor
         - Nullam Maximus Dolor
         - Nullam Posuere Aliquet
         - In Maximus Justo Nec
         - Aliquam Ac Diam Quis
-        # Aliquam Non
+        - group: "Aliquam Non"
         - Pellentesque Egestas Turpis
         - Suspendisse Non Turpis
         - Quisque Ut Eleifend Massa
-        # Vestibulum Ante
+        - group: "Vestibulum Ante"
         - Nullam Sed Neque Nulla
         - Morbi Placerat Orci
         - Morbi Pharetra Blandit
@@ -69,12 +68,12 @@ sidebar:
         - Morbi Ac Tortor Mauris
         - Fusce Pharetra Sodales
         - Sed Quis Imperdiet Magna
-        # Donec Justo
+        - group: "Donec Justo"
         - Vestibulum A Est Non
         - Aliquam Vehicula Blandit
         - Fusce Dapibus Dignissim Feugiat
         - Pellentesque Elementum Turpis
-        # Mauris Risus
+        - group: "Mauris Risus"
         - Cras Blandit Orci Lectus
         - Duis Viverra Varius Dolor
         - Curabitur Pharetra Leo Quam
@@ -83,7 +82,7 @@ sidebar:
         - Proin Posuere Nulla
         - Etiam Bibendum Velit
         - Maecenas Dictum Ex
-        - Fusce Et Scelerisque
+        - Fusce Et Scelerisque Sed Amet Nulla
         - Nulla Viverra Est
         - Praesent Iaculis Nulla
         - Sed Finibus Accumsan
@@ -118,20 +117,14 @@ mainColumn:
   - type: summary
     heading: Summary
     text: >-
-      Sed gravida elit velit, in pharetra lorem tempus id. Maecenas dictum ex
-      in risus molestie, nec faucibus velit malesuada. Nulla viverra est ut
-      molestie laoreet. Fusce et scelerisque diam. Phasellus vel lectus ut
-      nisl maximus rutrum quis ut elit. Lorem ipsum dolor sit amet,
-      consectetur adipiscing elit. Maecenas et efficitur elit, in imperdiet
-      nisi. Pellentesque tempus enim vitae cursus elementum. Praesent molestie
-      risus sed nunc lacinia suscipit. Praesent iaculis nulla.
+      Sed gravida elit velit, in pharetra lorem tempus id. Maecenas dictum ex in risus molestie, nec faucibus velit malesuada. Nulla viverra est ut molestie laoreet. Fusce et scelerisque diam. Phasellus vel lectus ut nisl maximus rutrum quis ut elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Maecenas et efficitur elit, in imperdiet nisi. Pellentesque tempus enim vitae cursus elementum. Praesent molestie risus sed nunc lacinia suscipit. Praesent iaculis nulla.
 
   - type: experience
     heading: Work Experience
     jobs:
       - id: nulla
         title: Nulla porta ligula, Aliquam libero
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:
@@ -141,13 +134,13 @@ mainColumn:
 
       - id: transition-gap
         title: Transitus in Cursum Novum
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         gap: true        # styles the entry as a non-employment gap
 
       - id: etiam-tincidunt
         title: Etiam tincidunt lacus, Etiam fermentum
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:
@@ -157,7 +150,7 @@ mainColumn:
 
       - id: etiam
         title: Etiam eu dictum, Cras vel
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:
@@ -167,7 +160,7 @@ mainColumn:
 
       - id: vivamus-sit
         title: Vivamus sit amet, Aenean varius
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:
@@ -176,7 +169,7 @@ mainColumn:
 
       - id: aenean
         title: Aenean consectetur, Morbi massa
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:
@@ -186,7 +179,7 @@ mainColumn:
 
       - id: vivamus-vulputate
         title: Vivamus vulputate auctor, Nulla pharetra
-        date: MMM YYYY — MMM YYYY
+        date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
         location: Roma, Imperium Romanum
         bullets:

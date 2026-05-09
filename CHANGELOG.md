@@ -41,6 +41,27 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.4.1] — 2026-05-09
+
+*New optional fields; every 0.4.0 file still builds unchanged.*
+
+- **Added.** An optional `role` field, shown as a small uppercase
+  accent-colored line under the name.
+- **Added.** An optional `contact` block (`address` plus `rows` of
+  `value` and optional `href`), shown on the right of the page header.
+  The sidebar `details` block still works.
+- **Added.** `{group: "…"}` entries in sidebar lists, shown as
+  subheadings inside the list. They are left out of the PDF keywords.
+- **Added.** `**bold**` in the summary.
+- **Changed.** The header is two columns: name and role on the left,
+  contact details on the right. The name is on one line and no longer
+  in capitals.
+- **Changed.** Section headings take the accent color, the summary is
+  set as a lead paragraph, and date and location rows are larger. The
+  sidebar is 2.3in wide instead of 2in.
+- **Changed.** The CSS classes `.job-title` and `.edu-title` merge into
+  `.entry-title`.
+
 ## [0.4.0] — 2026-05-08
 
 *Breaking: the PDF changed from A4 to US Letter, and the styles moved.*
@@ -153,6 +174,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.4.1]: #041--2026-05-09
 [0.4.0]: #040--2026-05-08
 [0.3.0]: #030--2026-05-03
 [0.2.0]: #020--2026-04-25
