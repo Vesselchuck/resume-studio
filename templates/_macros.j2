@@ -79,7 +79,7 @@
 <section class="block{% if entry.continuation %} block--continued{% endif %}"
          {%- if entry.continuation %} data-continues-from="{{ b.id }}"{% else %} id="{{ b.id }}"{% endif %}>
 {%- if not entry.continuation %}
-  <h2 class="section-heading">{{ b.heading | e }}</h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ b.heading | e }}</span><span aria-hidden="true">{{ b.heading | e }}</span></h2>
 {%- endif %}
 {%- if b.type == "details" %}
   <address class="details-list">
@@ -149,7 +149,7 @@
 {%- if section.type == "summary" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading">{{ summary.heading | e }}</h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ summary.heading | e }}</span><span aria-hidden="true">{{ summary.heading | e }}</span></h2>
 {%- endif %}
   <p class="summary-text">{{ summary.text | e | md | safe }}</p>
 </section>
@@ -157,7 +157,7 @@
 <section class="block experience"
          {%- if section.continuation_of %} aria-label="Work experience continued"{% endif %}>
 {%- if not section.continuation_of %}
-  <h2 class="section-heading">{{ experience.heading | e }}</h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ experience.heading | e }}</span><span aria-hidden="true">{{ experience.heading | e }}</span></h2>
 {%- endif %}
 {% for entry in section.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
@@ -167,7 +167,7 @@
 {%- elif section.type == "education" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading">{{ education.heading | e }}</h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ education.heading | e }}</span><span aria-hidden="true">{{ education.heading | e }}</span></h2>
 {%- endif %}
 {%- for item in education['items'] %}
 {{ render_edu_item(item) }}

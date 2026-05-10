@@ -13,9 +13,28 @@
      anchors quietly at the bottom right before the rule.       */
   align-items: flex-end;
   margin-block-end: var(--sp-lg);
-  /* Compensate for Montserrat's ascender padding so the top of
-     the name glyph sits at the page-padding edge (0.5in).      */
-  margin-block-start: -0.05in;
+  /* HEADER TOP ALIGNMENT — font-specific
+     ────────────────────────────────────
+     The required negative margin depends on the .name font's
+     ascender padding (the empty space above cap-height inside
+     the line-box, used by sans-serifs to accommodate diacritics).
+
+     Measured from TTF metrics at 30pt:
+       Newsreader:  0.027in ascender padding above cap-height
+       Manrope:     0.144in
+       Montserrat:  ~0.10in (similar to Manrope)
+
+     The original code used margin-block-start: -0.05in to
+     compensate Montserrat. Newsreader's padding is small enough
+     (and further reduced by .name's line-height: 0.98 cropping
+     the line-box) that no compensation is needed — cap-height
+     aligns with the page-padding edge naturally with margin: 0.
+
+     IF YOU SWAP THE DISPLAY FONT: re-measure. Most sans faces
+     and several serifs need ~ -0.05in here. Verify by rendering
+     and pixel-checking the topmost dark pixel against the page
+     padding edge (0.5in from page top).                        */
+  margin-block-start: 0;
 }
 
 /* Left column: name + role stacked. */
@@ -38,6 +57,11 @@
 }
 
 .name {
+  font-family: var(--font-display);
+  /* Newsreader has an opsz axis. The browser auto-selects the
+     optical size from font-size when font-optical-sizing is auto
+     (the CSS default), so no font-variation-settings rule is
+     needed — at 30pt the browser picks opsz=30 automatically. */
   font-weight: 600;
   font-size: var(--size-name);
   /* No text-transform: uppercase — mixed case is more personal and
@@ -72,7 +96,11 @@
    as a template pattern. --section-rhythm carries the visual
    separation load instead.                                   */
 .section-heading {
-  font-weight: 600;
+  font-family: var(--font-display);
+  /* Auto opsz selection — see .name. At 14pt the browser picks
+     opsz=14, which is the text-optimised shape Newsreader's
+     authors designed for small headings.                       */
+  font-weight: 700;
   font-size: var(--size-section);
   /* Accent color migrates the brand into content territory — the
      accent now appears not just in structural framing (top rule,
@@ -81,12 +109,19 @@
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: var(--ls-wide);
+  /* line-height: 1 keeps the line-box at exactly font-size so
+     glyph overshoot (the small upward extension of letters like
+     K, S, R for optical balance) is not clipped at the top.
+     Tighter line-heights (0.85, 0.9) crop these overshoots and
+     also clip serifs in PDF output, producing visibly cropped
+     letters. The line-box itself produces ~5px of unused space
+     below the baseline (Newsreader's descender zone) which is
+     what makes the heading-to-content gap feel slightly larger
+     than it would with a sans-serif heading. We compensate via
+     a tighter margin-block-end (2px instead of --sp-xs) which
+     reduces the visible gap without clipping anything.            */
   line-height: 1;
-  /* Reduced from --sp-md (8px) to --sp-xs (4px): without the underline
-     bar there is no visual anchor between heading and content below it.
-     Tighter coupling makes the heading read as belonging to its section
-     rather than floating between two rhythm zones.                     */
-  margin-block-end: var(--sp-xs);
+  margin-block-end: 2px;
 }
 
 
@@ -129,7 +164,6 @@
 }
 .detail-value {
   font-size: var(--size-body);
-  line-height: 1.35;
 }
 
 .plain-list {
@@ -137,7 +171,6 @@
   flex-direction: column;
   gap: var(--sp-sm);
   font-size: var(--size-body);
-  line-height: 1.35;
 }
 
 /* Sub-group heading inside a plain-list — uses .entry-title styling
@@ -246,17 +279,15 @@
    pieces together exceed the column width (rare with date+city).
    Gap is zero; the .job-date::after middle-dot owns its own
    horizontal margins, so the spacing on either side of the dot is
-   symmetric. Size matches body so each job entry uses two type
-   sizes (title + everything else) instead of three — cleaner
-   visual hierarchy.                                                 */
+   symmetric. Size is --size-meta (9pt) — quietly subordinated below
+   body-level content without the over-shrunk fussiness of 8.5pt.   */
 .entry-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0;
-  font-size: var(--size-body);
+  font-size: var(--size-meta);
   color: var(--text-muted);
-  line-height: 1.35;
 }
 
 /* Meta-row separator between date and location. Uses a middle-dot
@@ -282,7 +313,6 @@
 }
 .bullets li {
   font-size: var(--size-body);
-  line-height: 1.35;
   position: relative;
 }
 /* En-dash marker — positioned absolutely so it sits in the

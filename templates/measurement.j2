@@ -48,10 +48,6 @@
        stable, version-agnostic endpoint — Google internally
        resolves it to current woff2 hashes, insulating us from URL
        drift on the underlying font files. -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="measurement-mode">
@@ -71,7 +67,10 @@
             <span class="name-last">{{ name.last }}</span>
           </h1>
 {%- if role %}
-          <p class="name-role">{{ role | e }}</p>
+          <p class="name-role">
+            <span class="visually-hidden">{{ role | e }}</span>
+            <span aria-hidden="true">{{ role | e }}</span>
+          </p>
 {%- endif %}
         </div>
 {%- if contact %}
@@ -100,7 +99,7 @@
 <hr class="section-sep" data-measure="separator">
 {% endif -%}
 <section class="block" id="{{ b.id }}" data-measure="block" data-id="{{ b.id }}" data-type="{{ b.type }}">
-  <h2 class="section-heading" data-measure="block-heading">{{ b.heading | e }}</h2>
+  <h2 class="section-heading" data-measure="block-heading"><span class="visually-hidden">{{ b.heading | e }}</span><span aria-hidden="true">{{ b.heading | e }}</span></h2>
 {%- if b.type == "details" %}
   <address class="details-list">
 {%- for row in b.rows %}
@@ -119,7 +118,11 @@
 {%- elif b.type == "list" %}
   <ul class="plain-list">
 {%- for item in b['items'] %}
+{%- if item is mapping %}
+    <li class="list-group-heading entry-title" data-measure="item" data-item-index="{{ loop.index0 }}">{{ item.group | e }}</li>
+{%- else %}
     <li data-measure="item" data-item-index="{{ loop.index0 }}">{{ item | e }}</li>
+{%- endif %}
 {%- endfor %}
   </ul>
 {%- endif %}
@@ -130,14 +133,14 @@
         <div class="main-col">
 
           <section class="block" data-measure="section" data-section-type="summary">
-            <h2 class="section-heading" data-measure="section-heading">{{ summary.heading | e }}</h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ summary.heading | e }}</span><span aria-hidden="true">{{ summary.heading | e }}</span></h2>
             <p class="summary-text" data-measure="summary-text">{{ summary.text | e | md | safe }}</p>
           </section>
 
           <hr class="section-sep" data-measure="separator">
 
           <section class="block experience" data-measure="section" data-section-type="experience">
-            <h2 class="section-heading" data-measure="section-heading">{{ experience.heading | e }}</h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ experience.heading | e }}</span><span aria-hidden="true">{{ experience.heading | e }}</span></h2>
 {% for j in experience.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
 <article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}" data-measure="job" data-id="{{ j.id }}">
@@ -164,7 +167,7 @@
           <hr class="section-sep" data-measure="separator">
 
           <section class="block" data-measure="section" data-section-type="education">
-            <h2 class="section-heading" data-measure="section-heading">{{ education.heading | e }}</h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ education.heading | e }}</span><span aria-hidden="true">{{ education.heading | e }}</span></h2>
 {%- for item in education['items'] %}
 <article class="edu-item" data-measure="edu-item">
   <header class="entry-header">

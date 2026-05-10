@@ -36,8 +36,18 @@
                                   thin; there is no consistent option at
                                   1.5pt.                                    */
 
-  /* Typography. */
-  --font: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+  /* Typography. Two faces:
+     --font          Body face (Manrope). Used for everything by default.
+     --font-display  Display face (Newsreader). Applied selectively in
+                     _components.scss to .name and .section-heading.
+                     Newsreader is an editorial serif with an opsz axis,
+                     so it adapts automatically between display sizes
+                     (30pt name) and smaller sizes (14pt section
+                     headings) — the same font file optimises both.
+     Both fallback chains end in system serif/sans-serif so a missing
+     vendored woff2 still produces a readable document.              */
+  --font:         'Manrope',    'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Newsreader', Georgia, 'Times New Roman', serif;
 
   /* Sizes — pt-based so they translate identically to print.
      Job title is intentionally LARGER than body so the type scale
@@ -46,6 +56,13 @@
   --size-section:  14pt;
   --size-jobtitle: 11pt;
   --size-body:     10pt;
+  --size-meta:     9pt;        /* Sits between body and small.
+                                  Used for entry meta lines (date,
+                                  location) — quietly subordinated
+                                  below body-level content without
+                                  the over-shrunk feel of --size-small.
+                                  Variable font; clean rendering at 9pt
+                                  in print. */
   --size-small:    8.5pt;
 
   /* Spacing scale — geometric ~1.4× steps, in rem so they scale
