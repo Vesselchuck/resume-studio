@@ -16,7 +16,14 @@ body {
   font-family: var(--font);
   font-weight: 400;
   font-size: var(--size-body);
-  line-height: 1.35;
+  /* line-height: 1.4 — bumped from 1.35 to compensate for Manrope's
+     5% taller x-height, which made body text feel slightly denser
+     than the previous Montserrat at the same nominal size. 1.4
+     restores the breathing room. Body-content elements (.bullets,
+     .summary-text, .plain-list, .entry-meta) inherit this baseline;
+     the few that override it do so for specific reasons documented
+     at their rules.                                                */
+  line-height: 1.4;
   color: var(--text-primary);
   background: var(--surface-app);
   font-feature-settings: "kern", "liga";
@@ -26,6 +33,40 @@ ul, ol { list-style: none; }
 address { font-style: normal; }
 h1, h2, h3, h4 { font-weight: inherit; line-height: 1.2; }
 strong { font-weight: 600; }
+
+/* VISUALLY HIDDEN — for screen reader accessibility on tracked
+   uppercase elements (.name-role, .section-heading).
+
+   The visible element has aria-hidden="true" because screen readers
+   announce wide letter-spacing as "S U M M A R Y" letter-by-letter
+   in some implementations. The visually-hidden sibling carries the
+   same text in clean mixed case, which is what gets read aloud.
+
+   PDF EXTRACTION NOTE: this technique does NOT help ATS extraction.
+   Chromium's PDF text layer excludes elements positioned off-screen
+   or clipped to zero area. ATS extraction relies on the visible
+   element directly. For tracked elements that DO need to extract
+   cleanly, the wrapper-span technique (text in <span> child of
+   styled parent) appears to nudge Chromium to emit Tc (character
+   spacing) instead of per-letter positioning operators — provided
+   letter-spacing stays at or below ~0.10em. Above that, the role
+   label remains broken in extraction. Tradeoff documented at
+   .name-role.
+
+   letter-spacing/text-transform overrides are essential — without
+   them the hidden text would inherit tracking and uppercase from
+   .name-role / .section-heading.                                  */
+.visually-hidden {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  letter-spacing: normal;
+  text-transform: none;
+  word-spacing: normal;
+}
 /* Reset <hr> UA defaults. Chromium's UA stylesheet gives <hr>
    border-style: inset, color: gray, and overflow: hidden.
    appearance: none removes the UA-level rendering shortcut;

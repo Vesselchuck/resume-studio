@@ -18,10 +18,6 @@
        stable, version-agnostic endpoint — Google internally
        resolves it to current woff2 hashes, insulating us from URL
        drift on the underlying font files. -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -51,7 +47,10 @@
             <span class="name-last">{{ name.last }}</span>
           </h1>
 {%- if role %}
-          <p class="name-role">{{ role | e }}</p>
+          <p class="name-role">
+            <span class="visually-hidden">{{ role | e }}</span>
+            <span aria-hidden="true">{{ role | e }}</span>
+          </p>
 {%- endif %}
         </div>
 {%- if contact %}

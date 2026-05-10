@@ -1,6 +1,6 @@
 # Resume
 
-Version 0.4.1. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+Version 0.4.2. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Single-source-of-truth resume pipeline. Edit YAML, get a pixel-faithful
 US Letter PDF. Page placement is computed automatically — no manual
@@ -100,31 +100,28 @@ The build prefers `resume.local.yml` over `resume_default.yml` if both exist.
 
 ## What you can change in the YAML
 
-- **Personal info** — `name.first`, `name.last`, plus an optional
-  `role` (a short line under the name).
-- **Header contact** — optional `contact` block: an `address` line and
-  `rows`, each with a `value` and an optional `href` (e.g. `mailto:` or
-  `tel:` link). Shown on the right of the page header.
+- **Personal info** — `name.first`, `name.last`, and an optional `role`
+  (a short line shown under the name)
+- **Contact details** — an optional `contact` block with an `address`
+  and `rows` of `value` plus optional `href` (e.g. `tel:` or `mailto:`
+  links), shown on the right of the page header
+- **Document metadata** — `meta.description` (required) and an optional
+  `meta.lang` (BCP-47 tag, default `en-US`, written to the PDF as `/Lang`)
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
   Each block has a kebab-case `id` (must be unique), a `type`
-  (`details` or `list`), a `heading`, and content: `rows` of
-  `label`/`value` (optional `href`) for `details`, or `items` for
-  `list`. A list item can be a `{group: "…"}` entry, which renders as a
-  subheading inside the list (group entries are left out of the PDF
-  keywords).
+  (`details` or `list`), a `heading`, and content: `rows` (each with a
+  `label`, a `value` and an optional `href`) for `details`, `items` for
+  `list`. A `{group: "…"}` entry in a list's `items` is shown as a
+  subheading inside the list.
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
-  `mainColumn[experience].jobs`. Each job has a unique kebab-case
-  `id`, a `title`, `date`/`datetime`, an optional `location`, and
-  `bullets`; set `gap: true` (no bullets needed) for a career-gap entry.
+  `mainColumn[experience].jobs`. A job with `gap: true` (and no
+  bullets) is shown as a gap entry, e.g. a career break.
 - **Bullets** — add or remove freely under each job's `bullets:` list.
-  The layout solver decides where page breaks land. Wrap text in
-  `**bold**` to emphasize it (works in bullets and the summary text).
-- **Page cap** — `meta.maxPages` (required; the placeholder uses 10). Lower it to force
+  The layout solver decides where page breaks land. `**bold**` works in
+  bullets and in the summary text.
+- **Page cap** — `meta.maxPages: 10` is the default. Lower it to force
   tighter layouts; the build fails clearly if content can't fit.
-- **PDF metadata** — `meta.description` (required) becomes the PDF
-  subject; optional `meta.lang` (default `en-US`) is stamped as the
-  PDF's `/Lang`.
 
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
@@ -149,21 +146,21 @@ Everything in `dist/` plus `print.pdf` is gitignored.
 │   ├── styles/                Sass source — compiled to dist/styles.css
 │   │   ├── styles.scss        Entry point (@use's the partials)
 │   │   ├── _tokens.scss       CSS custom properties
-│   │   ├── _fonts.scss        @font-face declarations (vendored Montserrat)
+│   │   ├── _fonts.scss        @font-face declarations (vendored Manrope + Newsreader)
 │   │   ├── _base.scss         Reset + body defaults
 │   │   ├── _layout.scss       Page container, body grid, divider, hrs
 │   │   ├── _components.scss   Name header, headings, sidebar, jobs
 │   │   ├── _print.scss        @media print overrides
 │   │   └── _measurement.scss  body.measurement-mode overrides
-│   └── fonts/                 Vendored Montserrat (canonical Google
-│       │                      Fonts version, served from disk for
-│       │                      reproducible builds — see "Why vendored"
-│       │                      below)
-│       ├── Montserrat-VariableFont_wght.woff2          Upright (100-900)
-│       ├── Montserrat-Italic-VariableFont_wght.woff2  Italic (100-900)
-│       └── OFL.txt            Font license (OFL-1.1)
+│   └── fonts/                 Vendored fonts, served from disk for
+│       │                      reproducible builds (see "Why vendored
+│       │                      fonts" below)
+│       ├── Manrope.woff2          Body text, variable (100-900)
+│       ├── Manrope-OFL.txt        Manrope license (OFL-1.1)
+│       ├── Newsreader.woff2       Name + section headings, variable (200-800)
+│       └── Newsreader-OFL.txt     Newsreader license (OFL-1.1)
 ├── data/                      YAML resume content
-│   ├── resume_default.yml     Placeholder, Gaius Caesar (committed)
+│   ├── resume_default.yml     Placeholder (committed)
 │   └── resume.local.yml       Real data (gitignored)
 ├── scripts/
 │   ├── build.py               YAML → HTML, two modes (final, measurement)
@@ -188,13 +185,14 @@ Everything in `dist/` plus `print.pdf` is gitignored.
 │   ├── test_check_layout.js      Layout invariants tests (Playwright)
 │   └── fixtures/
 │       ├── expected_print.pdf       Snapshot for the placeholder data
+│       │                            (committed)
 │       ├── expected_print.local.pdf Snapshot for local data (gitignored)
 │       └── diff_page*.png           Generated on snapshot failure
 │                                    (gitignored)
 ├── render.js                  Build orchestrator (11-phase pipeline)
 ├── package.json               Node dependencies (playwright, sass)
 ├── requirements.txt           Python dependencies
-├── CHANGELOG.md               Release history
+├── CHANGELOG.md               Release notes for every version
 └── LICENSE                    MIT
 ```
 
@@ -299,44 +297,44 @@ This pipeline takes a different path:
 The result: editing the YAML and re-running produces the same PDF
 on any machine, and any visible change is caught by a test.
 
-## Why vendored Montserrat
+## Why vendored fonts
 
-The project ships its own Montserrat font files under `assets/fonts/`
-instead of loading from Google Fonts CDN. This isn't decorative — it
-fixes a real reproducibility bug.
+The project ships its own font files under `assets/fonts/` — Manrope
+for body text and Newsreader for the name and section headings —
+instead of loading them from the Google Fonts CDN. This isn't
+decorative — it fixes a real reproducibility problem.
 
-When the project loaded fonts from the CDN, three things could
+When fonts come from the CDN or from the system, three things can
 silently change the rendered output:
 
-1. **System-installed Montserrat overriding the web font.** If a
-   contributor's OS had Montserrat installed locally, Chromium
-   sometimes preferred the system version over the CDN-served file.
-   Different system Montserrat versions render glyphs at slightly
-   different widths — enough to change line-wrap decisions and
-   therefore the layout solver's output.
-2. **Different npm mirrors of Montserrat.** An earlier setup that
-   loaded Montserrat from `@fontsource/montserrat` shipped subtly
-   different outline files than the canonical Google Fonts version,
-   even though their metrics tables matched. A 14.6% width divergence
-   was measured on the same string between the two.
+1. **A system-installed copy overriding the web font.** If a
+   contributor's OS has the same family installed locally, Chromium
+   may prefer the system version. Different versions render glyphs at
+   slightly different widths — enough to change line-wrap decisions
+   and therefore the layout solver's output.
+2. **Different npm mirrors of the same font.** An earlier setup that
+   loaded Montserrat (the typeface used before this version) from
+   `@fontsource/montserrat` shipped subtly different outline files
+   than the canonical Google Fonts version, even though their metrics
+   tables matched. A 14.6% width divergence was measured on the same
+   string between the two.
 3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes
    change when fonts are re-versioned. Pinning a specific URL would
    eventually 404; using the stable CSS endpoint would silently
    serve a different glyph file when Google updated the version.
 
-The vendored woff2 files are the canonical Google Fonts release,
-loaded directly from disk via `@font-face url('../assets/fonts/...')`
-(relative to `dist/styles.css`). No
-`local()` source is declared, so system Montserrat never overrides
-the web font. The two woff2 files (~430 KB total) cover all weights
-via the variable-font `wght` axis.
+The vendored woff2 files are loaded directly from disk via
+`@font-face url('../assets/fonts/...')` (the path is relative to
+`dist/styles.css`). No `local()` source is declared, so a system copy
+never overrides the web font. Each family is a single variable-font
+file (~270 KB for both) that covers every weight via the `wght` axis;
+Newsreader also adjusts its optical size to the font size.
 
-The Google Fonts `<link>` tag is still present in the templates as a
-graceful-degradation fallback: if `assets/fonts/` is missing for any
-reason, the browser falls through to the CDN. That fallback isn't
-guaranteed to produce a matching layout (the system-Montserrat
-override risk reappears), but it produces a readable PDF instead of
-a fallback-Helvetica disaster.
+There is no Google Fonts `<link>` in the templates and no network
+fallback: the build needs no internet access for fonts. Both fonts are
+licensed under the SIL Open Font License 1.1, and their license texts
+(`Manrope-OFL.txt`, `Newsreader-OFL.txt`) must stay next to the woff2
+files.
 
 ## FAQ / common gotchas
 
@@ -369,14 +367,14 @@ full pipeline twice with each data source forced.
 **The build fails with "content-overflow" on a page.**
 The solver produced a placement that doesn't actually fit. This usually
 means a measurement is off — frequently due to a CSS change that altered
-spacing unintentionally. The error message includes the offending
+spacing without anyone noticing. The error message includes the offending
 column, page, and culprit element id. If you can't find an obvious
 cause, file a bug or report — this should not happen with reasonable
 content; if it does, the solver or `measure_dom.js` has a bug.
 
 **The build fails with "exceeds maxPages".**
 Your content doesn't fit in the configured cap. Either increase
-`meta.maxPages` in the YAML (the placeholder sets 10) or trim content. The error
+`meta.maxPages` in the YAML (default is 10) or trim content. The error
 identifies which column ran out of pages.
 
 **`pip install -r requirements.txt` fails to install Pillow on a new Python version.**
@@ -399,12 +397,16 @@ you want. Future versions may add `splitAfter:` overrides on jobs but
 this isn't currently implemented and adds complexity.
 
 **The fonts look wrong on first build.**
-Montserrat is vendored under `assets/fonts/` and loaded from disk —
-no internet required at build time. If your render still produces
-the wrong output, check that `assets/fonts/Montserrat-VariableFont_wght.woff2`
-exists. The templates still link the Google Fonts CDN, but only as a
-fallback for when the vendored files are missing; the build does not
-rely on it (see "Why vendored Montserrat" above).
+Manrope and Newsreader are vendored under `assets/fonts/` and loaded
+from disk — no internet required at build time. If your render still
+produces the wrong output, check that `assets/fonts/Manrope.woff2` and
+`assets/fonts/Newsreader.woff2` exist and that the templates haven't
+been edited to reference an external font URL. The build deliberately
+does NOT use the Google Fonts CDN (see "Why vendored fonts" above).
+If all text comes out in the lightest weight, the Chromium build in
+use is not applying the variable-font weight axis (Manrope's default
+instance is ExtraLight); `pdffonts print.pdf` shows it. See the note
+in `assets/styles/_fonts.scss`.
 
 **Where do I put real resume data without committing it?**
 Put it in `data/resume.local.yml`. That file is gitignored; the build

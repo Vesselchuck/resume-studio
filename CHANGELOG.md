@@ -41,6 +41,26 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.4.2] — 2026-05-10
+
+*New typefaces and a screen-reader improvement; the interface is
+unchanged.*
+
+- **Changed.** Montserrat is replaced by Manrope for text and Newsreader
+  for the name and section headings. Both are included in the project
+  under the SIL Open Font License 1.1.
+- **Changed.** Section headings are weight 700. Body line height goes
+  from 1.35 to 1.4 to suit Manrope's taller lowercase letters.
+- **Changed.** Date and location rows use a new 9pt `--size-meta`.
+- **Added.** The role line and section headings are output twice: once
+  as hidden text for screen readers and once as visible text hidden
+  from them. With wide letter-spacing, some screen readers spell a word
+  out letter by letter.
+- **Removed.** The Google Fonts `<link>`. The fonts ship with the project.
+- **Fixed.** The measurement page didn't render `{group: …}` list items
+  as group headings, so the heights it measured didn't match the final
+  page.
+
 ## [0.4.1] — 2026-05-09
 
 *New optional fields; every 0.4.0 file still builds unchanged.*
@@ -174,6 +194,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.4.2]: #042--2026-05-10
 [0.4.1]: #041--2026-05-09
 [0.4.0]: #040--2026-05-08
 [0.3.0]: #030--2026-05-03
