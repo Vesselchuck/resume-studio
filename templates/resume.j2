@@ -8,16 +8,11 @@
   <meta name="author" content="{{ name.first }} {{ name.last }}">
   <meta name="description" content="{{ meta.description }}">
 
-  <!-- Fonts: vendored Montserrat (assets/fonts/) is the source of
-       truth — its @font-face rules in styles.css are the LAST
-       declaration in cascade order, so they win when the woff2
-       loads successfully. The Google Fonts CSS link below is a
-       graceful-degradation fallback: if assets/fonts/ is missing
-       or the request fails, the browser uses Google's @font-face
-       rules instead. The CSS-API URL (css2?family=...) is the
-       stable, version-agnostic endpoint — Google internally
-       resolves it to current woff2 hashes, insulating us from URL
-       drift on the underlying font files. -->
+  <!-- Fonts: vendored Manrope (body) and Newsreader (display) loaded
+       from assets/fonts/ via @font-face rules in styles.css. Both are
+       variable WOFF2 files covering the full weight range used in the
+       document. License terms (SIL OFL 1.1) live alongside the woff2
+       binaries at assets/fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>

@@ -18,8 +18,13 @@
   --border-rule:    #d8d8d8;   /* thin separator rules between sections,
                                   date/location separators, etc. */
   --accent:         #2d4a3e;   /* deep slate-green; structural accent.
-                                  Applied to: top rule, column divider,
-                                  section heading bars, link interactions.
+                                  Applied to: top rule, section heading bars,
+                                  link interactions. Reserved for the single
+                                  top frame element + accents inside content;
+                                  NOT applied to the column divider (which
+                                  uses --border-rule instead) to keep the
+                                  green exclusive to the document's top
+                                  structural frame.
                                   Luminance ≈ 20% — survives greyscale
                                   conversion without a monochrome override. */
   --accent-rule:    2pt;       /* shared thickness for all rules (top rule,
@@ -56,14 +61,18 @@
   --size-section:  14pt;
   --size-jobtitle: 11pt;
   --size-body:     10pt;
-  --size-meta:     9pt;        /* Sits between body and small.
-                                  Used for entry meta lines (date,
-                                  location) — quietly subordinated
-                                  below body-level content without
-                                  the over-shrunk feel of --size-small.
-                                  Variable font; clean rendering at 9pt
-                                  in print. */
-  --size-small:    8.5pt;
+  --size-caption:  9pt;        /* Smallest readable tier in the
+                                  document. Used for entry meta lines
+                                  (date, location), the role label,
+                                  and contact rows. Quietly subordinated
+                                  below body-level content. Variable
+                                  font; clean rendering at 9pt in print.
+                                  Previously this scale had a separate
+                                  8.5pt --size-small token — collapsed
+                                  into --size-caption because the 0.5pt
+                                  difference fell below the just-noticeable
+                                  difference threshold and added complexity
+                                  without perceivable hierarchy. */
 
   /* Spacing scale — geometric ~1.4× steps, in rem so they scale
      with root font-size in print. Use these tokens for every gap

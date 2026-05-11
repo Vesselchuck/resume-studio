@@ -41,6 +41,23 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.4.3] — 2026-05-10
+
+*Visual and accessibility adjustments; nothing new, nothing broken.*
+
+- **Changed.** `--size-small` (8.5pt) and `--size-meta` (9pt) merge into
+  one `--size-caption` (9pt). A difference of half a point was too small
+  to see.
+- **Changed.** The column divider is a 1pt gray hairline instead of a
+  2pt accent-green rule, which competed with the content. The accent
+  color is kept for the top rule.
+- **Changed.** Slightly more space between consecutive jobs.
+- **Fixed.** Gap entries no longer use `opacity: 0.7`, which dropped
+  their meta text to about 3.6:1 contrast, below WCAG AA. They now use a
+  solid color at 5.7:1.
+- **Changed.** Placeholder content was reorganized. Only keys that
+  already existed are used.
+
 ## [0.4.2] — 2026-05-10
 
 *New typefaces and a screen-reader improvement; the interface is
@@ -194,6 +211,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.4.3]: #043--2026-05-10
 [0.4.2]: #042--2026-05-10
 [0.4.1]: #041--2026-05-09
 [0.4.0]: #040--2026-05-08

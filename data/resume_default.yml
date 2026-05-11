@@ -45,6 +45,14 @@ meta:
 # page; ≥1 item on the receiving page).
 sidebar:
   blocks:
+    - id: languages
+      type: list
+      heading: Languages
+      items:
+        - Lingua (Gradus Scientiae)
+        - Lingua (Gradus Scientiae)
+        - Lingua (Gradus Scientiae)
+
     - id: key-skills
       type: list
       heading: Key Skills
@@ -60,54 +68,50 @@ sidebar:
         - Pellentesque Egestas Turpis
         - Suspendisse Non Turpis
         - Quisque Ut Eleifend Massa
-        - group: "Vestibulum Ante"
         - Nullam Sed Neque Nulla
         - Morbi Placerat Orci
         - Morbi Pharetra Blandit
+        - group: "Vestibulum Ante"
         - In Cursus Libero Vitae
         - Morbi Ac Tortor Mauris
         - Fusce Pharetra Sodales
-        - Sed Quis Imperdiet Magna
         - group: "Donec Justo"
+        - Sed Quis Imperdiet Magna
         - Vestibulum A Est Non
         - Aliquam Vehicula Blandit
+        - group: "Mauris Risus"
         - Fusce Dapibus Dignissim Feugiat
         - Pellentesque Elementum Turpis
-        - group: "Mauris Risus"
         - Cras Blandit Orci Lectus
         - Duis Viverra Varius Dolor
         - Curabitur Pharetra Leo Quam
         - Nam Tincidunt Enim
         - Integer Dignissim Tempor
         - Proin Posuere Nulla
-        - Etiam Bibendum Velit
-        - Maecenas Dictum Ex
-        - Fusce Et Scelerisque Sed Amet Nulla
-        - Nulla Viverra Est
-        - Praesent Iaculis Nulla
-        - Sed Finibus Accumsan
-        - Duis Commodo Massa
-        - Lorem Sit Consectetur
-
-    - id: languages
-      type: list
-      heading: Languages
-      items:
-        - Lingua (Gradus Scientiae)
-        - Lingua (Gradus Scientiae)
-        - Lingua (Gradus Scientiae)
 
     - id: certifications
       type: list
       heading: Certifications
       items:
+        - group: "Mauris Quis"
         - Aliquam Ut Nulla Ipsum
         - In Vehicula Orci Sed
         - Duis Ac Metus Ullamcorper
         - Morbi Consequat Vitae Nulla
         - Aliquam Metus Odio Vulputate
+        - group: "Etiam Scelerisque"
         - Aenean Ullamcorper Dignissim
         - Pellentesque Sit Amet Risus
+        - Integer Faucibus Scelerisque Metus
+        - Fusce Ullamcorper Sem
+        - Morbi At Facilisis Justo
+        - group: "Curabitur Sollicitudin"
+        - Donec Sollicitudin Sapien Magna
+        - Vivamus Sed Justo Aliquet
+        - In Tincidunt Dui Viverra
+        - Nullam Porta Consectetur
+        - Consequat In Lacinia Mi Vitae
+        - Vivamus Quis Tempus Purus
 
 # Main column — flows continuously through the document. Sections
 # appear in the order listed. The layout solver places them across
@@ -192,3 +196,7 @@ mainColumn:
       - title: Gradus Baccalaurei Artium in Historia
         subtitle: Donec tempor neque eget
         institution: Phasellus imperdiet dictum neque eget efficitur
+
+      - title: Gradus Magistri Artium in Historia
+        subtitle: Morbi sed egestas metus
+        institution: Orci varius natoque penatibus et magni
