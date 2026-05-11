@@ -9,7 +9,7 @@ Python and JavaScript test files live in `tests/`. Three are fast
 pure-logic tests; one launches Chromium for in-browser assertions.
 
 - `test_validate_data.py` — YAML schema validation in `build.py`
-- `test_markdown_filter.py` — the `**bold**` filter for bullet and summary text
+- `test_markdown_filter.py` — the `**bold**` filter for bullet text
 - `test_solve_layout.js` — the layout solver in `scripts/solve_layout.js`
 - `test_check_layout.js` — layout invariants in `scripts/check_layout.js`.
   Skips automatically if Chromium isn't available, so a fresh checkout
@@ -65,7 +65,7 @@ if visible pixels changed beyond the configured tolerance.
 
 The build can use either of two data files:
 
-- `data/resume_default.yml` — placeholder data, committed
+- `data/resume_default.yml` — placeholder data (Gaius Caesar, Latin filler), committed
 - `data/resume.local.yml` — real resume data, gitignored
 
 The snapshot tool reads `dist/pdf_meta.json` (written by `build.py`)

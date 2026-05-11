@@ -50,7 +50,7 @@
   flex-direction: column;
   align-items: flex-end;
   gap: var(--sp-xs);
-  font-size: var(--size-small);
+  font-size: var(--size-caption);
   color: var(--text-muted);
   line-height: 1.3;
   text-align: right;
@@ -78,7 +78,7 @@
    appropriate here as a structured designation, not a personal name.
    Sits below the name as the professional identifier.              */
 .name-role {
-  font-size: var(--size-small);
+  font-size: var(--size-caption);
   font-weight: 500;
   color: var(--accent);
   text-transform: uppercase;
@@ -215,7 +215,7 @@
    visually separated from the previous one without affecting the
    heading-to-first-job gap.                                       */
 .experience .job + .job {
-  margin-block-start: var(--sp-sm);
+  margin-block-start: var(--sp-md);
 }
 
 .job, .edu-item {
@@ -279,14 +279,14 @@
    pieces together exceed the column width (rare with date+city).
    Gap is zero; the .job-date::after middle-dot owns its own
    horizontal margins, so the spacing on either side of the dot is
-   symmetric. Size is --size-meta (9pt) — quietly subordinated below
-   body-level content without the over-shrunk fussiness of 8.5pt.   */
+   symmetric. Size is --size-caption (9pt) — quietly subordinated
+   below body-level content.                                       */
 .entry-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0;
-  font-size: var(--size-meta);
+  font-size: var(--size-caption);
   color: var(--text-muted);
 }
 
@@ -334,11 +334,22 @@
 
 /* ─── GAP ENTRY ─────────────────────────────────────────────
    Non-employment periods (relocation, career break, etc.).
-   opacity: 0.7 de-emphasises the entry one clear tier below
-   surrounding job entries while keeping both title and date
-   comfortably legible in color and B&W print.
-   Effective tones on white: title ≈ #535353, meta ≈ #878787.
-   Verified at 432 DPI raster in both color and greyscale.    */
-.job--gap {
-  opacity: 0.7;
+   Uses explicit colour values rather than opacity to keep meta
+   text above WCAG AA contrast (4.5:1 on white) while still
+   de-emphasising the entry one tier below regular jobs.
+
+   Title colour is already set above via `.job--gap .entry-title`
+   at #555555 (7.46:1 on white). Meta gets its own slightly
+   lighter tone to widen the visual gap from regular meta.
+
+     title  → #555555 → 7.46:1 on white (AA + AAA pass)
+     meta   → #666666 → 5.74:1 on white (AA pass)
+
+   Previously used `opacity: 0.7` on the whole article which
+   compounded with the already-muted meta colour (#555 × 0.7 ≈
+   #878787, contrast 3.59 — failing AA Normal). Direct colour
+   assignment hits the same visual de-emphasis without the
+   accessibility cost.                                          */
+.job--gap .entry-meta {
+  color: #666666;
 }

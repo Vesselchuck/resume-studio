@@ -62,11 +62,13 @@ main.resume {
    Change --section-rhythm to retune both columns simultaneously.
 
    Thickness uses --accent-rule for print-accurate consistency
-   with .top-rule and .body-grid::after. Color stays --border-rule
-   (not --accent) — section separators repeat 3–5× per page and
-   giving them accent color would flood the document with green lines,
-   collapsing the visual hierarchy between structural frame elements
-   (top-rule, column divider) and content separators.                */
+   with .top-rule. Color stays --border-rule (not --accent) —
+   section separators repeat 3–5× per page and giving them accent
+   color would flood the document with green lines, collapsing the
+   visual hierarchy. The top rule is the single accent-coloured
+   structural element; the column divider and section separators
+   both render in --border-rule so the accent stays exclusive
+   to the document's top frame.                                     */
 .section-sep {
   block-size: 0;
   border: 0;
@@ -125,7 +127,17 @@ main.resume {
   inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2);
   inline-size: 0;
   border: 0;
-  border-left: var(--accent-rule) solid var(--accent);
+  /* Hairline grey divider rather than the shared 2pt accent rule.
+     The audit flagged that a 2pt accent-green vertical line running
+     the full page height (~20 sq pt of dark colour) was the largest
+     single brand element on the page and competed with content for
+     visual attention. The top rule alone carries the accent;
+     this divider drops to a structural hairline in --border-rule
+     so it reads as a column guide rather than a brand statement.
+     1pt instead of 0.5pt because sub-pixel rendering at 0.5pt
+     anti-aliases inconsistently across viewers — 1pt = exactly
+     one PDF coordinate unit and renders crisply everywhere.        */
+  border-left: 1pt solid var(--border-rule);
   pointer-events: none;
 }
 
