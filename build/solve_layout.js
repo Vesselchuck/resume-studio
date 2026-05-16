@@ -43,7 +43,55 @@
  *   main col:   2 * mainColumnSectionGap + mainColSeparatorHeight
  * The flex gap appears once on each side of the <hr>.
  *
- * OUTPUT shape: see combinePages() — same as before.
+ * Note: today both `*Gap` measurements are 0 because styles/_layout.scss
+ * sets gap: 0 on .sidebar and .main-col as a load-bearing invariant
+ * (see the comment there). The `2 * gap` term is NOT dead code — it
+ * is graceful coverage for a future where someone introduces a
+ * nonzero column gap. Removing the term would silently underestimate
+ * inter-block cost in that scenario.
+ *
+ * OUTPUT shape (`solveLayout(...)` / `combinePages(...)` return value):
+ *   {
+ *     pages: [
+ *       {
+ *         page_number: number,            // 1-indexed
+ *         sidebar_blocks: [
+ *           {
+ *             block_id: string,           // references data['sidebar']['blocks'][].id
+ *             continuation: boolean,      // true → render without a heading (block began earlier)
+ *             items_offset: number,       // start index into the source items[]
+ *             items_limit: number | null, // null = render to end; otherwise this many items
+ *           },
+ *           ...
+ *         ],
+ *         main_sections: [
+ *           // 'summary' / 'education' sections are atomic — one page, no bridging:
+ *           { type: 'summary' | 'education', continuation_of: null },
+ *
+ *           // 'experience' section — may bridge across pages, may host job continuations:
+ *           {
+ *             type: 'experience',
+ *             continuation_of: 'experience' | null, // non-null = section's heading was on an earlier page
+ *             jobs: [
+ *               {
+ *                 job_id: string,             // references experience.jobs[].id
+ *                 continuation: boolean,      // true → job's bullets continue from previous page
+ *                 bullets_offset: number,     // start index into the source bullets[]
+ *                 bullets_limit: number | null, // null = render to end; otherwise this many bullets
+ *               },
+ *               ...
+ *             ],
+ *           },
+ *         ],
+ *       },
+ *       ...
+ *     ],
+ *   }
+ *
+ * `build.py` reads this from `dist/placement.json` and adds a derived
+ * `sidebar_aria` string field to each page (joined headings, for the
+ * page's <aside aria-label>) before passing it to the template. The
+ * solver itself never emits `sidebar_aria`.
  */
 
 class SolverError extends Error {
@@ -54,9 +102,38 @@ class SolverError extends Error {
   }
 }
 
+// Bridging policy — the widow/orphan rules the solver enforces when
+// content doesn't fit on a single page. Module-scoped (not parameters)
+// because they encode the design's policy, not per-build config.
+// Tests reference these by name; see test_solve_layout.js.
+
+// A bridged job must keep at least this many bullets on each page it
+// spans. With the value at 1: a job whose bullets don't all fit can
+// leave any non-empty suffix for the next page, but never a header
+// alone with zero bullets, and never a single trailing bullet stranded
+// from its header. Raising to 2 would refuse single-bullet tails.
 const MIN_JOB_BULLETS_ON_PAGE = 1;
+
+// A bridged sidebar 'list' block must keep at least this many items on
+// the page where its heading lives (the "origin"). Prevents a lonely
+// heading + 1-2 items from appearing on one page with the bulk of the
+// list on the next — visually that reads as a labelling mistake rather
+// than a deliberate split. 3 is the minimum that looks intentional.
 const MIN_SIDEBAR_ITEMS_ON_ORIGIN = 3;
+
+// The receiving page of a bridged sidebar block must hold at least
+// this many items. With the value at 1: a single trailing item is
+// allowed on the next page (it inherits no heading — it just continues
+// the previous block silently). 'details' blocks never bridge, so this
+// only governs 'list' blocks.
 const MIN_SIDEBAR_ITEMS_ON_RECEIVER = 1;
+
+// Cascade-prevention guard: if the same content unit is pushed to the
+// next page this many consecutive times without making progress, the
+// solver gives up with a clear error instead of looping. 2 is enough
+// to absorb legitimate "didn't fit, retry on fresh page" cases while
+// catching pathological inputs (e.g. a single bullet taller than a
+// whole page).
 const MAX_CONSECUTIVE_PUSHES = 2;
 
 
@@ -81,24 +158,6 @@ function sidebarBlockHeight(block, offset, count, isContinuation) {
 }
 
 
-/**
- * Find the largest k (number of items from `offset`) such that the
- * resulting block portion fits in `available` pixels.
- *
- * Returns 0 if no items fit.
- */
-function maxFittingSidebarItems(block, offset, remaining, isContinuation, available) {
-  if (remaining === 0) return 0;
-  let k = 0;
-  for (let i = 1; i <= remaining; i++) {
-    const h = sidebarBlockHeight(block, offset, i, isContinuation);
-    if (h > available) break;
-    k = i;
-  }
-  return k;
-}
-
-
 // ─── Job height helpers ──────────────────────────────────────────
 
 /**
@@ -116,15 +175,91 @@ function jobHeight(job, offset, count, isContinuation) {
 }
 
 
-function maxFittingBullets(job, offset, remaining, isContinuation, available) {
+// ─── Shared "max items that fit" helper ──────────────────────────
+
+/**
+ * Find the largest k (number of items from `offset`) such that
+ * heightFn(container, offset, k, isContinuation) fits in `available`.
+ *
+ * Returns 0 if no items fit. Generic over the container shape:
+ * pass `sidebarBlockHeight` for sidebar list blocks, `jobHeight` for
+ * job bullets. The height function must be monotonic in `count` for
+ * the early-break to be correct (both shipped height fns are — adding
+ * an item only increases the height by that item's slice + gap).
+ */
+function maxFitting(heightFn, container, offset, remaining, isContinuation, available) {
   if (remaining === 0) return 0;
   let k = 0;
   for (let i = 1; i <= remaining; i++) {
-    const h = jobHeight(job, offset, i, isContinuation);
-    if (h > available) break;
+    if (heightFn(container, offset, i, isContinuation) > available) break;
     k = i;
   }
   return k;
+}
+
+
+// ─── Shared page-management helpers ──────────────────────────────
+//
+// Both solvers walk a stream of entries left-to-right, placing each
+// entry on the current page or pushing it to a new one. Two patterns
+// repeat verbatim between solveSidebar and solveMainColumn and are
+// extracted here:
+//
+//   • Push-tracker — detects non-progressing placement (same entry
+//     pushed forward MAX_CONSECUTIVE_PUSHES times in a row without
+//     fitting) so the solver can fail with a clear diagnostic instead
+//     of looping forever. Each solver uses entry-specific signatures
+//     (block_id@offset, job_id@bullets_offset, etc.), so the tracker
+//     is parameterized by signature string, not by entry shape.
+//
+//   • Max-pages guard — both solvers throw a structurally-identical
+//     SolverError when they'd otherwise create more pages than the
+//     user's maxPages cap allows. The only thing that varies is the
+//     column tag in the error message and details.
+//
+// Page-state itself (currentPage shape, capacity transition, the
+// activeJobs/activeSection book-keeping for main column) is NOT
+// extracted: those genuinely differ between columns, and a wrapping
+// abstraction would just push the divergence through callbacks
+// without removing it.
+
+/**
+ * Create a fresh push-tracker.
+ *
+ * `push(signature)` records a "push to next page" attempt. Returns
+ * true iff this is now beyond MAX_CONSECUTIVE_PUSHES (caller should
+ * throw a non-progress error). `reset()` is called by the caller
+ * after a successful placement.
+ */
+function makePushTracker() {
+  let consecutive = 0;
+  let lastSignature = null;
+  return {
+    push(signature) {
+      if (signature === lastSignature) consecutive++;
+      else { consecutive = 1; lastSignature = signature; }
+      return consecutive > MAX_CONSECUTIVE_PUSHES;
+    },
+    reset() {
+      consecutive = 0;
+    },
+  };
+}
+
+/**
+ * Throw a SolverError if adding another page would exceed `maxPages`.
+ * Called from each solver's newPage() helper, BEFORE creating the
+ * new page. `column` is 'sidebar' or 'main' — appears in the error
+ * message and details so callers can distinguish which column ran
+ * out of space.
+ */
+function enforceMaxPages(pages, maxPages, column) {
+  if (pages.length >= maxPages) {
+    throw new SolverError(
+      `${column === 'main' ? 'main column' : column} content exceeds maxPages (${maxPages})`,
+      { column, pages_filled: pages.length },
+    );
+  }
 }
 
 
@@ -146,16 +281,10 @@ function solveSidebar(blocks, geometry, maxPages) {
   let currentUsed = 0;
   pages.push(currentPage);
 
-  let consecutivePushes = 0;
-  let lastPushedSignature = null;
+  const pushTracker = makePushTracker();
 
   const newPage = () => {
-    if (pages.length >= maxPages) {
-      throw new SolverError(
-        `sidebar content exceeds maxPages (${maxPages})`,
-        { column: 'sidebar', pages_filled: pages.length },
-      );
-    }
+    enforceMaxPages(pages, maxPages, 'sidebar');
     currentPage = { entries: [] };
     currentCapacity = geometry.pageNCapacity;
     currentUsed = 0;
@@ -186,7 +315,7 @@ function solveSidebar(blocks, geometry, maxPages) {
       });
       currentUsed += wholeWithOverhead;
       queue.shift();
-      consecutivePushes = 0;
+      pushTracker.reset();
       continue;
     }
 
@@ -198,7 +327,8 @@ function solveSidebar(blocks, geometry, maxPages) {
 
     if (isSplittable && items_remaining > 0) {
       const availForBlock = available - overhead;
-      const bestK = maxFittingSidebarItems(
+      const bestK = maxFitting(
+        sidebarBlockHeight,
         block, items_offset, items_remaining, isContinuation, availForBlock,
       );
       const tailRemaining = items_remaining - bestK;
@@ -214,16 +344,13 @@ function solveSidebar(blocks, geometry, maxPages) {
         slot.items_offset = items_offset + bestK;
         slot.items_remaining = tailRemaining;
         newPage();
-        consecutivePushes = 0;
+        pushTracker.reset();
         continue;
       }
     }
 
     // Case 3: doesn't fit and can't bridge — push to next page.
-    const signature = `${block.id}@${items_offset}`;
-    if (signature === lastPushedSignature) consecutivePushes++;
-    else { consecutivePushes = 1; lastPushedSignature = signature; }
-    if (consecutivePushes > MAX_CONSECUTIVE_PUSHES) {
+    if (pushTracker.push(`${block.id}@${items_offset}`)) {
       throw new SolverError(
         `sidebar block '${block.id}' (offset ${items_offset}) cannot fit on any page`,
         { column: 'sidebar', block_id: block.id, items_offset,
@@ -302,8 +429,7 @@ function solveMainColumn(sections, geometry, maxPages) {
   let currentUsed = 0;
   pages.push(currentPage);
 
-  let consecutivePushes = 0;
-  let lastPushedSignature = null;
+  const pushTracker = makePushTracker();
 
   const finalizeActiveSection = () => {
     if (currentPage.activeSection === 'experience' && currentPage.activeJobs.length > 0) {
@@ -321,12 +447,7 @@ function solveMainColumn(sections, geometry, maxPages) {
 
   const newPage = (continuationOfSection = null) => {
     finalizeActiveSection();
-    if (pages.length >= maxPages) {
-      throw new SolverError(
-        `main column content exceeds maxPages (${maxPages})`,
-        { column: 'main', pages_filled: pages.length },
-      );
-    }
+    enforceMaxPages(pages, maxPages, 'main');
     currentPage = {
       entries: [],
       activeSection: continuationOfSection,
@@ -359,13 +480,10 @@ function solveMainColumn(sections, geometry, maxPages) {
         });
         currentUsed += total;
         unitIndex++;
-        consecutivePushes = 0;
+        pushTracker.reset();
         continue;
       }
-      const sig = `atomic:${unit.section_type}`;
-      if (sig === lastPushedSignature) consecutivePushes++;
-      else { consecutivePushes = 1; lastPushedSignature = sig; }
-      if (consecutivePushes > MAX_CONSECUTIVE_PUSHES ||
+      if (pushTracker.push(`atomic:${unit.section_type}`) ||
           (currentPage.entries.length === 0 && currentPage.activeJobs.length === 0)) {
         throw new SolverError(
           `${unit.section_type} section is too tall to fit on any page`,
@@ -399,13 +517,10 @@ function solveMainColumn(sections, geometry, maxPages) {
         // headingToJobsGap when it processes.
         currentUsed += sepCost + unit.height;
         unitIndex++;
-        consecutivePushes = 0;
+        pushTracker.reset();
         continue;
       }
-      const sig = 'experience-heading';
-      if (sig === lastPushedSignature) consecutivePushes++;
-      else { consecutivePushes = 1; lastPushedSignature = sig; }
-      if (consecutivePushes > MAX_CONSECUTIVE_PUSHES ||
+      if (pushTracker.push('experience-heading') ||
           (currentPage.entries.length === 0 && currentPage.activeJobs.length === 0)) {
         throw new SolverError(
           `experience heading + first job '${j.id}' (min height ${minJobHeight}px + heading ${unit.height}px) cannot fit on any page (capacity ${currentCapacity}px)`,
@@ -442,10 +557,7 @@ function solveMainColumn(sections, geometry, maxPages) {
               ? j.bullets[unit.bullets_offset].height
               : j.headerHeight + j.headerToBulletsGap + j.bullets[0].height);
         if (sepCost + minHere > available) {
-          const sig = `start-exp-cont:${j.id}@${unit.bullets_offset}`;
-          if (sig === lastPushedSignature) consecutivePushes++;
-          else { consecutivePushes = 1; lastPushedSignature = sig; }
-          if (consecutivePushes > MAX_CONSECUTIVE_PUSHES ||
+          if (pushTracker.push(`start-exp-cont:${j.id}@${unit.bullets_offset}`) ||
               currentPage.entries.length === 0) {
             throw new SolverError(
               `cannot start experience continuation for '${j.id}' on a page`,
@@ -485,14 +597,11 @@ function solveMainColumn(sections, geometry, maxPages) {
           currentUsed += gapBefore + j.headerHeight;
           currentPage.hasFirstJobInActiveSection = true;
           unitIndex++;
-          consecutivePushes = 0;
+          pushTracker.reset();
           continue;
         }
         // Gap job doesn't fit → push to next page (continuation context).
-        const sig = `gap:${j.id}`;
-        if (sig === lastPushedSignature) consecutivePushes++;
-        else { consecutivePushes = 1; lastPushedSignature = sig; }
-        if (consecutivePushes > MAX_CONSECUTIVE_PUSHES ||
+        if (pushTracker.push(`gap:${j.id}`) ||
             (currentPage.entries.length === 0 && currentPage.activeJobs.length === 0)) {
           throw new SolverError(
             `gap job '${j.id}' cannot fit on any page`,
@@ -513,12 +622,13 @@ function solveMainColumn(sections, geometry, maxPages) {
         currentUsed += gapBefore + wholeHeight;
         currentPage.hasFirstJobInActiveSection = true;
         unitIndex++;
-        consecutivePushes = 0;
+        pushTracker.reset();
         continue;
       }
 
       // Try to bridge.
-      const bestK = maxFittingBullets(
+      const bestK = maxFitting(
+        jobHeight,
         j, unit.bullets_offset, unit.bullets_remaining, isContinuation, available2,
       );
       const tailRemaining = unit.bullets_remaining - bestK;
@@ -535,15 +645,12 @@ function solveMainColumn(sections, geometry, maxPages) {
         unit.bullets_offset += bestK;
         unit.bullets_remaining = tailRemaining;
         newPage('experience');
-        consecutivePushes = 0;
+        pushTracker.reset();
         continue;
       }
 
       // Can't bridge — push whole to next page.
-      const sig = `job:${j.id}@${unit.bullets_offset}`;
-      if (sig === lastPushedSignature) consecutivePushes++;
-      else { consecutivePushes = 1; lastPushedSignature = sig; }
-      if (consecutivePushes > MAX_CONSECUTIVE_PUSHES ||
+      if (pushTracker.push(`job:${j.id}@${unit.bullets_offset}`) ||
           (currentPage.entries.length === 0 && currentPage.activeJobs.length === 0)) {
         throw new SolverError(
           `job '${j.id}' is taller than a page`,
@@ -612,4 +719,10 @@ module.exports = {
   // Helpers exported for tests.
   sidebarBlockHeight,
   jobHeight,
+  // Bridging-policy tunables exported so test assertions can reference
+  // the names instead of magic numbers. Rationale at the definition site.
+  MIN_JOB_BULLETS_ON_PAGE,
+  MIN_SIDEBAR_ITEMS_ON_ORIGIN,
+  MIN_SIDEBAR_ITEMS_ON_RECEIVER,
+  MAX_CONSECUTIVE_PUSHES,
 };

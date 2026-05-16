@@ -45,7 +45,7 @@ main.resume {
 .top-rule {
   block-size: 0;
   border: 0;
-  border-top: var(--accent-rule) solid var(--accent);
+  border-top: var(--rule) solid var(--border-rule);
   margin-block-end: 1.5rem;
 }
 
@@ -58,10 +58,10 @@ main.resume {
    parent_gap). With both columns at gap: 0, the hr margins carry the
    full rhythm budget — no flex gap to subtract, no per-context
    correction needed. One formula works for both columns:
-     margin = (rhythm - --accent-rule) / 2
+     margin = (rhythm - --rule) / 2
    Change --section-rhythm to retune both columns simultaneously.
 
-   Thickness uses --accent-rule for print-accurate consistency
+   Thickness uses --rule for print-accurate consistency
    with .top-rule. Color stays --border-rule (not --accent) —
    section separators repeat 3–5× per page and giving them accent
    color would flood the document with green lines, collapsing the
@@ -72,10 +72,10 @@ main.resume {
 .section-sep {
   block-size: 0;
   border: 0;
-  border-top: var(--accent-rule) solid var(--border-rule);
+  border-top: var(--rule) solid var(--border-rule);
   /* Single unified formula — works identically in sidebar and main-col
      because both columns now have gap: 0. No context override needed. */
-  margin-block: calc((var(--section-rhythm) - var(--accent-rule)) / 2);
+  margin-block: calc((var(--section-rhythm) - var(--rule)) / 2);
 }
 
 
@@ -127,20 +127,27 @@ main.resume {
   inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2);
   inline-size: 0;
   border: 0;
-  /* Hairline grey divider rather than the shared 2pt accent rule.
-     The audit flagged that a 2pt accent-green vertical line running
-     the full page height (~20 sq pt of dark colour) was the largest
-     single brand element on the page and competed with content for
-     visual attention. The top rule alone carries the accent;
-     this divider drops to a structural hairline in --border-rule
-     so it reads as a column guide rather than a brand statement.
-     1pt instead of 0.5pt because sub-pixel rendering at 0.5pt
-     anti-aliases inconsistently across viewers — 1pt = exactly
-     one PDF coordinate unit and renders crisply everywhere.        */
-  border-left: 1pt solid var(--border-rule);
+  /* Hairline grey divider. The audit flagged that a 2pt accent-green
+     vertical line running the full page height was the largest single
+     brand element on the page and competed with content for visual
+     attention. The accent colour is now reserved entirely for content-
+     level emphasis (section heading bars, link interactions); all
+     structural rules — top rule, divider, section separators — render
+     in --border-rule. Thickness tracks --rule to stay consistent
+     across all three.                                                 */
+  border-left: var(--rule) solid var(--border-rule);
   pointer-events: none;
 }
 
+/* gap: 0 on .sidebar and .main-col is LOAD-BEARING, not a leftover.
+   The .section-sep formula above assumes the full inter-section rhythm
+   is carried by the hr's margins alone — no parent flex gap to add.
+   If you give either column a nonzero gap, the visible rhythm becomes
+   rhythm + 2 * gap and the solver's cost formulas in
+   build/solve_layout.js (interBlockCost / interSectionCost) will still
+   charge the correct amount (their `2 * gap` term graciously handles
+   it), but the visual rhythm token --section-rhythm no longer matches
+   the visible spacing — change one, change the other. */
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -153,6 +160,39 @@ main.resume {
   flex-direction: column;
   gap: 0;
   min-inline-size: 0;
+}
+
+
+/* ─── SCREEN-MODE: SIDE-BY-SIDE PAGES ───────────────────────
+   On wide viewports, render the multiple .page elements next to
+   each other instead of stacking. Lets the user see both pages
+   of a 2-page resume in a single screenful for design iteration.
+
+   Threshold math:
+     2 × 8.5in (page width @ 96dpi = 816px) = 1632px
+     + 32px gap between pages
+     + 2 × 32px edge margin to viewport sides
+     = 1728px minimum viewport
+
+   Vertical alignment uses `safe center` so the pages centre in
+   the viewport when there's enough height, but fall back to
+   start-alignment when content overflows (e.g., laptops where
+   the 1056px page is taller than the viewport). Without `safe`,
+   plain `center` would push the top of the pages above the
+   viewport, making them unreachable by scrolling up.
+
+   Below 1728px the pages stack vertically as before. Print
+   media is unaffected: @page is what controls PDF pagination,
+   and Chromium prints each .page on its own physical page.    */
+@media screen and (min-width: 1728px) {
+  main.resume {
+    flex-direction: row;
+    justify-content: center;
+    align-items: safe center;
+    min-block-size: 100vh;
+    gap: 32px;
+    padding: 32px;
+  }
 }
 
 

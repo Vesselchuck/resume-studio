@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "build"))
 
 from build import markdown_filter
 
@@ -67,7 +67,10 @@ class TestMarkdownFilter(unittest.TestCase):
         )
 
     def test_html_entities_left_alone(self):
-        # The typo filter handles entities later; markdown filter shouldn't touch them.
+        # The template chain runs `bullet | e | md | safe`, so Jinja's `e`
+        # filter has already encoded entities by the time markdown_filter sees
+        # the text. markdown_filter must not touch entities or it would
+        # double-encode them.
         self.assertEqual(
             markdown_filter("&amp; **bold**"),
             "&amp; <strong>bold</strong>",
@@ -80,11 +83,27 @@ class TestMarkdownFilter(unittest.TestCase):
         self.assertEqual(markdown_filter(42), "42")
 
     def test_em_dash_inside_bold(self):
-        # Em dash should pass through; typo filter will encode it later.
+        # Em dash passes through as literal UTF-8 (the source files and
+        # rendered HTML are both UTF-8).
         self.assertEqual(
             markdown_filter("**a — b**"),
             "<strong>a — b</strong>",
         )
+
+    def test_triple_asterisks_left_alone(self):
+        # ***x*** is ambiguous (not part of this filter's intentional
+        # syntax) — the lookaround guards leave the literal alone instead
+        # of bleeding to *<strong>x</strong>*.
+        self.assertEqual(markdown_filter("***triple***"), "***triple***")
+        self.assertEqual(markdown_filter("a ***x*** b"), "a ***x*** b")
+
+    def test_adjacent_bolds_without_separator_left_alone(self):
+        # `**a****b**` is ambiguous: could mean two adjacent bolds, or
+        # `**a** + **** + b**`. The lookaround guards reject either
+        # parse and leave the literal — preferable to a half-rendered
+        # output. Realistic resumes always have whitespace or punctuation
+        # between bolds, so this edge case never appears in practice.
+        self.assertEqual(markdown_filter("**a****b**"), "**a****b**")
 
 
 if __name__ == "__main__":

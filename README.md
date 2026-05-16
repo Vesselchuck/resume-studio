@@ -1,16 +1,17 @@
 # Resume
 
-Version 0.4.3. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+Version 0.5.0. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Single-source-of-truth resume pipeline. Edit YAML, get a pixel-faithful
-US Letter PDF. Page placement is computed automatically — no manual
-page-break management.
+US Letter PDF in two variants (full-color and grayscale). Page
+placement is computed automatically — no manual page-break management.
 
 ## What it does
 
 1. Reads resume content from `data/resume_default.yml` (or
    `data/resume.local.yml` if present, for private data).
-2. Validates the schema — clear errors for missing fields, duplicate ids, etc.
+2. Validates the schema — clear errors for missing fields, duplicate
+   ids, malformed bullets, etc.
 3. Renders a measurement-mode HTML page (everything in one flowing
    column) so a layout solver can read actual rendered heights.
 4. Solves the layout: decides which sidebar blocks and which jobs go
@@ -18,11 +19,11 @@ page-break management.
    pages, or a sidebar list split across pages).
 5. Renders the final paginated HTML against the solved placement.
 6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
-   (8.5×11 in), stamps PDF metadata.
-7. Pixel-diffs the result against a committed snapshot to catch
+   (8.5×11 in), stamps PDF metadata and language for accessibility.
+7. Pixel-diffs each variant against a snapshot fixture to catch
    accidental visual changes.
 
-The output: `print.pdf`.
+The outputs: `dist/resume-color.pdf` and `dist/resume-grayscale.pdf`.
 
 ## Quickstart
 
@@ -31,7 +32,7 @@ The output: `print.pdf`.
 ```bash
 # One-time setup
 pip install -r requirements.txt
-npm install
+npm ci
 npx playwright install chromium
 
 # Build
@@ -43,7 +44,7 @@ node render.js
 ```cmd
 :: One-time setup
 py -m pip install -r requirements.txt
-npm install
+npm ci
 npx playwright install chromium
 
 :: Build
@@ -55,12 +56,16 @@ node render.js
 ```powershell
 # One-time setup
 py -m pip install -r requirements.txt
-npm install
+npm ci
 npx playwright install chromium
 
 # Build
 node render.js
 ```
+
+`npm ci` (not `npm install`) is the recommended installer — both
+`package.json` and `requirements.txt` exact-pin every dependency, and
+`npm ci` reproduces the lockfile exactly without drift.
 
 The build script auto-detects the right Python interpreter on each
 platform. If detection fails (rare), override it explicitly:
@@ -73,8 +78,8 @@ platform. If detection fails (rare), override it explicitly:
 
 ## Editing your resume
 
-The committed `data/resume_default.yml` is a placeholder (Gaius Caesar, with Latin
-filler text). To use
+The committed `data/resume_default.yml` is a fictional placeholder (Gaius
+Caesar, with Latin filler text). To use
 your own content without committing it, copy it to a private
 `data/resume.local.yml` (which is gitignored) and edit there:
 
@@ -97,191 +102,341 @@ node render.js
 ```
 
 The build prefers `resume.local.yml` over `resume_default.yml` if both exist.
+The PDF metadata manifest records which data source was used, so the
+snapshot test picks the matching fixtures.
 
 ## What you can change in the YAML
 
-- **Personal info** — `name.first`, `name.last`, and an optional `role`
-  line shown under the name
-- **Contact details** — optional `contact` block shown on the right of the
-  page header: an `address` line plus `rows`, each with a `value` and an
-  optional `href` (e.g. `mailto:` or `tel:` links)
-- **Metadata** — `meta.description` (required; used for the PDF subject)
-  and optional `meta.lang` (BCP-47 language tag written into the PDF as
-  `/Lang`; defaults to `en-US`)
+- **Personal info** — `name.first`, `name.last`; an optional `role`
+  (a short line under the name); an optional `contact` block with an
+  `address` and a list of `rows` (each a `value` plus an optional
+  `href`, such as `tel:` or `mailto:`), shown at the top right of
+  page 1.
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
   Each block has a kebab-case `id` (must be unique), a `type`
-  (`details` or `list`), a `heading`, and content. In a `list`, an item
-  written as `{group: "…"}` becomes a subheading inside the list.
+  (`details` or `list`), a `heading`, and content. The first block
+  with `id: key-skills` (or heading "Key Skills") drives the PDF's
+  /Keywords metadata (its first 10 plain items). In `list` blocks, an
+  item written as `- group: "…"` becomes a subheading inside the list
+  and is left out of the keywords.
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
-  `mainColumn[experience].jobs`. Each job needs a unique kebab-case `id`;
-  set `gap: true` (and no bullets) for a career-break entry.
+  `mainColumn[experience].jobs`. Each job needs a unique kebab-case
+  `id` and either a `bullets` list or `gap: true` (a gap entry, such
+  as a career break, with no bullets).
 - **Bullets** — add or remove freely under each job's `bullets:` list.
-  The layout solver decides where page breaks land. Bullets and the
-  summary text support `**bold**`.
-- **Page cap** — `meta.maxPages` is required; the placeholder sets it to
-  10. Lower it to force tighter layouts; the build fails clearly if
-  content can't fit.
+  Bullets (and the summary text) support `**bold**` markdown;
+  everything else is treated as plain text, including
+  `***triple asterisks***`, which are left as typed. The layout solver decides where page breaks land.
+- **Description** — `meta.description` (required) is used for the
+  page's meta description and the PDF's subject.
+- **Page cap** — `meta.maxPages` (required, a positive integer; the
+  placeholder uses 10). Lower it to force tighter layouts; the build
+  fails clearly if content can't fit.
+- **Language** — `meta.lang: en-US` (BCP-47, optional; defaults to
+  `en-US`). Drives the document's `<html lang>` and the PDF's `/Lang`
+  catalog entry.
 
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
 
 ## What gets generated
 
-Running `node render.js` writes:
+Running `node render.js` writes everything to `dist/`:
 
 - `dist/index.html` — the rendered HTML (final mode by default)
-- `dist/styles.css` — compiled from `assets/styles/styles.scss` via Sass
+- `dist/styles.css` — compiled from `styles/styles.scss` via Sass
+- `dist/favicon.svg` — the person's initials in the accent color
 - `dist/pdf_meta.json` — derived PDF metadata + data source identifier
 - `dist/placement.json` — the solver's per-page placement decisions
-- `print.pdf` — the cropped US Letter PDF
+- `dist/resume-color.pdf` — final color PDF (US Letter)
+- `dist/resume-grayscale.pdf` — final grayscale PDF (US Letter)
 
-Everything in `dist/` plus `print.pdf` is gitignored.
+All of `dist/` is gitignored.
 
 ## Project layout
 
 ```
 .
-├── assets/                    Source assets compiled into the build
-│   ├── styles/                Sass source — compiled to dist/styles.css
-│   │   ├── styles.scss        Entry point (@use's the partials)
-│   │   ├── _tokens.scss       CSS custom properties
-│   │   ├── _fonts.scss        @font-face declarations (vendored Manrope + Newsreader)
-│   │   ├── _base.scss         Reset + body defaults
-│   │   ├── _layout.scss       Page container, body grid, divider, hrs
-│   │   ├── _components.scss   Name header, headings, sidebar, jobs
-│   │   ├── _print.scss        @media print overrides
-│   │   └── _measurement.scss  body.measurement-mode overrides
-│   └── fonts/                 Vendored fonts, served from disk for
-│       │                      reproducible builds — see "Why vendored
-│       │                      fonts" below
-│       ├── Manrope.woff2          Body text, variable (100-900)
-│       ├── Manrope-OFL.txt        Font license (OFL-1.1)
-│       ├── Newsreader.woff2       Name and headings, variable (200-800)
-│       └── Newsreader-OFL.txt     Font license (OFL-1.1)
-├── data/                      YAML resume content
-│   ├── resume_default.yml     Placeholder: Gaius Caesar (committed)
-│   └── resume.local.yml       Real data (gitignored)
-├── scripts/
-│   ├── build.py               YAML → HTML, two modes (final, measurement)
-│   ├── crop_pdf.py            Trim Chromium's oversized PDF to true Letter
-│   ├── snapshot_pdf.py        Visual regression test
-│   ├── detect_python.js       Cross-platform Python interpreter detection
-│   ├── run_tests.js           Test runner (Python + Node)
-│   ├── check_layout.js        Post-build layout invariant checks
-│   ├── measure_dom.js         Playwright DOM measurement extractor
-│   ├── solve_layout.js        Pure-function layout solver
-│   ├── _console.py            Shared console-output helper (Python)
-│   └── _console.js            Shared console-output helper (Node)
+├── .gitignore                Ignores dist/, node_modules/, __pycache__/,
+│                             tests/fixtures/diff_*.png, and the local
+│                             data file + its private fixtures.
+├── LICENSE                   MIT license for project code (font files
+│                             under fonts/ are OFL 1.1 — see License section).
+├── README.md                 This file.
+├── CHANGELOG.md              What changed in each release.
+├── package.json              Node dependencies (playwright, sass).
+├── package-lock.json         Exact-pinned lockfile for npm ci.
+├── render.js                 Build orchestrator (11-phase pipeline, 0–10).
+├── requirements.txt          Python dependencies (exact-pinned).
+├── data/
+│   ├── resume_default.yml    Placeholder data (Gaius Caesar;
+│   │                         committed).
+│   └── resume.local.yml      Your own data (gitignored; absent until you
+│                             create it — see "Editing your resume").
+├── styles/                   Sass source — compiled to dist/styles.css.
+│   ├── styles.scss           Entry point (@use's the partials).
+│   ├── _tokens.scss          CSS custom properties (geometry, colors).
+│   ├── _fonts.scss           @font-face declarations.
+│   ├── _base.scss            Reset + body defaults.
+│   ├── _layout.scss          Page container, body grid, divider, hrs.
+│   ├── _components.scss      Name header, headings, sidebar, jobs.
+│   ├── _print.scss           @media print overrides.
+│   └── _measurement.scss     body.measurement-mode overrides.
+├── fonts/                    Vendored variable WOFF2 fonts.
+│   ├── Manrope.woff2         Body text (variable wght 100–900).
+│   ├── Manrope-OFL.txt       SIL OFL 1.1 license (required to keep).
+│   ├── Newsreader.woff2      Display text (variable wght 200–800).
+│   └── Newsreader-OFL.txt    SIL OFL 1.1 license (required to keep).
 ├── templates/
-│   ├── resume.j2              Final paginated template
-│   ├── measurement.j2         Single-page flowing template (solver input)
-│   └── _macros.j2             Shared rendering macros
-├── tests/                     Unit tests + visual regression fixtures
-│   ├── README.md              How to run tests
-│   ├── test_validate_data.py     YAML schema validation tests
-│   ├── test_markdown_filter.py   Bullet markdown filter tests
-│   ├── test_solve_layout.js      Layout solver tests
-│   ├── test_check_layout.js      Layout invariants tests (Playwright)
-│   └── fixtures/
-│       ├── expected_print.pdf       Snapshot for the placeholder data
-│       ├── expected_print.local.pdf Snapshot for local data (created on
-│       │                            first local build; gitignored)
-│       └── diff_page*.png           Generated on snapshot failure
-│                                    (gitignored)
-├── render.js                  Build orchestrator (11-phase pipeline)
-├── package.json               Node dependencies (playwright, sass)
-├── requirements.txt           Python dependencies
-├── CHANGELOG.md               Release history
-└── LICENSE                    MIT
+│   ├── resume.j2             Final paginated template.
+│   ├── measurement.j2        Single-page flowing template (solver input).
+│   └── _macros.j2            Shared rendering macros.
+├── build/                    Build pipeline (Python + Node modules).
+│   ├── build.py              YAML → HTML (modes: final, measurement).
+│   ├── crop_pdf.py           Trim Chromium's PDF to true US Letter.
+│   ├── snapshot_pdf.py       Visual regression test.
+│   ├── solve_layout.js       Pure-function layout solver.
+│   ├── measure_dom.js        Playwright DOM measurement extractor.
+│   ├── check_layout.js       Post-build layout invariant checks.
+│   ├── run_tests.js          Test runner (Python + Node).
+│   ├── detect_python.js      Cross-platform Python interpreter detect.
+│   ├── _constants.json       Single source for cross-language constants.
+│   ├── _console.{py,js}      Shared console-output helpers (read _constants.json).
+│   └── _env_contract.{py,js} Shared environment-variable names (read _constants.json).
+└── tests/                    Unit tests + visual regression fixtures.
+    ├── _framework.js                    Tiny JS test harness.
+    ├── test_validate_data.py            YAML schema validation.
+    ├── test_load_data.py                Data loader + env-var precedence.
+    ├── test_markdown_filter.py          Bullet markdown filter.
+    ├── test_derive_pdf_metadata.py      PDF metadata derivation.
+    ├── test_read_accent.py              Accent-color extractor.
+    ├── test_crop_pdf.py                 PDF cropping + /Lang stamping.
+    ├── test_solve_layout.js             Layout solver.
+    ├── test_check_layout.js             Layout invariants (Playwright).
+    └── fixtures/                        Snapshot fixtures. A missing one is
+                                         created on the next build.
+        ├── expected_resume-color.pdf            Snapshot (placeholder data, committed).
+        ├── expected_resume-grayscale.pdf        Snapshot (placeholder data, committed).
+        ├── expected_resume-color.local.pdf      Snapshot (local data, gitignored;
+        │                                        absent until you build with it).
+        ├── expected_resume-grayscale.local.pdf  Snapshot (local data, gitignored;
+        │                                        absent until you build with it).
+        └── diff_*_pageN.png                     Generated on failure (gitignored).
 ```
 
 ## Pipeline steps (`node render.js`)
 
 ```
-0. Run all unit tests (Python + JS)
-1. Compile Sass (assets/styles/ → dist/styles.css)
-2. Build measurement HTML
-3. Open it in Playwright; extract DOM measurements
-4. Solve the layout; write dist/placement.json
-5. Build final HTML against the placement
-6. Reload the final HTML
-7. Check layout invariants (page count, divider, rhythm, overflow)
-8. Print to PDF
-9. Crop to US Letter and stamp metadata
-10. Snapshot test (auto-bootstraps fixture on first build)
+0.  Run all unit tests (Python + JS)
+1.  Compile Sass (styles/ → dist/styles.css)
+2.  Build measurement HTML
+3.  Open it in Playwright; extract DOM measurements
+4.  Solve the layout; write dist/placement.json
+5.  Build final HTML against the placement
+6.  Reload the final HTML
+7.  Check layout invariants (page count, divider, rhythm, overflow)
+8.  Print to PDF: color, then grayscale
+9.  Crop each to US Letter, stamp metadata + /Lang
+10. Snapshot test (auto-bootstraps any missing fixture)
 ```
 
 Steps 0, 7, and 10 act as gates — the build stops if any of them fail.
-This is what catches the case where the solver produces a placement
-that doesn't actually fit (which would otherwise silently clip
-content under `overflow: hidden`).
+Step 7 in particular catches the case where the solver produces a
+placement that doesn't actually fit (which would otherwise silently
+clip content under `overflow: hidden`).
 
 ## Testing
 
-See `tests/README.md` for the full guide. Quick summary:
+Two kinds of verification: unit tests for the project's logic, and a
+slow visual-regression snapshot test for the rendered PDFs.
 
-```bash
-# All tests (Python unittest + Node test files) — works everywhere
-node scripts/run_tests.js
+### Unit tests
 
-# A single test file
-node scripts/run_tests.js test_validate_data
-node scripts/run_tests.js test_solve_layout
+Python and JavaScript test files live in `tests/`. Seven are fast
+pure-logic tests (sub-second total); one launches Chromium for
+in-browser DOM assertions.
+
+| Test                          | What it covers                              |
+|-------------------------------|---------------------------------------------|
+| `test_validate_data.py`       | YAML schema validation in `build.py`        |
+| `test_load_data.py`           | Data loader + `RESUME_DATA_SOURCE` env var  |
+| `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
+| `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
+| `test_read_accent.py`         | Accent color parsing from `_tokens.scss`    |
+| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`         |
+| `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
+| `test_check_layout.js`        | Layout invariants in a real browser         |
+
+`test_check_layout.js` skips automatically if Chromium isn't available,
+so a fresh checkout without `npx playwright install` still gets
+coverage from the other seven tests.
+
+Run all of them via the cross-platform runner:
+
+```
+node build/run_tests.js
 ```
 
-To refresh the snapshot fixture after an intentional change:
+The runner invokes Python's `unittest discover` for `tests/test_*.py`
+and runs each `tests/test_*.js` directly with Node. It picks the right
+Python interpreter for the platform automatically (override with the
+`PYTHON` env var if needed).
+
+#### Running a single test
+
+```
+node build/run_tests.js test_validate_data            # Python module
+node build/run_tests.js test_solve_layout             # JavaScript file
+node build/run_tests.js test_validate_data.TestValidateData.test_good_data_passes
+```
+
+The runner picks the right runtime by file existence — if
+`tests/test_<name>.js` exists, it runs that as Node; otherwise it
+treats the argument as a Python `unittest` dotted path.
+
+#### Running tests without going through the full build
+
+The build pipeline (`node render.js`) runs all unit tests as step 0,
+so any failure aborts the build. During TDD or quick iteration, skip
+the build and run the tests directly:
+
+```
+node build/run_tests.js
+```
+
+### Snapshot test
+
+`build/snapshot_pdf.py` lives outside `tests/` so unittest discovery
+doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
+It runs automatically as part of `node render.js` (step 10). It
+rasterizes the freshly-built `dist/resume-color.pdf` and
+`dist/resume-grayscale.pdf`, compares each page-by-page to its
+fixture, and fails the build if visible pixels changed beyond the
+configured tolerance in either variant.
+
+#### Four fixtures: two variants × two data sources
+
+Render produces two PDFs per build (color and grayscale). The build
+can use either of two data files (`resume_default.yml` or `resume.local.yml`).
+The snapshot tool reads `dist/pdf_meta.json` (written by `build.py`)
+to learn which file backed the most recent build, and picks the
+matching fixture for each variant:
+
+| Data source | Variant   | Fixture                                              | In git? |
+|-------------|-----------|------------------------------------------------------|---------|
+| `default`   | color     | `tests/fixtures/expected_resume-color.pdf`           | yes     |
+| `default`   | grayscale | `tests/fixtures/expected_resume-grayscale.pdf`       | yes     |
+| `local`     | color     | `tests/fixtures/expected_resume-color.local.pdf`     | no      |
+| `local`     | grayscale | `tests/fixtures/expected_resume-grayscale.local.pdf` | no      |
+
+Each fixture matches the data file that produced it. There is no
+"shared" fixture — that would mean comparing one data set's render
+against another's pixels, which is meaningless.
+
+#### First build (missing fixtures)
+
+```
+node render.js
+```
+
+The two placeholder-data fixtures are committed. The first time you
+build with `data/resume.local.yml`, its two `.local.pdf` fixtures don't
+exist yet: the snapshot step auto-bootstraps any missing fixture from
+the current `dist/resume-*.pdf` and prints a notice. Subsequent builds
+diff against the fixtures. Inspect the PDFs visually before relying on
+them.
+
+#### Refreshing after an intentional change
+
+After tweaking CSS, content, or layout in a way that visibly changes
+the output:
 
 ```bash
 # macOS / Linux
-python scripts/snapshot_pdf.py --update            # current data source
-python scripts/snapshot_pdf.py --update-both       # both placeholder and local
+python build/snapshot_pdf.py --update          # current data source only
+python build/snapshot_pdf.py --update-all      # both default and local
 ```
 
 ```cmd
 :: Windows
-py scripts\snapshot_pdf.py --update                :: current data source
-py scripts\snapshot_pdf.py --update-both           :: both placeholder and local
+py build\snapshot_pdf.py --update              :: current data source only
+py build\snapshot_pdf.py --update-all          :: both default and local
 ```
+
+`--update` refreshes BOTH variants (color + grayscale) of the fixture
+matching the current data source. `--update-all` runs the full build
+pipeline twice (once with default data, once with local data if
+`data/resume.local.yml` exists), refreshing all four fixtures. The
+intermediate snapshot checks are skipped via `SKIP_SNAPSHOT=1` so the
+existing about-to-be-replaced fixtures don't fail the build.
+
+Commit the refreshed `expected_resume-color.pdf` and
+`expected_resume-grayscale.pdf` alongside whatever change caused them.
+The local fixtures stay gitignored — they live only on your machine.
+
+#### Running snapshot test on its own
+
+```bash
+# macOS / Linux
+python build/snapshot_pdf.py
+```
+
+```cmd
+:: Windows
+py build\snapshot_pdf.py
+```
+
+Useful when iterating on tolerances or inspecting a regression without
+rebuilding. Requires both `dist/resume-color.pdf` and
+`dist/resume-grayscale.pdf` to already exist.
 
 ## Configuration
 
 Environment variables that affect the build:
 
-- `PYTHON` — explicit Python interpreter (overrides auto-detection)
-- `RESUME_DATA_SOURCE=default|local` — force which data file to use,
-  ignoring the local-preferred-over-default logic. Used by
-  `--update-both` to refresh both fixtures in one run.
-- `STRICT_TESTS=1` — convert SKIP'd test suites into hard failures.
-  By default a skipped suite (e.g. `test_check_layout` when the
-  Playwright browser binary is missing) prints a yellow warning and
-  the runner exits 0. With `STRICT_TESTS=1` set, the runner exits 1
-  instead. Use this in CI to catch silently-bypassed test suites.
-- `DEBUG_MEASUREMENTS=1` — dump the solver's input measurements and
-  the final rendered column heights (developer diagnostic).
-- `SKIP_SNAPSHOT=1` — skip the visual regression test (used internally
-  by `snapshot_pdf.py --update-both`).
-- `NO_COLOR=1` / `FORCE_COLOR=1` — control ANSI output (default:
-  auto-detect from TTY).
+| Variable                   | Purpose                                                |
+|----------------------------|--------------------------------------------------------|
+| `PYTHON`                   | Explicit Python interpreter (overrides auto-detect).   |
+| `RESUME_DATA_SOURCE`       | `default` or `local` — force which data file to use,   |
+|                            | ignoring the local-preferred-over-default logic. Used  |
+|                            | internally by `--update-all`.                          |
+| `STRICT_TESTS=1`           | Convert SKIP'd test suites into hard failures. Without |
+|                            | it, a skipped suite (e.g. `test_check_layout` when the |
+|                            | Playwright browser binary is missing) prints a yellow  |
+|                            | warning and the runner exits 0. With `STRICT_TESTS=1`  |
+|                            | the runner exits 1. Use in CI to catch silently-       |
+|                            | bypassed suites.                                       |
+| `DEBUG_MEASUREMENTS=1`     | Dump the solver's input measurements and the final     |
+|                            | rendered column heights (developer diagnostic).        |
+| `SKIP_SNAPSHOT=1`          | Skip the visual regression step (used internally by    |
+|                            | `--update-all`).                                       |
+| `RESUME_PIPELINE_SUFFIX`   | Label appended to the first phase heading of each      |
+|                            | build during `--update-all`, so you can see which data |
+|                            | source is being processed.                             |
+| `NO_COLOR` / `FORCE_COLOR` | Control ANSI output (default: auto-detect from TTY).   |
 
 ## Requirements
 
-- **Python** 3.10+ (tested on 3.10 and 3.12)
-- **Node** 18+ (for Playwright)
-- **Chromium** (installed via `npx playwright install chromium`)
+- **Python** 3.10+ (tested on 3.10 and 3.12).
+- **Node** 18+ (for Playwright 1.60).
+- **Chromium** (installed via `npx playwright install chromium`).
+- Dependencies are exact-pinned in `requirements.txt` and
+  `package.json`. Use `npm ci` (not `npm install`) to reproduce the
+  lockfile exactly.
 
 ## Why this architecture
 
-The naive approach to a YAML-driven resume — flow content into a
-fixed page, let the browser decide where to break — produces
-unpredictable output across browsers, font versions, and rendering
-quirks. The output of two builds on different machines wouldn't match.
+The naive approach to a YAML-driven resume — flow content into a fixed
+page, let the browser decide where to break — produces unpredictable
+output across browsers, font versions, and rendering quirks. Two
+builds on different machines wouldn't match.
 
 This pipeline takes a different path:
 
 1. **Each `<article class="page">` is a fixed 8.5×11 in box.** The
    screen layout IS the print layout. There is no native pagination;
-   `@page` margins are zero, and Chromium just prints what it sees.
+   `@page` margins are zero, and Chromium prints what it sees.
 2. **A solver decides placement deterministically.** Given identical
    measurements (which Playwright produces consistently for a given
    font and CSS), the placement is identical.
@@ -291,51 +446,46 @@ This pipeline takes a different path:
    solver's decision; no descendant can overflow its page's content
    area. Any failure aborts the build with a specific error.
 4. **A pixel-diff snapshot test catches visual regressions.** Even
-   if every invariant passes, the snapshot test will flag
-   intentional or accidental visual changes.
+   if every invariant passes, the snapshot test fires on any
+   intentional or accidental visual change.
 
-The result: editing the YAML and re-running produces the same PDF
-on any machine, and any visible change is caught by a test.
+The result: editing the YAML and re-running produces the same PDFs on
+any machine, and any visible change is caught by a test.
 
 ## Why vendored fonts
 
-The project ships its own font files under `assets/fonts/` — Manrope
-for body text and Newsreader for the name and section headings, both
-under the SIL Open Font License 1.1 — instead of loading them from the
-Google Fonts CDN. This isn't decorative — it fixes a real
-reproducibility bug (first seen with Montserrat, the typeface earlier
-versions used).
+The project ships its own Manrope and Newsreader font files under
+`fonts/` instead of loading from Google Fonts CDN. This isn't
+decorative — it fixes a real reproducibility problem.
 
-When the project loaded fonts from the CDN, three things could
-silently change the rendered output:
+When a project loads fonts from a CDN, three things can silently
+change the rendered output:
 
-1. **System-installed Montserrat overriding the web font.** If a
-   contributor's OS had Montserrat installed locally, Chromium
-   sometimes preferred the system version over the CDN-served file.
-   Different system Montserrat versions render glyphs at slightly
-   different widths — enough to change line-wrap decisions and
-   therefore the layout solver's output.
-2. **Different npm mirrors of Montserrat.** An earlier setup that
-   loaded Montserrat from `@fontsource/montserrat` shipped subtly
-   different outline files than the canonical Google Fonts version,
-   even though their metrics tables matched: a 14.6% width
-   divergence was measured on the same string between the two.
-3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes
-   change when fonts are re-versioned. Pinning a specific URL would
-   eventually 404; using the stable CSS endpoint would silently
-   serve a different glyph file when Google updated the version.
+1. **System-installed font overriding the web font.** If a contributor's
+   OS has Manrope or Newsreader installed locally, Chromium sometimes
+   prefers the system version over the CDN-served file. Different
+   system font versions render glyphs at slightly different widths —
+   enough to change line-wrap decisions and therefore the solver's
+   output.
+2. **Different npm or CDN mirrors of the same font.** Distributions
+   that bill themselves as "the same font" can ship subtly different
+   outline files, even when their metrics tables match.
+3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes change
+   when fonts are re-versioned. Pinning a specific URL would eventually
+   404; the stable CSS endpoint silently serves a different glyph file
+   when Google updates the version.
 
-The vendored woff2 files are loaded directly from disk via
-`@font-face url('../assets/fonts/...')`. No `local()` source is
-declared, so a system-installed copy never overrides the web font.
-The two variable woff2 files (~270 KB total) cover all weights via
-the `wght` axis (Newsreader also has an optical-size `opsz` axis).
+The vendored woff2 files are the canonical Google Fonts release of
+each face. They're loaded directly from disk via
+`@font-face url('../fonts/...')` with no `local()` source, so a
+system-installed font of the same name can't take over. Each is a
+variable WOFF2 covering its full weight range; total weight on disk
+is well under 1 MB.
 
-There is no Google Fonts `<link>` in the templates: the fonts come
-only from `assets/fonts/`. If those files are missing, the browser
-falls back to the system fonts listed in `--font` / `--font-display`
-(Helvetica Neue/Arial and Georgia/Times New Roman), which produces a
-readable PDF but not a matching layout.
+The OFL license texts (`Manrope-OFL.txt`, `Newsreader-OFL.txt`) sit
+alongside the woff2 binaries. Keep them. Removing them while keeping
+the woff2 files would put the project in violation of the SIL Open
+Font License, which requires the license travel with the font.
 
 ## FAQ / common gotchas
 
@@ -353,25 +503,26 @@ python.org and run `py` (the launcher), or set `PYTHON=py` explicitly:
 `$env:PYTHON="py"; node render.js` in PowerShell.
 
 **The snapshot test fails after a CSS edit and the diff image looks correct.**
-That's the snapshot test doing its job: any visible change, intentional
-or not, fires it. If your change is intentional, refresh the fixture
-with `py scripts/snapshot_pdf.py --update`. The test will pass on the
-next build.
+That's the snapshot test doing its job — any visible change, intentional
+or not, fires it. If your change is intentional, refresh the fixtures
+with `python build/snapshot_pdf.py --update` (or `--update-all` for
+both data sources). The test will pass on the next build.
 
-**`--update` only updates one fixture, not both.**
+**`--update` only updates two fixtures, not all four.**
 By design. The snapshot tool reads `dist/pdf_meta.json` to learn which
 data file (`resume_default.yml` or `resume.local.yml`) drove the most recent
-build, and updates the matching fixture. If you want both refreshed in
-one go, use `py scripts/snapshot_pdf.py --update-both` — it runs the
-full pipeline twice with each data source forced.
+build, and updates both variant fixtures (color + grayscale) for that
+data source. If you want all four refreshed in one go, use
+`--update-all` — it runs the full pipeline twice with each data source
+forced.
 
 **The build fails with "content-overflow" on a page.**
 The solver produced a placement that doesn't actually fit. This usually
-means a measurement is off — frequently due to a CSS change that altered
-spacing without anyone noticing. The error message includes the offending
-column, page, and culprit element id. If you can't find an obvious
-cause, file a bug or report — this should not happen with reasonable
-content; if it does, the solver or `measure_dom.js` has a bug.
+means a measurement is off — frequently due to a CSS change that
+altered spacing without obvious indication. The error message includes
+the offending column, page, and culprit element id. If you can't find
+an obvious cause, the solver or `measure_dom.js` has a bug; this
+should not happen with reasonable content.
 
 **The build fails with "exceeds maxPages".**
 Your content doesn't fit in the configured cap. Either increase
@@ -379,36 +530,54 @@ Your content doesn't fit in the configured cap. Either increase
 identifies which column ran out of pages.
 
 **`pip install -r requirements.txt` fails to install Pillow on a new Python version.**
-The pin is `Pillow==10.3.0`, which doesn't have prebuilt wheels for very
-new Python versions (3.13+). Bump the pin to a newer version (12.x is
-fine), run `node render.js`, and refresh fixtures if anything changed
-visually (it usually doesn't — Pillow upgrades rarely affect rasterization).
+The pin is `Pillow==10.3.0`, which doesn't have prebuilt wheels for
+very new Python versions (3.13+). Bump the pin in `requirements.txt`
+to a newer version (12.x is fine), run `node render.js`, and refresh
+fixtures if anything changed visually (it usually doesn't — Pillow
+upgrades rarely affect rasterization).
 
 **I edited the YAML and the build silently dropped a section / job.**
 Schema validation should catch every malformed entry with a clear
 error. If you're seeing silent drops, please report — `validate_data`
-in `build.py` is strict by design and shouldn't allow that.
+in `build/build.py` is strict by design and shouldn't allow that.
 
 **The solver placed something I disagree with — can I override?**
-Not currently. The solver decides placement based on heights and the
-fixed rules (header + ≥1 bullet on origin for jobs, heading + ≥3 items
-for sidebar lists). If you want a different placement, edit content
-to change the heights involved, or trim until the solver chooses what
-you want. There is no per-job override (such as a `splitAfter:` key).
+Not currently. The solver decides placement based on measured heights
+and fixed rules (header + ≥1 bullet on origin for jobs, heading + ≥3
+items for sidebar lists). If you want a different placement, edit
+content to change the heights involved, or trim until the solver
+chooses what you want.
 
 **The fonts look wrong on first build.**
-Manrope and Newsreader are vendored under `assets/fonts/` and loaded
-from disk — no internet required at build time. If your render still
-produces the wrong output, check that `assets/fonts/Manrope.woff2` and
-`assets/fonts/Newsreader.woff2` exist and that the templates haven't
-been edited to reference an external font URL. The build deliberately
-does NOT use the Google Fonts CDN (see "Why vendored fonts" above).
+Manrope and Newsreader are vendored under `fonts/` and loaded from
+disk — no internet required at build time. If your render still
+produces the wrong output, check that the woff2 files exist and that
+the templates haven't been edited to reference an external font URL.
+The build deliberately does NOT use Google Fonts CDN (see "Why
+vendored fonts" above).
+
+**The build fails with "dist/styles.css is older than its SCSS sources".**
+You edited a file under `styles/` and then ran `python build/build.py`
+on its own, which doesn't compile Sass. Run `node render.js` (which
+compiles Sass first), or compile manually with
+`npx sass styles/styles.scss dist/styles.css`.
 
 **Where do I put real resume data without committing it?**
 Put it in `data/resume.local.yml`. That file is gitignored; the build
-prefers it over `data/resume_default.yml` when both exist. Your private snapshot
-fixture is `tests/fixtures/expected_print.local.pdf` (also gitignored).
+prefers it over `data/resume_default.yml` when both exist. Your private
+snapshot fixtures (`expected_resume-color.local.pdf` and
+`expected_resume-grayscale.local.pdf`) are also gitignored.
+
+**Why `npm ci` and not `npm install`?**
+`npm ci` installs exactly what `package-lock.json` specifies and fails
+fast if `package.json` and the lockfile disagree. `npm install` is the
+wrong tool for reproducible builds — even with exact-pinned direct
+dependencies, some npm versions can resolve newer transitive deps in
+ways that drift from the committed lockfile.
 
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+The vendored fonts under `fonts/` are licensed under the SIL Open Font
+License 1.1; see `Manrope-OFL.txt` and `Newsreader-OFL.txt`.

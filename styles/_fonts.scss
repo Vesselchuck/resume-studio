@@ -1,6 +1,6 @@
 /* ───────────────────────────────────────────────────────────────
    FONTS — Vendored Manrope (body) + Newsreader (display),
-   both variable WOFF2, loaded from assets/fonts/ for
+   both variable WOFF2, loaded from fonts/ for
    reproducibility across machines.
 
    LICENSING
@@ -9,8 +9,8 @@
    The license texts MUST accompany the font files in any
    distribution of this repository — they are kept alongside the
    woff2 binaries:
-     assets/fonts/Manrope-OFL.txt
-     assets/fonts/Newsreader-OFL.txt
+     fonts/Manrope-OFL.txt
+     fonts/Newsreader-OFL.txt
    Do not delete those .txt files. Removing them while keeping the
    woff2 files would put the project in violation of the OFL,
    which requires that the license travel with the font.
@@ -29,7 +29,7 @@
    when the variable font's default instance is not Regular —
    Manrope's default is ExtraLight (200). In affected environments
    the entire weight range silently renders as ExtraLight in the
-   PDF output (verifiable via `pdffonts print.pdf`).
+   PDF output (verifiable via `pdffonts dist/resume-color.pdf`).
 
    This is a Chromium environment issue, not a project issue. In
    correctly-configured environments (modern desktop Chrome,
@@ -40,7 +40,7 @@
    for an example configuration.
 
    Paths are relative to dist/styles.css (Sass compiles into
-   dist/), so ../assets/fonts/* resolves to assets/fonts/* at the
+   dist/), so ../fonts/* resolves to fonts/* at the
    project root.                                                   */
 
 @font-face {
@@ -48,7 +48,7 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: block;
-  src: url('../assets/fonts/Manrope.woff2') format('woff2-variations');
+  src: url('../fonts/Manrope.woff2') format('woff2-variations');
 }
 
 @font-face {
@@ -56,5 +56,5 @@
   font-style: normal;
   font-weight: 200 800;
   font-display: block;
-  src: url('../assets/fonts/Newsreader.woff2') format('woff2-variations');
+  src: url('../fonts/Newsreader.woff2') format('woff2-variations');
 }

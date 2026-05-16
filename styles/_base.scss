@@ -16,13 +16,11 @@ body {
   font-family: var(--font);
   font-weight: 400;
   font-size: var(--size-body);
-  /* line-height: 1.4 — bumped from 1.35 to compensate for Manrope's
-     5% taller x-height, which made body text feel slightly denser
-     than the previous Montserrat at the same nominal size. 1.4
-     restores the breathing room. Body-content elements (.bullets,
-     .summary-text, .plain-list, .entry-meta) inherit this baseline;
-     the few that override it do so for specific reasons documented
-     at their rules.                                                */
+  /* line-height: 1.4 matched to Manrope's x-height, which gives body
+     text comfortable breathing room without feeling sparse. Body-content
+     elements (.bullets, .summary-text, .plain-list, .entry-meta) inherit
+     this baseline; the few that override it do so for specific reasons
+     documented at their rules.                                          */
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--surface-app);

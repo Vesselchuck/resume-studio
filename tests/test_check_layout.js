@@ -1,5 +1,5 @@
 /**
- * test_check_layout.js — Tests for scripts/check_layout.js.
+ * test_check_layout.js — Tests for build/check_layout.js.
  *
  * checkLayoutInvariants() runs assertions inside a real browser via
  * Playwright (page.evaluate), so the only meaningful test launches
@@ -15,38 +15,9 @@
 
 const path = require('path');
 const { checkLayoutInvariants } = require(
-  path.resolve(__dirname, '..', 'scripts', 'check_layout'),
+  path.resolve(__dirname, '..', 'build', 'check_layout'),
 );
-
-
-// ─── Tiny test framework — matches test_solve_layout.js style ───
-let passed = 0;
-let failed = 0;
-const failures = [];
-
-function assertEq(actual, expected, name) {
-  const a = JSON.stringify(actual);
-  const e = JSON.stringify(expected);
-  if (a === e) {
-    passed++;
-    process.stdout.write('.');
-  } else {
-    failed++;
-    failures.push({ name, actual: a, expected: e });
-    process.stdout.write('F');
-  }
-}
-
-function assertTrue(cond, name) {
-  if (cond) {
-    passed++;
-    process.stdout.write('.');
-  } else {
-    failed++;
-    failures.push({ name, error: 'expected truthy' });
-    process.stdout.write('F');
-  }
-}
+const { assertEq, assertTrue, fail, report } = require('./_framework');
 
 
 // ─── Fixture helpers ─────────────────────────────────────────────
@@ -262,9 +233,7 @@ function absolutePositionedFixture(opts = {}) {
   function findViolation(violations, invariantName, testName) {
     const v = violations.find((x) => x.invariant === invariantName);
     if (!v) {
-      failed++;
-      failures.push({ name: testName, error: `expected ${invariantName} violation; none found` });
-      process.stdout.write('F');
+      fail(testName, { error: `expected ${invariantName} violation; none found` });
       return null;
     }
     return v;
@@ -481,19 +450,7 @@ function absolutePositionedFixture(opts = {}) {
 
 
   // ── Report ────────────────────────────────────────────────────
-  console.log('');
-  console.log(`${passed} passed, ${failed} failed`);
-  if (failed > 0) {
-    console.log('\nFailures:');
-    for (const f of failures) {
-      console.log(`  ${f.name}`);
-      if (f.error) console.log(`    error: ${f.error}`);
-      if (f.actual) console.log(`    actual:   ${f.actual}`);
-      if (f.expected) console.log(`    expected: ${f.expected}`);
-    }
-    process.exit(1);
-  }
-  process.exit(0);
+  report();
 })().catch((err) => {
   console.error('test_check_layout: unexpected error');
   console.error(err.stack || err.message);

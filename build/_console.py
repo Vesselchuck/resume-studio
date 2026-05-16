@@ -1,15 +1,13 @@
 """
 console.py — Shared console-output helper.
 
-╔══════════════════════════════════════════════════════════════════╗
-║  KEEP IN SYNC WITH _console.js                                   ║
-║                                                                  ║
-║  This file mirrors scripts/_console.js — same API, same          ║
-║  behaviour, same constants. Banner width, label pad width,       ║
-║  indent widths, status symbols, and ANSI codes must match        ║
-║  exactly between the two files. If you change one, change the    ║
-║  other in the same commit.                                       ║
-╚══════════════════════════════════════════════════════════════════╝
+The shared constants (status symbols, banner geometry, ANSI codes,
+indent widths) live in build/_constants.json. This module loads them
+at import time and exposes them as `_NAME` module-level names so
+internal references like `_RESET`, `_SYM_OK` etc. work unchanged.
+The matching _console.js does the same. There is no longer a parallel
+hand-maintained constants block; cross-language parity is structural,
+not enforced by a sync test.
 
 Single source of truth for status symbols, ANSI colours, phase
 banners, and TTY-aware colour suppression. Imported by every script
@@ -20,7 +18,7 @@ Symbols
   ok(msg)    → ✅  success — past-tense action completed
   err(msg)   → ❌  hard failure — exits non-zero somewhere
   warn(msg)  → ⚠️   something noteworthy; build continues
-  info(msg)  → ℹ️   advisory; no impact on success/failure
+  ok_pair / err_pair / warn_pair / info_pair  → aligned label:value
 
 The status symbols are emoji with intrinsic colour. ANSI codes are
 NOT applied to them — the emoji glyphs already carry their own
@@ -32,8 +30,8 @@ terminals that otherwise default these to text/monochrome glyphs
 
 Phase banner
 ────────────
-  banner(label) prints a 60-char-wide rule:
-      ─── Tests ─────────────────────────────────────────────
+  banner(label) prints a 70-char-wide rule:
+      ─── Tests ────────────────────────────────────────────────────────────
 
   Banner dashes are dimmed via ANSI when the stream is a TTY;
   ANSI dim still applies here because the dashes themselves are
@@ -58,40 +56,46 @@ Colour suppression
 
 Two-stream design
 ─────────────────
-  ok / banner / detail / info → stdout
-  err / warn                  → stderr
+  ok / banner / ok_pair / info_pair          → stdout
+  err / warn / err_pair / warn_pair / detail → stderr (detail by default;
+                                                pass stream=sys.stdout to
+                                                continue an ok/info line)
   This matches Unix conventions (errors and warnings to stderr) so
   shell pipelines can split them. Callers don't need to specify a
   stream — the helper picks the right one.
 """
 
+import json
 import os
 import sys
+from pathlib import Path
 
 
-# ANSI dim/reset for the banner dashes only. The four status emoji
-# carry their own colour and don't use ANSI.
-_RESET = '\x1b[0m'
-_DIM   = '\x1b[2m'
+# Load shared constants from _constants.json at module-init time.
+# Exposed as module-level `_NAME` names so internal references and
+# external callers that imported them by name keep working.
+# `_comment_*` keys are documentation only and ignored here.
+_CONSTANTS_PATH = Path(__file__).parent / "_constants.json"
+with _CONSTANTS_PATH.open(encoding="utf-8") as _f:
+    _console_constants = {
+        k: v for k, v in json.load(_f)["console"].items()
+        if not k.startswith("_comment")
+    }
 
-# Status symbols — emoji with intrinsic colour. ⚠ and ℹ have the
-# U+FE0F variation selector appended to force emoji presentation
-# on terminals that default them to text/monochrome.
-_SYM_OK   = '✅'
-_SYM_ERR  = '❌'
-_SYM_WARN = '⚠️'
-_SYM_INFO = 'ℹ️'
+_RESET           = _console_constants["RESET"]
+_DIM             = _console_constants["DIM"]
+_SYM_OK          = _console_constants["SYM_OK"]
+_SYM_ERR         = _console_constants["SYM_ERR"]
+_SYM_WARN        = _console_constants["SYM_WARN"]
+_SYM_INFO        = _console_constants["SYM_INFO"]
+_BANNER_WIDTH    = _console_constants["BANNER_WIDTH"]
+_BANNER_LEAD     = _console_constants["BANNER_LEAD"]
+_BULLET_INDENT   = _console_constants["BULLET_INDENT"]
+_DETAIL_INDENT   = _console_constants["DETAIL_INDENT"]
+_LABEL_PAD_WIDTH = _console_constants["LABEL_PAD_WIDTH"]
 
-# Banner geometry: total width 60, including spaces around the label.
-# `─── ` (4) + label + ` ` (1) + tail = 60.
-_BANNER_WIDTH = 70
-_BANNER_LEAD  = '─── '
-
-# Indent geometry. Bullet lines render as `(BULLET_INDENT) +
-# (emoji, 2 columns) + ' ' + message`, so detail text aligned with
-# the start of the message lives at column BULLET_INDENT + 3.
-_BULLET_INDENT = '  '       # 2 spaces before the symbol on bullet lines
-_DETAIL_INDENT = '     '    # 5 spaces — aligns under the bullet's message text
+# Free the temp binding so it doesn't show up in dir(module).
+del _console_constants, _f
 
 
 def _colour_enabled(stream) -> bool:
@@ -111,23 +115,26 @@ def _colour_enabled(stream) -> bool:
     return hasattr(stream, 'isatty') and stream.isatty()
 
 
-# Label-value pairing — for `ok_pair`/`err_pair`/etc. The value
-# column starts after a colon + padding so a sequence of pair lines
-# aligns vertically. 18 covers every label currently used in the
-# pipeline with a bit of headroom for future additions.
-_LABEL_PAD_WIDTH = 23
+# Module-level state for banner(): the first banner emitted does not
+# prepend a blank line (otherwise the very first line of output is a
+# stray blank). All subsequent banners get the blank-line lead so
+# phases stay visually separated.
+_first_banner = True
 
 
 def banner(label: str) -> None:
     """
     Print a phase banner to stdout.
 
-      ─── Tests ─────────────────────────────────────────────
+      ─── Tests ────────────────────────────────────────────────────────────
 
     The label is left-padded by `─── ` (3 dashes + space) and the
     line is right-padded with `─` to exactly _BANNER_WIDTH columns.
-    Always preceded by a blank line for visual separation.
+    Preceded by a blank line for visual separation — except on the
+    very first banner of the process, where the leading blank would
+    create a stray empty line at the top of the output.
     """
+    global _first_banner
     used = len(_BANNER_LEAD) + len(label) + 1  # leading dashes + label + trailing space
     tail = '─' * max(0, _BANNER_WIDTH - used)
     if _colour_enabled(sys.stdout):
@@ -137,7 +144,11 @@ def banner(label: str) -> None:
         line = f'{head_dashes}{label} {tail_dashes}'
     else:
         line = f'{_BANNER_LEAD}{label} {tail}'
-    print(f'\n{line}', flush=True)
+    if _first_banner:
+        print(line, flush=True)
+        _first_banner = False
+    else:
+        print(f'\n{line}', flush=True)
 
 
 def ok(msg: str) -> None:
@@ -153,11 +164,6 @@ def err(msg: str) -> None:
 def warn(msg: str) -> None:
     """Print a warning: ⚠️ <msg>. Goes to stderr."""
     print(f'{_BULLET_INDENT}{_SYM_WARN} {msg}', file=sys.stderr, flush=True)
-
-
-def info(msg: str) -> None:
-    """Print an info line: ℹ️ <msg>"""
-    print(f'{_BULLET_INDENT}{_SYM_INFO} {msg}', flush=True)
 
 
 def _format_pair(label: str, value: str) -> str:

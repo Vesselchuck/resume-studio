@@ -1,0 +1,142 @@
+/* ───────────────────────────────────────────────────────────────
+   PRINT — @media print overrides. Hides screen-only chrome
+   (page shadows, body background); each .page becomes one
+   printed sheet via page-break-after.
+   ─────────────────────────────────────────────────────────────── */
+/* Print is trivially simple now: each .page is already exactly
+   the size of a US Letter sheet, so we just tell the browser to
+   print each page as one sheet (page-break-after: always) and
+   remove on-screen decorations.                                  */
+@media print {
+  :root {
+    --surface-app: #ffffff;
+  }
+  html, body {
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Zero browser margin — the .page already has its own padding. */
+  @page {
+    size: letter;
+    margin: 0;
+  }
+  main.resume {
+    display: block;
+    padding: 0;
+    gap: 0;
+  }
+  .page {
+    box-shadow: none;
+    margin: 0;
+    /* Each page becomes one printed sheet. */
+    page-break-after: always;
+    break-after: page;
+  }
+  .page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}
+
+// Grayscale token overrides — shared by the (monochrome) media query
+// and the html.force-grayscale class below. Both paths must produce the
+// identical B&W rendering, so the four token values live in a single
+// mixin used at both sites. Per-token rationale (Y values, halftone
+// thresholds, dot-gain reasoning) lives in the long comment above the
+// @media block; this mixin is the mechanical "what to set" part only.
+@mixin grayscale-tokens {
+  --text-muted:      #333333;
+  --text-muted-soft: #333333;
+  --border-rule:     #777777;
+  --accent:          #1a1a1a;
+}
+
+/* B&W / monochrome print: token-only colour overrides tuned for
+   what a 600dpi laser printer actually puts on paper, not just
+   what a screen-side luminance calculation would predict.
+   Rationale per token:
+
+     --text-muted:      #555 → #333
+                        Y=85 → Y=51. Below the halftone problem zone
+                        for thin/small elements; renders as solid
+                        toner at 9pt caption sizes. Dot gain on
+                        paper compresses the muted/body gap slightly
+                        (Δ_Y=25 on screen → effective Δ≈10 on paper),
+                        which is the unavoidable cost of monochrome.
+
+     --text-muted-soft: #666 → #333 (= --text-muted)
+                        Collapse intentionally. The gap-entry's
+                        distinctness is already carried by italic +
+                        no-bullets + smaller block height — all of
+                        which survive any printer. A mid-grey at
+                        Y=68 (#444) would sit inside the halftone
+                        problem zone for a one-line element and
+                        risk a visibly screened texture that reads
+                        as a printer artifact rather than design.
+
+     --border-rule:     #d8d8d8 → #777
+                        Y=216 → Y=119. At #999 (the old value, Y=153)
+                        a 1pt rule lands inside the halftone window
+                        and renders as a dotted/screened line on
+                        cheaper office printers; also doesn't
+                        survive 2+ photocopy generations. #777 sits
+                        just below that window — printer drivers
+                        render it as a solid density-reduced line,
+                        photocopies survive 2–3 generations, still
+                        reads as a delicate separator rather than
+                        a frame.
+
+     --accent:          #2d4a3e → #1a1a1a (= --text-primary)
+                        NOT a luminance match. Rec.709 luminance of
+                        the green is Y≈67 (#434343), which would
+                        place section headings LIGHTER than the
+                        meta captions below them (#333, Y=51) —
+                        hierarchy inversion. Worse on paper: dot
+                        gain compresses the dark end (#1a1a → near-
+                        solid black at 14pt body) and expands the
+                        light end (#434343 stays visibly grey), so
+                        the inversion is amplified, not mitigated.
+                        Collapse to body colour instead; typography
+                        — Newsreader serif vs Manrope sans, 14pt vs
+                        10pt, all-caps with --ls-wide letter-spacing,
+                        surrounding whitespace — carries the heading
+                        rank without depending on tonal value.
+
+   Result: in the colour version, recipients see four tonal layers
+   (accent green, body black, muted grey, rule whisper). In the
+   B&W variant, three (headings folded into body, no halftone risk,
+   photocopy-resilient). The two variants aim for the best version
+   of themselves on their respective output medium, not visual
+   equivalence between media.
+
+   This block applies ONLY when the printer reports as monochrome,
+   so colour printers see the original lighter aesthetic.          */
+@media print and (monochrome) {
+  :root {
+    @include grayscale-tokens;
+  }
+}
+
+/* Force-grayscale variant: applied via `<html class="force-grayscale">`
+   by render.js when producing the dedicated grayscale PDF. Browsers
+   can't activate the (monochrome) media query through Playwright's
+   emulateMedia API, so we replicate its rule cascade unconditionally
+   under a class selector.
+
+   CRUCIALLY does NOT use filter: grayscale(1). CSS filters require
+   pixel-level compositing, so Chromium rasterizes the entire page
+   into a bitmap and embeds the rasterized result in the PDF — the
+   grayscale.pdf ends up ~6× the size of the colour version (e.g.
+   1.2 MB vs 204 KB) and sub-pixel text positions get snapped to
+   integer pixel coordinates with anti-aliasing, producing small
+   layout differences relative to the vector colour PDF.
+
+   Token-only overrides keep the PDF as pure vector text and
+   strokes, with byte-identical layout geometry between the two
+   variants. Pixel values differ only for the four colour tokens
+   above; everything else (page dimensions, glyph positions, line
+   widths, separator positions) is mathematically identical.        */
+html.force-grayscale {
+  @include grayscale-tokens;
+}

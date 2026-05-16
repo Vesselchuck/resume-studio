@@ -12,7 +12,12 @@
   `body.measurement-mode` class differs, which CSS uses to disable
   fixed page height so content can flow.
 
-  Markers:
+  Heading accessibility: each .section-heading uses the
+  visually-hidden + aria-hidden duplicate-span pattern; rationale
+  is documented at the top of templates/_macros.j2. Do not
+  collapse to a single span without reading that note first.
+
+  Markers (emitted by _macros.j2 macros when called with measure=True):
     data-measure="resume-header"  — page-1 header (eats vertical space)
     data-measure="block"          — a sidebar block (the whole section)
     data-measure="separator"      — an <hr class="section-sep">
@@ -31,7 +36,7 @@
 -#}
 {%- import '_macros.j2' as m -%}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -39,10 +44,10 @@
   <meta name="description" content="{{ meta.description }}">
 
   <!-- Fonts: vendored Manrope (body) and Newsreader (display) loaded
-       from assets/fonts/ via @font-face rules in styles.css. Both are
+       from fonts/ via @font-face rules in styles.css. Both are
        variable WOFF2 files covering the full weight range used in the
        document. License terms (SIL OFL 1.1) live alongside the woff2
-       binaries at assets/fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
+       binaries at fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="measurement-mode">
@@ -63,20 +68,20 @@
           </h1>
 {%- if role %}
           <p class="name-role">
-            <span class="visually-hidden">{{ role | e }}</span>
-            <span aria-hidden="true">{{ role | e }}</span>
+            <span class="visually-hidden">{{ role }}</span>
+            <span aria-hidden="true">{{ role }}</span>
           </p>
 {%- endif %}
         </div>
 {%- if contact %}
         <address class="header-contact">
 {%- if contact.address %}
-          <span class="header-contact-address">{{ contact.address | e }}</span>
+          <span class="header-contact-address">{{ contact.address }}</span>
 {%- endif %}
 {%- for item in contact.rows %}
           <span class="header-contact-item">
-{%- if item.href %}<a href="{{ item.href | e }}">{{ item.value | e }}</a>
-{%- else %}{{ item.value | e }}
+{%- if item.href %}<a href="{{ item.href }}">{{ item.value }}</a>
+{%- else %}{{ item.value }}
 {%- endif %}
           </span>
 {%- endfor %}
@@ -89,90 +94,49 @@
       <div class="body-grid">
 
         <aside class="sidebar" aria-label="Sidebar (measurement)">
+{# Loop raw blocks (no placement) and call render_sidebar_block with
+   measure=True so each block emits its data-measure attributes. The
+   inter-block separator gets data-measure="separator" — production
+   HTML doesn't need that attribute, so this loop is inlined here
+   instead of going through render_sidebar_blocks. #}
 {% for b in sidebar_blocks -%}
 {%- if not loop.first %}
 <hr class="section-sep" data-measure="separator">
 {% endif -%}
-<section class="block" id="{{ b.id }}" data-measure="block" data-id="{{ b.id }}" data-type="{{ b.type }}">
-  <h2 class="section-heading" data-measure="block-heading"><span class="visually-hidden">{{ b.heading | e }}</span><span aria-hidden="true">{{ b.heading | e }}</span></h2>
-{%- if b.type == "details" %}
-  <address class="details-list">
-{%- for row in b.rows %}
-    <div class="detail-row" data-measure="item" data-row-index="{{ loop.index0 }}">
-      <span class="subgroup-label">{{ row.label | e }}</span>
-      <span class="detail-value">
-{%- if row.href is defined -%}
-<a href="{{ row.href }}">{{ row.value | e }}</a>
-{%- else -%}
-{{ row.value | e }}
-{%- endif -%}
-</span>
-    </div>
-{%- endfor %}
-  </address>
-{%- elif b.type == "list" %}
-  <ul class="plain-list">
-{%- for item in b['items'] %}
-{%- if item is mapping %}
-    <li class="list-group-heading entry-title" data-measure="item" data-item-index="{{ loop.index0 }}">{{ item.group | e }}</li>
-{%- else %}
-    <li data-measure="item" data-item-index="{{ loop.index0 }}">{{ item | e }}</li>
-{%- endif %}
-{%- endfor %}
-  </ul>
-{%- endif %}
-</section>
+{{ m.render_sidebar_block(b, measure=True) }}
 {%- endfor %}
         </aside>
 
         <div class="main-col">
+{# Three main-column sections (summary / experience / education) are
+   inlined here rather than going through render_main_section because
+   they need the measurement-specific data-measure="section" and
+   data-section-type="…" attributes on the <section>, plus
+   data-measure="section-heading" on the <h2>, that the production
+   macro doesn't emit. The INNER content (jobs, edu items) uses the
+   shared macros with measure=True. #}
 
           <section class="block" data-measure="section" data-section-type="summary">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ summary.heading | e }}</span><span aria-hidden="true">{{ summary.heading | e }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ summary.heading }}</span><span aria-hidden="true">{{ summary.heading }}</span></h2>
             <p class="summary-text" data-measure="summary-text">{{ summary.text | e | md | safe }}</p>
           </section>
 
           <hr class="section-sep" data-measure="separator">
 
           <section class="block experience" data-measure="section" data-section-type="experience">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ experience.heading | e }}</span><span aria-hidden="true">{{ experience.heading | e }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ experience.heading }}</span><span aria-hidden="true">{{ experience.heading }}</span></h2>
 {% for j in experience.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
-<article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}" data-measure="job" data-id="{{ j.id }}">
-  <header class="entry-header" data-measure="job-header">
-    <h3 class="entry-title">{{ j.title | e }}</h3>
-    <p class="entry-meta">
-      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
-{%- if j.location is defined %}
-      <span class="job-loc">{{ j.location | e }}</span>
-{%- endif %}
-    </p>
-  </header>
-{%- if j.bullets is defined %}
-  <ul class="bullets">
-{%- for bullet in j.bullets %}
-    <li data-measure="bullet" data-bullet-index="{{ loop.index0 }}">{{ bullet | e | md | safe }}</li>
-{%- endfor %}
-  </ul>
-{%- endif %}
-</article>
+{{ m.render_job(j, measure=True) -}}
 {% endfor %}
           </section>
 
           <hr class="section-sep" data-measure="separator">
 
           <section class="block" data-measure="section" data-section-type="education">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ education.heading | e }}</span><span aria-hidden="true">{{ education.heading | e }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ education.heading }}</span><span aria-hidden="true">{{ education.heading }}</span></h2>
 {%- for item in education['items'] %}
-<article class="edu-item" data-measure="edu-item">
-  <header class="entry-header">
-    <h3 class="entry-title">{{ item.title | e }}</h3>
-    <p class="edu-subtitle">{{ item.subtitle | e }}</p>
-    <p class="entry-meta">
-      <span class="job-loc">{{ item.institution | e }}</span>
-    </p>
-  </header>
-</article>
+{{ m.render_edu_item(item, measure=True) }}
 {%- endfor %}
           </section>
 

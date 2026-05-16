@@ -2,16 +2,16 @@
  * render.js — Build script for the resume.
  *
  * Pipeline:
- *   0. Run unit tests (Python + JS via scripts/run_tests.js).
+ *   0. Run unit tests (Python + JS via build/run_tests.js).
  *      Fail-fast on any logic regression before producing artifacts.
- *   1. Compile Sass: assets/styles/styles.scss → dist/styles.css
+ *   1. Compile Sass: styles/styles.scss → dist/styles.css
  *      via the `sass` npm package. Source maps are disabled.
  *   2. Measurement-mode build (build.py --mode=measurement):
  *      writes dist/index.html with all content in a single flowing
  *      column for the solver to measure.
  *   3. Open the measurement HTML in Playwright and extract heights
  *      from every [data-measure] element.
- *   4. Run the layout solver (scripts/solve_layout.js) on the
+ *   4. Run the layout solver (build/solve_layout.js) on the
  *      measurements; write dist/placement.json with the per-page
  *      placement.
  *   5. Final build (build.py --mode=final): reads placement.json
@@ -21,11 +21,13 @@
  *      page bottom margin; section-rhythm equal across sidebar
  *      and main column; expected page count = solver's count;
  *      no descendant overflows its page's content area).
- *   8. Generate a PDF via Playwright.
- *   9. Crop the PDF to exact US Letter (8.5×11 in) and stamp
+ *   8. Generate TWO PDFs via Playwright — color, then grayscale
+ *      (rendered by toggling html.force-grayscale on the page).
+ *   9. Crop each PDF to exact US Letter (8.5×11 in) and stamp
  *      authoritative metadata from dist/pdf_meta.json.
- *  10. Snapshot test: pixel-diff print.pdf against the committed
- *      fixture. Auto-bootstraps on first build.
+ *  10. Snapshot test: pixel-diff dist/resume-color.pdf and
+ *      dist/resume-grayscale.pdf against committed fixtures.
+ *      Auto-bootstraps on first build.
  *
  * Run with: node render.js
  *
@@ -66,11 +68,15 @@ const fs = require('fs');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const { pathToFileURL } = require('url');
-const { checkLayoutInvariants } = require('./scripts/check_layout');
-const { detectPython } = require('./scripts/detect_python');
-const { solveLayout } = require('./scripts/solve_layout');
-const { extractMeasurements } = require('./scripts/measure_dom');
-const c = require('./scripts/_console');
+const { checkLayoutInvariants } = require('./build/check_layout');
+const { detectPython } = require('./build/detect_python');
+const { solveLayout } = require('./build/solve_layout');
+const { extractMeasurements } = require('./build/measure_dom');
+const {
+  ENV_SKIP_SNAPSHOT,
+  ENV_RESUME_PIPELINE_SUFFIX,
+} = require('./build/_env_contract');
+const c = require('./build/_console');
 
 
 /* ─── Constants ───────────────────────────────────────────────── */
@@ -79,7 +85,8 @@ const ROOT = __dirname;
 const HTML_PATH = pathToFileURL(path.resolve(ROOT, 'dist/index.html')).href;
 const PDF_META_PATH = path.join(ROOT, 'dist', 'pdf_meta.json');
 const PLACEMENT_PATH = path.join(ROOT, 'dist', 'placement.json');
-const FINAL_PDF_PATH = path.join(ROOT, 'print.pdf');
+const COLOR_PDF_PATH = path.join(ROOT, 'dist', 'resume-color.pdf');
+const GRAYSCALE_PDF_PATH = path.join(ROOT, 'dist', 'resume-grayscale.pdf');
 
 // Detect Python via the shared detect_python module. Done once at
 // startup so all subprocess calls share the same interpreter.
@@ -87,6 +94,24 @@ const PYTHON = detectPython();
 
 
 /* ─── Helpers ─────────────────────────────────────────────────── */
+
+/**
+ * Mark `err` as already-printed by a phase function, so the
+ * orchestrator's catch doesn't re-emit it as "Unexpected error"
+ * with a stack trace. Phase functions throw errors after calling
+ * c.err()/c.detail() (or after a subprocess whose stderr is
+ * inherited has already streamed its diagnostics); wrapping the
+ * throw with reported() conveys that fact through the call stack
+ * without relying on error-message substring matching.
+ *
+ * Returns the same err for use in `throw reported(err)` patterns,
+ * including `throw reported(new Error('…'))` for synthesized errors.
+ */
+function reported(err) {
+  err.alreadyReported = true;
+  return err;
+}
+
 
 /**
  * Build the env passed to subprocesses (build.py, crop_pdf.py,
@@ -155,7 +180,18 @@ function runPython(scriptArgs, fallbackLabel) {
     const out = execFileSync(
       PYTHON,
       ['-B', ...scriptArgs],
-      { cwd: ROOT, encoding: 'utf-8', env: subprocessEnv() },
+      {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        env: subprocessEnv(),
+        // Explicit: stdin ignored, stdout captured into `out` for
+        // ordered replay below, stderr inherited so subprocess
+        // diagnostics stream live. Without this, the implicit Node
+        // default (which inherits stderr) happens to do the right
+        // thing, but a future stdio override would silently break
+        // the streaming-diagnostics contract.
+        stdio: ['ignore', 'pipe', 'inherit'],
+      },
     );
     process.stdout.write(out);
   } catch (err) {
@@ -163,7 +199,40 @@ function runPython(scriptArgs, fallbackLabel) {
     if (!err.stdout && !err.stderr) {
       c.err(`${fallbackLabel}: ${err.message}`);
     }
-    throw err;
+    throw reported(err);
+  }
+}
+
+
+/**
+ * Symmetric counterpart for spawning a Node subprocess with INHERITED
+ * stdio. Used when the child's output (banners, per-suite status lines,
+ * progress dots) should stream directly to the user's terminal in real
+ * time, rather than being captured and replayed after exit.
+ *
+ * Differences from runPython:
+ *   • stdio:'inherit' — child writes straight to parent's stdout/stderr
+ *   • No captured output to replay on failure — the child already
+ *     printed everything by the time execFileSync returns/throws
+ *   • Fallback label is wrapped in a fresh Error rather than re-thrown
+ *     from the subprocess error, since the captured-output handling is
+ *     irrelevant here
+ *
+ * Both helpers mark thrown errors via `reported()` so the orchestrator's
+ * catch knows not to re-emit them.
+ *
+ * @param {string} scriptPath      — path to the JS file to execute
+ * @param {string} fallbackMessage — message for the synthesized Error
+ *                                   if the child exits non-zero
+ */
+function runNodeInherit(scriptPath, fallbackMessage) {
+  try {
+    execFileSync(process.execPath, [scriptPath],
+      { cwd: ROOT, stdio: 'inherit', env: subprocessEnv() });
+  } catch {
+    // The child already printed its own failure markers via _console
+    // (since stdio was inherited); just abort the pipeline.
+    throw reported(new Error(fallbackMessage));
   }
 }
 
@@ -259,7 +328,7 @@ async function dumpFinalLayoutDebug(page) {
 /* ─── Phase functions ─────────────────────────────────────────── */
 
 /**
- * Phase 0: Run unit tests via scripts/run_tests.js.
+ * Phase 0: Run unit tests via build/run_tests.js.
  *
  * Tests are cheap and a failed unit test almost always indicates a
  * problem that would also break rendered output. Fail fast before
@@ -269,24 +338,20 @@ async function dumpFinalLayoutDebug(page) {
  * lines) flows directly to the user's terminal in real time.
  */
 function runTests() {
-  c.banner('Tests');
+  // When invoked as a subprocess of snapshot_pdf.py --update-all, the
+  // parent sets ENV_RESUME_PIPELINE_SUFFIX to label which data source
+  // is being built ("default data" or "local data"). The suffix attaches
+  // to the FIRST banner only — subsequent phase banners stay plain
+  // because the data-source context is anchored at the top.
+  const suffix = process.env[ENV_RESUME_PIPELINE_SUFFIX];
+  c.banner(suffix ? `Tests (${suffix})` : 'Tests');
   c.ok_pair('Detected Python', PYTHON);
-  try {
-    execFileSync(
-      process.execPath,
-      [path.join(ROOT, 'scripts', 'run_tests.js')],
-      { cwd: ROOT, stdio: 'inherit' },
-    );
-  } catch {
-    // run_tests.js already printed its own failure markers; we just
-    // need to abort the pipeline.
-    throw new Error('Unit tests failed');
-  }
+  runNodeInherit(path.join(ROOT, 'build', 'run_tests.js'), 'Unit tests failed');
 }
 
 
 /**
- * Phase 1: Compile assets/styles/styles.scss → dist/styles.css.
+ * Phase 1: Compile styles/styles.scss → dist/styles.css.
  *
  * Uses sass's programmatic API rather than spawning the `sass.cmd` /
  * `sass` binary. The binary approach is brittle on Windows: Node 20+
@@ -301,7 +366,7 @@ function compileSass() {
     const distDir = path.join(ROOT, 'dist');
     fs.mkdirSync(distDir, { recursive: true });
     const result = sass.compile(
-      path.join(ROOT, 'assets', 'styles', 'styles.scss'),
+      path.join(ROOT, 'styles', 'styles.scss'),
       { sourceMap: false, style: 'expanded' },
     );
     fs.writeFileSync(path.join(distDir, 'styles.css'), result.css, 'utf-8');
@@ -315,7 +380,7 @@ function compileSass() {
     err.toString().split('\n').forEach(line => c.detail(line));
     c.detail('');
     c.detail('Is sass installed? Run:  npm install');
-    throw err;
+    throw reported(err);
   }
 }
 
@@ -329,7 +394,7 @@ function compileSass() {
  */
 function buildMeasurement() {
   runPython(
-    [path.join(ROOT, 'scripts', 'build.py'), '--mode=measurement'],
+    [path.join(ROOT, 'build', 'build.py'), '--mode=measurement'],
     'Measurement build failed',
   );
 }
@@ -350,7 +415,7 @@ async function getMeasurements(page) {
   } catch (err) {
     c.err('Measurement extraction failed');
     err.message.split('\n').forEach(line => c.detail(line));
-    throw err;
+    throw reported(err);
   }
   if (process.env.DEBUG_MEASUREMENTS === '1') {
     dumpMeasurementsDebug(measurements);
@@ -380,7 +445,7 @@ function solveAndWritePlacement(measurements) {
     c.detail('If content is too dense for meta.maxPages, either:');
     c.detail('  • Increase meta.maxPages in your resume YAML');
     c.detail('  • Trim content (shorter bullets, fewer skills, etc.)');
-    throw err;
+    throw reported(err);
   }
   fs.writeFileSync(
     PLACEMENT_PATH,
@@ -399,7 +464,7 @@ function solveAndWritePlacement(measurements) {
  */
 function buildFinal() {
   runPython(
-    [path.join(ROOT, 'scripts', 'build.py'), '--mode=final'],
+    [path.join(ROOT, 'build', 'build.py'), '--mode=final'],
     'Final build failed',
   );
 }
@@ -440,7 +505,7 @@ async function verifyInvariants(page, expectedPageCount) {
     c.detail('  • .page padding changed without updating --page-margin');
     c.detail('  • --section-rhythm or its derived margins were changed');
     c.detail('  • A .page was added or removed without updating EXPECTED_PAGE_COUNT');
-    throw new Error('Layout invariant violated');
+    throw reported(new Error('Layout invariant violated'));
   }
 
   const pagesWord = expectedPageCount === 1 ? 'page' : 'pages';
@@ -449,76 +514,119 @@ async function verifyInvariants(page, expectedPageCount) {
 
 
 /**
- * Phases 8-9: Print the page to PDF, then crop to true US Letter.
+ * Phases 8-9: Print the page to TWO PDFs (color + grayscale), then
+ * crop each to true US Letter.
  *
  * Chromium's `page.pdf()` quantizes page dimensions to a 0.12-pt
  * grid, producing pages slightly oversized. Post-process via
  * crop_pdf.py to get exact 8.5×11 in plus authoritative metadata
  * (and /Lang catalog entry) from dist/pdf_meta.json.
  *
- * Uses a tmpdir-based intermediate so a partially-written cropped
- * PDF never overwrites a known-good print.pdf if the crop step
- * fails. The temp file is unconditionally removed in the finally
- * block — even when the crop step throws.
+ * Uses tmpdir-based intermediates so partially-written cropped
+ * PDFs never overwrite known-good outputs if the crop step fails.
+ * Temp files are unconditionally removed in the finally block —
+ * even when the crop step throws.
+ *
+ * Grayscale variant: toggles `html.force-grayscale` on the page
+ * before the second render. The class applies token-only colour
+ * overrides (--text-muted, --text-muted-soft, --border-rule,
+ * --accent → see _print.scss for per-token rationale) and crucially
+ * does NOT use `filter: grayscale(1)`: a CSS filter would force
+ * Chromium to rasterize the page, producing a ~6× larger PDF (image-
+ * backed) with sub-pixel layout drift relative to the colour PDF.
+ * Token overrides keep the output as pure vector text + strokes with
+ * byte-identical layout geometry between the two variants. The class
+ * is removed after the second render so the page state is clean for
+ * any downstream consumers.
  */
 async function printAndCropPDF(page) {
   c.banner('PDF');
-  const tmpPdf = path.join(os.tmpdir(), `resume-print-${process.pid}.tmp.pdf`);
+
+  // Pass 1 — color PDF.
+  const tmpColorPdf = path.join(os.tmpdir(), `resume-color-${process.pid}.tmp.pdf`);
   await page.pdf({
-    path: tmpPdf,
+    path: tmpColorPdf,
     width: '8.5in',
     height: '11in',
     margin: { top: '0', bottom: '0', left: '0', right: '0' },
     printBackground: true,
   });
-
   try {
     runPython(
       [
-        path.join(ROOT, 'scripts', 'crop_pdf.py'),
-        tmpPdf,
-        FINAL_PDF_PATH,
+        path.join(ROOT, 'build', 'crop_pdf.py'),
+        tmpColorPdf,
+        COLOR_PDF_PATH,
         '--meta', PDF_META_PATH,
       ],
-      'PDF crop failed',
+      'PDF crop (color) failed',
     );
   } finally {
-    fs.rmSync(tmpPdf, { force: true });
+    fs.rmSync(tmpColorPdf, { force: true });
   }
+  c.ok_pair('Wrote PDF (color)', path.relative(ROOT, COLOR_PDF_PATH));
 
-  c.ok_pair('Wrote PDF', 'print.pdf');
+  // Pass 2 — grayscale PDF. Toggle the class, re-render, restore.
+  await page.evaluate(() => document.documentElement.classList.add('force-grayscale'));
+  const tmpGrayPdf = path.join(os.tmpdir(), `resume-grayscale-${process.pid}.tmp.pdf`);
+  await page.pdf({
+    path: tmpGrayPdf,
+    width: '8.5in',
+    height: '11in',
+    margin: { top: '0', bottom: '0', left: '0', right: '0' },
+    printBackground: true,
+  });
+  await page.evaluate(() => document.documentElement.classList.remove('force-grayscale'));
+  try {
+    runPython(
+      [
+        path.join(ROOT, 'build', 'crop_pdf.py'),
+        tmpGrayPdf,
+        GRAYSCALE_PDF_PATH,
+        '--meta', PDF_META_PATH,
+        // Suppress the "Cropped" and "Stamped metadata" summary lines
+        // on the second crop — they're identical to the first call's
+        // output and only add noise. Errors and warnings still print.
+        '--quiet',
+      ],
+      'PDF crop (grayscale) failed',
+    );
+  } finally {
+    fs.rmSync(tmpGrayPdf, { force: true });
+  }
+  c.ok_pair('Wrote PDF (grayscale)', path.relative(ROOT, GRAYSCALE_PDF_PATH));
 }
 
 
 /**
  * Phase 10: Snapshot test.
  *
- * Pixel-diff print.pdf against the committed fixture. Auto-bootstraps
- * the fixture on first build (when it doesn't exist yet); on subsequent
- * builds, a regression here fails the build.
+ * Pixel-diff both PDF variants (color + grayscale) against committed
+ * fixtures. Auto-bootstraps any missing fixture on first build (when
+ * it doesn't exist yet); on subsequent builds, a regression here
+ * fails the build.
  *
- * Skipped when SKIP_SNAPSHOT=1 (set by snapshot_pdf.py --update-both,
- * which is itself going to overwrite the fixture next).
+ * Skipped when ENV_SKIP_SNAPSHOT='1' (set by snapshot_pdf.py
+ * --update-all, which is itself going to overwrite the fixture next).
  */
 function runSnapshot() {
-  c.banner('Snapshot');
-  if (process.env.SKIP_SNAPSHOT === '1') {
-    c.info('Snapshot test skipped (SKIP_SNAPSHOT=1)');
+  if (process.env[ENV_SKIP_SNAPSHOT] === '1') {
+    c.banner('Snapshot (skipped)');
     return;
   }
+  c.banner('Snapshot');
   try {
     runPython(
-      [path.join(ROOT, 'scripts', 'snapshot_pdf.py'), '--auto-bootstrap'],
+      [path.join(ROOT, 'build', 'snapshot_pdf.py'), '--auto-bootstrap'],
       'Snapshot test failed',
     );
   } catch (err) {
     // The subprocess already emitted its diff lines via _console;
     // append the refresh-fixture hint and re-throw so the
     // orchestrator sets a non-zero exit.
-    c.detail('');
     c.detail('To refresh the fixture if the change was intentional:');
-    c.detail('  python scripts/snapshot_pdf.py --update');
-    throw err;
+    c.detail('  python build/snapshot_pdf.py --update');
+    throw reported(err);
   }
 }
 
@@ -545,7 +653,7 @@ function runSnapshot() {
       err.message.split('\n').forEach(line => c.detail(line));
       c.detail('');
       c.detail('Is Chromium installed? Run:  npx playwright install chromium');
-      throw err;
+      throw reported(err);
     }
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
@@ -561,12 +669,12 @@ function runSnapshot() {
     await printAndCropPDF(page);
     runSnapshot();
   } catch (err) {
-    // Phase functions throw on failure; they've already printed
-    // their own diagnostics via _console. Treat unrecognized errors
-    // (no .stdout/.stderr — i.e. not from a subprocess) as
-    // unexpected and surface a stack trace for debugging.
-    if (!err.stdout && !err.stderr && !err.message?.includes('failed')
-        && !err.message?.includes('violated')) {
+    // Phase functions throw on failure; the ones that reported their
+    // own diagnostics via _console mark the error with reported().
+    // Anything reaching here without that mark is a true unexpected
+    // error (e.g. a bug, an unhandled rejection from inside a phase,
+    // a non-Error throw) — surface a stack trace so it's debuggable.
+    if (!err.alreadyReported) {
       c.err('Unexpected error');
       (err.stack || err.message).split('\n').forEach(line => c.detail(line));
     }
@@ -580,6 +688,11 @@ function runSnapshot() {
         c.detail(`(also: browser.close() failed: ${closeErr.message})`);
       }
     }
-    process.exit(exitCode);
+    // Set exitCode and let Node drain naturally rather than forcing
+    // process.exit() — the latter can truncate the final stderr write
+    // on Windows when the orchestrator finishes during an error path.
+    // No handles remain pending after browser.close(), so the IIFE
+    // resolves and the process exits with the right code.
+    process.exitCode = exitCode;
   }
 })();

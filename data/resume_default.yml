@@ -1,22 +1,56 @@
-# ─────────────────────────────────────────────────────────────────
-# RESUME DATA — single source of truth.
-# Edit this file; run `node render.js` to regenerate dist/index.html.
+# ═════════════════════════════════════════════════════════════════
+# YOUR RESUME — this is where you edit everything.
 #
-# Page placement is AUTOMATIC: the build pipeline measures content
-# heights and assigns sidebar blocks and jobs to pages dynamically.
-# Bridging (a job or sidebar block split across pages) is also
-# automatic. The only thing you control here is content order and
-# the maxPages cap.
-# ─────────────────────────────────────────────────────────────────
+# Change anything in this file, then run `node render.js` and a new
+# PDF appears in the `dist/` folder. You never touch HTML or design
+# code; this file is the only thing you maintain.
+#
+# Three things to know before you start:
+#
+#   1. INDENTATION MATTERS. The spaces at the start of each line are
+#      not decoration — they tell the file what belongs to what.
+#      When you copy a section to add a new one, keep the same number
+#      of spaces. (Always spaces, never tabs.)
+#
+#   2. SPECIAL CHARACTERS. If your text contains a colon, a hash (#),
+#      or starts with a dash or quote, wrap the whole value in double
+#      quotes. Example:  title: "Manager: Operations"
+#      Plain text without special characters works fine without quotes.
+#
+#   3. LINES STARTING WITH # ARE NOTES. They are ignored by the build.
+#      You can leave them, delete them, or add your own.
+#
+# Page layout is automatic. The build measures your content and
+# decides where pages break. You only control the content and order;
+# the design takes care of the rest.
+# ═════════════════════════════════════════════════════════════════
 
+
+# ─── Your name ───────────────────────────────────────────────────
+# Split into first and last because the design styles them
+# differently (the last name appears bolder than the first).
 name:
   first: Gaius
   last: Caesar
 
+
+# ─── Job title shown under your name ─────────────────────────────
+# A short subtitle that appears below your name on page 1.
+# Replace with your target role, OR delete this whole line if you
+# don't want a subtitle at all.
 role: "Imperator Romanus"
 
-# Contact info — rendered in the page header (right-aligned), not
-# the sidebar. address is shown on its own line; items are clickable.
+
+# ─── Contact details (appear in the top-right of page 1) ─────────
+# `address` shows on its own line.
+# `rows` is a list of clickable lines. Each row needs:
+#   - value: the text people see
+#   - href:  what happens when someone clicks it. Use:
+#       "tel:+15551234567"        → opens phone dialer
+#       "mailto:you@example.com"  → opens email app
+#       "https://yoursite.com"    → opens a website
+#
+# Add or remove rows freely. Keep the leading dash and indentation.
 contact:
   address: Roma, Imperium Romanum
   rows:
@@ -25,26 +59,94 @@ contact:
     - value: gcaesar@email.com
       href: "mailto:gcaesar@email.com"
 
+
+# ─── Document metadata ───────────────────────────────────────────
 meta:
+  # One-sentence summary of who you are. Used as the PDF's "subject"
+  # (visible in PDF viewers' Properties dialog) and as the HTML page
+  # description (what search engines and link previews show).
+  # The `>-` means "this value continues on the next line(s)."
   description: >-
     Resume of Gaius Caesar — sed gravida elit velit, in pharetra
     based in Roma, Imperium Romanum.
-  # Maximum pages the layout solver may produce. If content cannot
-  # fit in this many pages (after applying the placement rules),
-  # the build fails. Increase only if your content genuinely needs
-  # more space; the solver is conservative by design.
+
+  # The maximum number of pages the resume is allowed to grow to.
+  # If your content can't fit in this many pages, the build STOPS
+  # with a clear error instead of silently producing a longer PDF.
+  # Raise this number if you genuinely need more room.
   maxPages: 10
-  # BCP-47 language tag. Stamped onto the PDF catalog as /Lang so
-  # screen readers and other assistive tech pick correct
-  # pronunciation rules. Defaults to en-US if absent.
+
+  # The language your resume is written in. Used by screen readers
+  # and other assistive tech to pick the right pronunciation.
+  # Examples:  en-US (American English), en-GB (British English),
+  #            es-ES (Spanish, Spain), fr-FR (French, France).
+  # The first two letters are the language; the last two are the country.
   lang: en-US
 
-# Sidebar — single flat list of blocks. Order = visual order. The
-# layout solver places them on pages and may split a block across
-# pages (subject to the rules: heading + ≥3 items on the originating
-# page; ≥1 item on the receiving page).
+
+# ─── Sidebar (the narrow left column) ────────────────────────────
+# A sidebar is made of `blocks`. Each block is a titled list, like
+# "Languages" or "Key Skills". You can add, remove, or reorder them.
+# The build figures out which blocks fit on which page.
+#
+# Every block needs three fields:
+#   id:      a short unique label using ONLY lowercase letters,
+#            numbers, and dashes (no spaces, no underscores).
+#            Used by the build internally; it's never shown to readers.
+#   type:    either "list" or "details" — see the two kinds below.
+#   heading: the bold title that appears above the block.
+#
+# The fourth field depends on the type:
+#   items:   the contents of a "list" block.
+#   rows:    the contents of a "details" block.
+#
+# TWO KINDS OF BLOCKS:
+#
+#   • "list" blocks
+#     A single-column list of bullet points. Use for Languages,
+#     Key Skills, Certifications, Interests — anything that's a
+#     flat list. Items can optionally be organized into named
+#     groups. All three blocks below use this type.
+#
+#     Inside `items:` you can mix two things:
+#       (A) Plain text — each line becomes one bullet. See the
+#           Languages block below.
+#       (B) A sub-heading using `- group: "..."`. Everything
+#           listed AFTER a group line belongs to that group,
+#           until the next group line. See the Key Skills block
+#           below for a worked example.
+#     A block with no groups is just a flat list. A block with
+#     groups is a list with sub-headings.
+#
+#   • "details" blocks
+#     A two-column list of LABELED rows: a short label on the left,
+#     a value on the right. Use for an additional contact section,
+#     online profiles, or any "Label: Value" data. Each row needs
+#     `label` and `value`; an optional `href` makes the value
+#     clickable (same rules as the contact `href` above).
+#
+#     The placeholder data doesn't include one; here's the shape
+#     if you want to add one. Paste it into the `blocks:` list
+#     below, keeping the same indentation as the other blocks:
+#
+#         - id: online
+#           type: details
+#           heading: Online
+#           rows:
+#             - label: LinkedIn
+#               value: linkedin.com/in/gcaesar
+#               href: "https://linkedin.com/in/gcaesar"
+#             - label: GitHub
+#               value: github.com/gcaesar
+#               href: "https://github.com/gcaesar"
+#
+#     Note: details blocks are kept whole — the build will never
+#     split one across two pages — so they're best for short lists
+#     (3–6 rows). Long lists belong in a "list" block.
 sidebar:
   blocks:
+
+    # Example of a simple flat list — no groups, just three items.
     - id: languages
       type: list
       heading: Languages
@@ -53,6 +155,9 @@ sidebar:
         - Lingua (Gradus Scientiae)
         - Lingua (Gradus Scientiae)
 
+    # Example of a grouped list — five named groups, each with items.
+    # Notice how `- group: "..."` introduces each group, and the
+    # plain-text lines beneath it belong to that group.
     - id: key-skills
       type: list
       heading: Key Skills
@@ -113,19 +218,68 @@ sidebar:
         - Consequat In Lacinia Mi Vitae
         - Vivamus Quis Tempus Purus
 
-# Main column — flows continuously through the document. Sections
-# appear in the order listed. The layout solver places them across
-# pages; a job may bridge across pages (header + ≥1 bullet on the
-# originating page; ≥1 bullet on the receiving page).
+
+# ─── Main column (the wide right side of the page) ───────────────
+# The main column is made of three sections, in this order:
+#   - summary    (a short paragraph about you)
+#   - experience (your jobs)
+#   - education  (your schools and programs)
+#
+# You need one of each; you can't add or remove section types here,
+# but you can put as much (or as little) content inside each as you
+# want. The build automatically flows content across pages.
 mainColumn:
+
+  # ─── Summary section ─────────
+  # One paragraph introducing who you are professionally.
+  # Keep it 3–5 sentences for best fit.
   - type: summary
     heading: Summary
     text: >-
       Sed gravida elit velit, in pharetra lorem tempus id. Maecenas dictum ex in risus molestie, nec faucibus velit malesuada. Nulla viverra est ut molestie laoreet. Fusce et scelerisque diam. Phasellus vel lectus ut nisl maximus rutrum quis ut elit. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Maecenas et efficitur elit, in imperdiet nisi. Pellentesque tempus enim vitae cursus elementum. Praesent molestie risus sed nunc lacinia suscipit. Praesent iaculis nulla.
 
+  # ─── Experience section ─────────
+  # List your jobs from most recent to oldest. Each job has these fields:
+  #
+  #   id:       a short unique label — lowercase letters, numbers,
+  #             and dashes only. Not shown to readers; used internally.
+  #
+  #   title:    the job title and (optionally) the company, comma-separated.
+  #             Example: "Senior Designer, Acme Inc."
+  #
+  #   date:     the date range as you want it displayed. Free text —
+  #             use whatever format you prefer:
+  #               "Mar 2021 – Present"
+  #               "2020 – 2024"
+  #               "May 2018 – December 2021"
+  #
+  #   datetime: the START date in a machine-readable form. This is for
+  #             screen readers (so they can announce dates correctly)
+  #             and is NEVER displayed visually. Format: "YYYY" or
+  #             "YYYY-MM". Examples:  "2026"   or   "2026-01"
+  #
+  #   location: city, country/state. Free text.
+  #
+  #   bullets:  a list of achievement lines. Each bullet should describe
+  #             a concrete result, ideally with a number. To make part
+  #             of a bullet appear bold, wrap it in double asterisks:
+  #
+  #               "Reached **99% on-time** delivery..."
+  #                        ↑              ↑
+  #                        these become bold in the output
+  #
+  #             Only `**bold**` works. Other markdown (italics, links,
+  #             headings) is NOT processed — it would show up as literal
+  #             text with the asterisks visible.
+  #
+  # SPECIAL CASE — career gaps:
+  # If you have a period that wasn't employment (relocation, sabbatical,
+  # caregiving, education), add an entry with `gap: true` and NO bullets
+  # or location. See the `transition-gap` entry below.
   - type: experience
     heading: Work Experience
     jobs:
+
       - id: nulla
         title: Nulla porta ligula, Aliquam libero
         date: MMM YYYY – MMM YYYY
@@ -136,11 +290,15 @@ mainColumn:
           - "Aliquam mattis ipsum tincidunt sodales mattis. Ut lobortis eros lectus, eu rhoncus diam bibendum ut. Vivamus quis tempus purus. Praesent."
           - "Donec a venenatis diam, ac rhoncus nibh. Integer dignissim tempor nunc ut lobortis. Etiam bibendum velit arcu, nec rhoncus ligula."
 
+      # GAP ENTRY example. Notice: no `location`, no `bullets`.
+      # The `gap: true` line tells the design to render this entry
+      # in a softer style (italic, no bullet points), since it's a
+      # non-employment period rather than a job.
       - id: transition-gap
         title: Transitus in Cursum Novum
         date: MMM YYYY – MMM YYYY
         datetime: "YYYY-MM"
-        gap: true        # styles the entry as a non-employment gap
+        gap: true
 
       - id: etiam-tincidunt
         title: Etiam tincidunt lacus, Etiam fermentum
@@ -190,9 +348,19 @@ mainColumn:
           - "Sed finibus accumsan nibh pharetra eleifend. Nunc lorem sapien, congue vel semper vel, tincidunt eget metus. Nam a metus leo."
           - "Phasellus sed nisl vitae urna rhoncus sollicitudin in eu nisl. Duis consequat tincidunt libero, vitae laoreet lacus congue eget. Mauris."
 
+  # ─── Education section ─────────
+  # Each item has:
+  #   title:       the degree or program name (e.g., "Bachelor of Arts in History").
+  #   subtitle:    a finer-grained description — concentration, specialty,
+  #                or focus area. Optional; remove the line if not needed.
+  #   institution: the school, university, or online platform.
+  #
+  # Add as many entries as you want. List them in the order you want
+  # them shown (most prestigious or most recent first is conventional).
   - type: education
     heading: Education
     items:
+
       - title: Gradus Baccalaurei Artium in Historia
         subtitle: Donec tempor neque eget
         institution: Phasellus imperdiet dictum neque eget efficitur

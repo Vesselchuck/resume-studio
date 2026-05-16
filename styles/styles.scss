@@ -10,9 +10,10 @@
    Chromium browser produces a pixel-faithful PDF.
 
    Content lives in data/resume_default.yml. The build pipeline
-   (scripts/build.py + templates/) renders dist/index.html, then
-   render.js produces print.pdf and screenshots. Page placement is
-   AUTOMATIC: a layout solver (scripts/solve_layout.js) measures
+   (build/build.py + templates/) renders dist/index.html, then
+   render.js produces dist/resume-color.pdf and dist/resume-grayscale.pdf.
+   Page placement is
+   AUTOMATIC: a layout solver (build/solve_layout.js) measures
    content heights from a single-column flowing render and decides
    what lives on each page. Bridging (a job or sidebar block split
    across pages) is computed from the content rather than declared
@@ -23,7 +24,7 @@
    .body-grid has `overflow: hidden`. The solver SHOULD never
    produce a placement that overflows; if it does, content gets
    clipped at the 0.5in margin. The render pipeline's invariant 4
-   (content-overflow detector in scripts/check_layout.js) catches
+   (content-overflow detector in build/check_layout.js) catches
    this case and fails the build with a clear message identifying
    the overflowing column and culprit element.
 
@@ -109,7 +110,8 @@
      _tokens.scss        CSS custom properties (page geometry,
                          spacing scale, typography, colors)
      _fonts.scss         @font-face declarations for the vendored
-                         Montserrat (loaded from assets/fonts/)
+                         Manrope (body) and Newsreader (display)
+                         fonts loaded from fonts/
      _base.scss          reset + body defaults
      _layout.scss        page container, body-grid, divider, hrs
      _components.scss    name header, section headings, blocks,
