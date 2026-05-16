@@ -1,20 +1,24 @@
 # ─── Build outputs ──────────────────────────────────────────────
 # Regenerated on every `node render.js`. Each user produces their
-# own; never check these in.
+# own; never check these in. The PDFs (resume-color.pdf and
+# resume-grayscale.pdf) are written into dist/ alongside the HTML
+# and other build artifacts.
 dist/
-print.pdf
 
 # ─── Private data ───────────────────────────────────────────────
 # The committed `data/resume_default.yml` is a placeholder. Real resume
 # data lives in `data/resume.local.yml`, which stays local only.
-# Its matching snapshot fixture is also private.
+# Its matching snapshot fixtures (color + grayscale variants)
+# are also private.
 data/resume.local.yml
-tests/fixtures/expected_print.local.pdf
+tests/fixtures/expected_resume-color.local.pdf
+tests/fixtures/expected_resume-grayscale.local.pdf
 
 # ─── Test artifacts ─────────────────────────────────────────────
 # Diff images written when a snapshot test fails. They're useful
 # for debugging the failure but shouldn't pollute history.
-tests/fixtures/diff_page*.png
+# Pattern matches diff_color_pageN.png and diff_grayscale_pageN.png.
+tests/fixtures/diff_*.png
 
 # ─── Python ─────────────────────────────────────────────────────
 __pycache__/

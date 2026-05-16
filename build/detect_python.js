@@ -10,7 +10,7 @@
  * so both pick the same interpreter without duplicating logic.
  */
 
-const { execFileSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const c = require('./_console');
 
 function detectPython() {
@@ -19,19 +19,21 @@ function detectPython() {
     ? ['python', 'py', 'python3']
     : ['python3', 'python'];
   for (const cmd of candidates) {
-    try {
-      const out = execFileSync(cmd, ['--version'], {
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
-      // Microsoft Store alias stub sometimes exits 0 while printing
-      // an install-prompt to stderr/stdout. Reject that case.
-      if (/was not found/i.test(out)) continue;
-      return cmd;
-    } catch {
-      // Non-zero exit (typical for missing command or Store stub) —
-      // try the next candidate.
-    }
+    const r = spawnSync(cmd, ['--version'], {
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+    // r.error is set when spawn itself failed (ENOENT etc.) — try next.
+    // Non-zero status also disqualifies the candidate.
+    if (r.error || r.status !== 0) continue;
+    // Microsoft Store alias stub on Windows exits 0 while printing an
+    // install prompt. It lands on stdout in some shells and stderr in
+    // others; inspect both. Real Python 3 prints "Python 3.x.y" to
+    // stdout — no version line contains "was not found", so this is
+    // a safe negative match.
+    const combined = (r.stdout || '') + (r.stderr || '');
+    if (/was not found/i.test(combined)) continue;
+    return cmd;
   }
   c.err('No Python interpreter found');
   c.detail(`Tried: ${candidates.join(', ')}`);

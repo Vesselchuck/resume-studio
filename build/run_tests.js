@@ -29,15 +29,15 @@
  *   STRICT_TESTS=1 converts SKIP into a hard failure (exit code 1).
  *   Use this in CI to ensure no suite is silently bypassed.
  *
- * Run with:  node scripts/run_tests.js
+ * Run with:  node build/run_tests.js
  *
  * Optional argument: a specific test path. For Python this is a
  * dotted path passed to unittest. For JS, pass the bare file stem;
  * the runner matches it against tests/test_*.js.
  *
- *   node scripts/run_tests.js
- *   node scripts/run_tests.js test_validate_data
- *   node scripts/run_tests.js test_solve_layout
+ *   node build/run_tests.js
+ *   node build/run_tests.js test_validate_data
+ *   node build/run_tests.js test_solve_layout
  *
  * Behavior:
  *   • No arg → runs ALL Python tests, then ALL JS tests. Exits with

@@ -1,5 +1,5 @@
 """
-Tests for build.validate_data — schema validation (Bunch 4 schema).
+Tests for build.validate_data — schema validation.
 
 Pin down each error message so future changes to the validator are
 intentional. Mutations apply to a known-good fixture; each test
@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "build"))
 
 from build import validate_data, SchemaError
 
@@ -60,6 +60,98 @@ class TestValidateData(unittest.TestCase):
             validate_data(d)
         self.assertIn("name.first", str(ctx.exception))
 
+    # ── Role ──────────────────────────────────────────────────────
+    def test_role_omitted_passes(self):
+        d = good_data()
+        d.pop("role", None)
+        validate_data(d)  # should not raise
+
+    def test_role_not_string(self):
+        d = good_data()
+        d["role"] = 123
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("role", str(ctx.exception))
+
+    # ── Contact ───────────────────────────────────────────────────
+    def test_contact_omitted_passes(self):
+        d = good_data()
+        d.pop("contact", None)
+        validate_data(d)  # should not raise
+
+    def test_contact_null_passes(self):
+        d = good_data()
+        d["contact"] = None  # explicit `contact:` with no value (YAML null)
+        validate_data(d)  # should not raise — same as omitted
+
+    def test_contact_not_mapping(self):
+        d = good_data()
+        d["contact"] = "123 Main St"
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("contact", str(ctx.exception))
+
+    def test_contact_address_not_string(self):
+        d = good_data()
+        d["contact"] = {"address": 123, "rows": []}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("address", str(ctx.exception))
+
+    def test_contact_rows_missing(self):
+        d = good_data()
+        d["contact"] = {"address": "Somewhere"}  # no rows
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("rows", str(ctx.exception))
+
+    def test_contact_rows_not_list(self):
+        d = good_data()
+        d["contact"] = {"rows": "not a list"}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("rows", str(ctx.exception))
+
+    def test_contact_row_not_mapping(self):
+        d = good_data()
+        d["contact"] = {"rows": ["just a string"]}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("contact.rows[0]", str(ctx.exception))
+
+    def test_contact_row_value_missing(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"href": "tel:+10000000000"}]}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("value", str(ctx.exception))
+
+    def test_contact_row_value_empty(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": ""}]}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("value", str(ctx.exception))
+
+    def test_contact_row_value_not_string(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": 42}]}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("value", str(ctx.exception))
+
+    def test_contact_row_href_not_string(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": "x", "href": 42}]}
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("href", str(ctx.exception))
+
+    def test_contact_rows_empty_passes(self):
+        d = good_data()
+        d["contact"] = {"address": "Somewhere", "rows": []}
+        validate_data(d)  # should not raise — empty rows is valid
+
     # ── Meta ──────────────────────────────────────────────────────
     def test_meta_max_pages_missing(self):
         d = good_data()
@@ -81,6 +173,21 @@ class TestValidateData(unittest.TestCase):
         with self.assertRaises(SchemaError) as ctx:
             validate_data(d)
         self.assertIn("maxPages", str(ctx.exception))
+
+    def test_meta_lang_omitted_passes(self):
+        # lang is optional; resolve_lang() falls back to a default.
+        d = good_data()
+        d["meta"].pop("lang", None)  # ensure absent regardless of fixture
+        validate_data(d)  # should not raise
+
+    def test_meta_lang_not_string(self):
+        # A non-string would crash resolve_lang() on .strip() with
+        # AttributeError; validator must catch it up-front.
+        d = good_data()
+        d["meta"]["lang"] = ["en-US"]
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("lang", str(ctx.exception))
 
     # ── Sidebar ───────────────────────────────────────────────────
     def test_sidebar_must_be_mapping(self):
@@ -194,20 +301,6 @@ class TestValidateData(unittest.TestCase):
         # Gap entries don't need bullets; should pass.
         d = good_data()
         validate_data(d)  # gap job is jobs[1], already valid
-
-    def test_legacy_bulletsPage1_rejected(self):
-        d = good_data()
-        d["mainColumn"][1]["jobs"][0]["bulletsPage1"] = ["a"]
-        with self.assertRaises(SchemaError) as ctx:
-            validate_data(d)
-        self.assertIn("bulletsPage1", str(ctx.exception))
-
-    def test_legacy_bulletsPage2_rejected(self):
-        d = good_data()
-        d["mainColumn"][1]["jobs"][0]["bulletsPage2"] = ["a"]
-        with self.assertRaises(SchemaError) as ctx:
-            validate_data(d)
-        self.assertIn("bulletsPage2", str(ctx.exception))
 
     def test_jobs_list_empty(self):
         d = good_data()

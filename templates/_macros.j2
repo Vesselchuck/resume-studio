@@ -11,6 +11,30 @@
         or a sidebar block's later items) suppress the heading/title.
         The `data-continues-from` attribute keeps the relationship
         traceable in the rendered HTML.
+
+    Measurement vs. production
+    ──────────────────────────
+    Every inner macro (render_job, render_sidebar_block,
+    render_edu_item) accepts a `measure=False` flag. When true, the
+    macro adds the data-measure / data-id / data-row-index /
+    data-item-index / data-bullet-index attributes that
+    build/measure_dom.js queries to size content for the layout
+    solver. When false (default — production), those attributes are
+    omitted, keeping the final HTML clean.
+
+    Before this refactor, templates/measurement.j2 reimplemented all
+    three macros inline with data-* attributes added. A change to the
+    job / sidebar / edu item HTML in _macros.j2 had to be mirrored in
+    measurement.j2 or measured heights would diverge from final
+    heights. The unified macros eliminate that drift surface.
+
+    The OUTER scaffolding around measurement (the <main> / <article
+    class="page"> / <aside class="sidebar"> / per-section <section>
+    wrappers with data-measure="section") stays inline in each top-
+    level template because production needs a placement-pages loop
+    that measurement doesn't. Inlining 15 lines of small scaffolding
+    avoided 3 more parameterized macros that would have been more
+    cognitive load than they saved.
 -#}
 
 
@@ -28,39 +52,49 @@
 
 
 {#- ─── Job entry ──────────────────────────────────────────────
-    Renders a single job from a placement entry. Three shapes:
+    Renders a single job. Three visual shapes:
       • Regular: title + meta + bullets
-      • Gap: italic title, no location, no bullets
+      • Gap: italic title, no location, no bullets (j.gap is truthy)
       • Continuation: no header, just bullets, with data-continues-from
+
+    Parameters
+    ──────────
+      j               raw job dict (from data['experience']['jobs'])
+      measure         if true, emit data-measure / data-id / data-bullet-index
+                      attributes for measure_dom.js
+      continuation    if true, render as continuation (no header, suppressed)
+      bullets_offset  start index into j.bullets (default 0)
+      bullets_limit   how many bullets to render (None = to end)
 -#}
-{% macro render_job(entry, job_by_id) %}
-{%- set j = job_by_id[entry.job_id] -%}
-{%- set bullets = (j.bullets[entry.bullets_offset:] if entry.bullets_limit is none
-                   else j.bullets[entry.bullets_offset:entry.bullets_offset + entry.bullets_limit])
+{% macro render_job(j, measure=False, continuation=False, bullets_offset=0, bullets_limit=None) %}
+{%- set bullets = (j.bullets[bullets_offset:] if bullets_limit is none
+                   else j.bullets[bullets_offset:bullets_offset + bullets_limit])
                   if j.bullets is defined else [] -%}
-{%- if entry.continuation -%}
-<article class="job job--continued" data-continues-from="{{ j.id }}">
+{%- if continuation -%}
+<article class="job job--continued" data-continues-from="{{ j.id }}"
+         {%- if measure %} data-measure="job" data-id="{{ j.id }}"{% endif %}>
   <ul class="bullets">
 {%- for bullet in bullets %}
-    <li>{{ bullet | e | md | safe }}</li>
+    <li{% if measure %} data-measure="bullet" data-bullet-index="{{ loop.index0 }}"{% endif %}>{{ bullet | e | md | safe }}</li>
 {%- endfor %}
   </ul>
 </article>
 {%- else -%}
-<article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}">
-  <header class="entry-header">
-    <h3 class="entry-title">{{ j.title | e }}</h3>
+<article class="job{% if j.gap is defined and j.gap %} job--gap{% endif %}" id="{{ j.id }}"
+         {%- if measure %} data-measure="job" data-id="{{ j.id }}"{% endif %}>
+  <header class="entry-header"{% if measure %} data-measure="job-header"{% endif %}>
+    <h3 class="entry-title">{{ j.title }}</h3>
     <p class="entry-meta">
-      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date | e }}</time>
+      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date }}</time>
 {%- if j.location is defined %}
-      <span class="job-loc">{{ j.location | e }}</span>
+      <span class="job-loc">{{ j.location }}</span>
 {%- endif %}
     </p>
   </header>
 {%- if bullets %}
   <ul class="bullets">
 {%- for bullet in bullets %}
-    <li>{{ bullet | e | md | safe }}</li>
+    <li{% if measure %} data-measure="bullet" data-bullet-index="{{ loop.index0 }}"{% endif %}>{{ bullet | e | md | safe }}</li>
 {%- endfor %}
   </ul>
 {%- endif %}
@@ -70,41 +104,58 @@
 
 
 {#- ─── Sidebar block ──────────────────────────────────────────
-    Renders a single sidebar block from a placement entry. The
-    'details' block type and 'list' block type render differently;
-    continuation entries suppress the heading.
+    Renders a single sidebar block. The 'details' block type and
+    'list' block type render differently; continuation entries
+    suppress the heading.
+
+    Parameters
+    ──────────
+      b               raw block dict (from data['sidebar']['blocks'])
+      measure         if true, emit data-measure / data-id / data-type /
+                      data-row-index / data-item-index attributes for
+                      measure_dom.js. (data-row-index applies to detail
+                      rows; data-item-index to list items.)
+      continuation    if true, render as continuation (no heading,
+                      data-continues-from instead of id)
+      items_offset    only relevant for type=='list'; start index
+      items_limit     only relevant for type=='list'; None = to end
 -#}
-{% macro render_sidebar_block(entry, block_by_id) %}
-{%- set b = block_by_id[entry.block_id] -%}
-<section class="block{% if entry.continuation %} block--continued{% endif %}"
-         {%- if entry.continuation %} data-continues-from="{{ b.id }}"{% else %} id="{{ b.id }}"{% endif %}>
-{%- if not entry.continuation %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ b.heading | e }}</span><span aria-hidden="true">{{ b.heading | e }}</span></h2>
+{% macro render_sidebar_block(b, measure=False, continuation=False, items_offset=0, items_limit=None) %}
+<section class="block{% if continuation %} block--continued{% endif %}"
+         {%- if continuation %} data-continues-from="{{ b.id }}"{% else %} id="{{ b.id }}"{% endif %}
+         {%- if measure %} data-measure="block" data-id="{{ b.id }}" data-type="{{ b.type }}"{% endif %}>
+{%- if not continuation %}
+  {#- Duplicate-span pattern guards against `text-transform: uppercase`
+      causing acronym-style readout in some screen-reader versions
+      (e.g. VoiceOver reading "Add" as "A.D.D."). Reviewed and
+      retained, 2026 — don't collapse to one span without re-testing
+      against current NVDA / JAWS / VoiceOver. -#}
+  <h2 class="section-heading"{% if measure %} data-measure="block-heading"{% endif %}><span class="visually-hidden">{{ b.heading }}</span><span aria-hidden="true">{{ b.heading }}</span></h2>
 {%- endif %}
 {%- if b.type == "details" %}
   <address class="details-list">
 {%- for row in b.rows %}
-    <div class="detail-row">
-      <span class="subgroup-label">{{ row.label | e }}</span>
+    <div class="detail-row"{% if measure %} data-measure="item" data-row-index="{{ loop.index0 }}"{% endif %}>
+      <span class="subgroup-label">{{ row.label }}</span>
       <span class="detail-value">
 {%- if row.href is defined -%}
-<a href="{{ row.href }}">{{ row.value | e }}</a>
+<a href="{{ row.href }}">{{ row.value }}</a>
 {%- else -%}
-{{ row.value | e }}
+{{ row.value }}
 {%- endif -%}
 </span>
     </div>
 {%- endfor %}
   </address>
 {%- elif b.type == "list" %}
-{%- set items = (b['items'][entry.items_offset:] if entry.items_limit is none
-                 else b['items'][entry.items_offset:entry.items_offset + entry.items_limit]) -%}
+{%- set items = (b['items'][items_offset:] if items_limit is none
+                 else b['items'][items_offset:items_offset + items_limit]) -%}
   <ul class="plain-list">
 {%- for item in items %}
 {%- if item is mapping %}
-    <li class="list-group-heading entry-title" data-measure="item">{{ item.group | e }}</li>
+    <li class="list-group-heading entry-title"{% if measure %} data-measure="item" data-item-index="{{ loop.index0 }}"{% endif %}>{{ item.group }}</li>
 {%- else %}
-    <li data-measure="item">{{ item | e }}</li>
+    <li{% if measure %} data-measure="item" data-item-index="{{ loop.index0 }}"{% endif %}>{{ item }}</li>
 {%- endif %}
 {%- endfor %}
   </ul>
@@ -114,27 +165,44 @@
 
 
 {#- ─── Sidebar blocks list (with separators) ──────────────────
-    Auto-emits <hr class="section-sep"> between consecutive blocks.
+    Production-side orchestrator: iterates placement entries,
+    resolves each block_id via block_by_id, and calls
+    render_sidebar_block with the appropriate continuation /
+    items_offset / items_limit args. Auto-emits <hr class="section-sep">
+    between consecutive blocks.
+
+    Measurement template does NOT call this macro — it loops
+    sidebar_blocks directly so it can emit data-measure="separator"
+    on the <hr>s (which production HTML doesn't need).
 -#}
 {% macro render_sidebar_blocks(entries, block_by_id) %}
 {%- for entry in entries %}
 {%- if not loop.first %}
 <hr class="section-sep">
 {% endif -%}
-{{ render_sidebar_block(entry, block_by_id) }}
+{{ render_sidebar_block(block_by_id[entry.block_id],
+                        continuation=entry.continuation,
+                        items_offset=entry.items_offset,
+                        items_limit=entry.items_limit) }}
 {%- endfor %}
 {% endmacro %}
 
 
 {#- ─── Education item ─────────────────────────────────────────
+    Single education item article.
+
+    Parameters
+    ──────────
+      item     raw item dict (from data['education']['items'])
+      measure  if true, emit data-measure="edu-item" for measure_dom.js
 -#}
-{% macro render_edu_item(item) %}
-<article class="edu-item">
+{% macro render_edu_item(item, measure=False) %}
+<article class="edu-item"{% if measure %} data-measure="edu-item"{% endif %}>
   <header class="entry-header">
-    <h3 class="entry-title">{{ item.title | e }}</h3>
-    <p class="edu-subtitle">{{ item.subtitle | e }}</p>
+    <h3 class="entry-title">{{ item.title }}</h3>
+    <p class="edu-subtitle">{{ item.subtitle }}</p>
     <p class="entry-meta">
-      <span class="job-loc">{{ item.institution | e }}</span>
+      <span class="job-loc">{{ item.institution }}</span>
     </p>
   </header>
 </article>
@@ -142,14 +210,22 @@
 
 
 {#- ─── Main column section ────────────────────────────────────
-    Dispatches by section.type. Suppresses the section heading
-    when section.continuation_of is set (continuation context).
+    Production-side dispatcher: takes a placement section and renders
+    summary / experience / education according to section.type.
+    Suppresses the section heading when section.continuation_of is set.
+
+    Inner job rendering goes through render_job (with continuation /
+    bullets_offset / bullets_limit from the placement entry).
+
+    Measurement template does NOT call this macro — it renders the
+    three sections directly so it can emit the data-measure="section"
+    / data-section-type="…" attrs that this macro doesn't emit.
 -#}
 {% macro render_main_section(section, summary, experience, education, job_by_id) %}
 {%- if section.type == "summary" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ summary.heading | e }}</span><span aria-hidden="true">{{ summary.heading | e }}</span></h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ summary.heading }}</span><span aria-hidden="true">{{ summary.heading }}</span></h2>
 {%- endif %}
   <p class="summary-text">{{ summary.text | e | md | safe }}</p>
 </section>
@@ -157,17 +233,20 @@
 <section class="block experience"
          {%- if section.continuation_of %} aria-label="Work experience continued"{% endif %}>
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ experience.heading | e }}</span><span aria-hidden="true">{{ experience.heading | e }}</span></h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ experience.heading }}</span><span aria-hidden="true">{{ experience.heading }}</span></h2>
 {%- endif %}
 {% for entry in section.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
-{{ render_job(entry, job_by_id) -}}
+{{ render_job(job_by_id[entry.job_id],
+              continuation=entry.continuation,
+              bullets_offset=entry.bullets_offset,
+              bullets_limit=entry.bullets_limit) -}}
 {% endfor %}
 </section>
 {%- elif section.type == "education" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ education.heading | e }}</span><span aria-hidden="true">{{ education.heading | e }}</span></h2>
+  <h2 class="section-heading"><span class="visually-hidden">{{ education.heading }}</span><span aria-hidden="true">{{ education.heading }}</span></h2>
 {%- endif %}
 {%- for item in education['items'] %}
 {{ render_edu_item(item) }}

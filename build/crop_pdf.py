@@ -42,8 +42,8 @@ full screen-reader support requires PDF tagging (a structure tree),
 which Chromium's page.pdf() does not produce. See L4 in the audit.
 
 Usage:
-    python3 scripts/crop_pdf.py <input.pdf> <output.pdf>
-    python3 scripts/crop_pdf.py <input.pdf> <output.pdf> --meta dist/pdf_meta.json
+    python3 build/crop_pdf.py <input.pdf> <output.pdf>
+    python3 build/crop_pdf.py <input.pdf> <output.pdf> --meta dist/pdf_meta.json
     (run from project root)
 
 Requires: pypdf (`pip install pypdf`).
@@ -118,10 +118,33 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
       1. Values from --meta JSON manifest, if provided.
       2. Values present in the input PDF's /Info dictionary.
     Any field not in either source is left blank.
+
+    /Producer and /Creator preservation
+    ───────────────────────────────────
+    Chromium's page.pdf() writes /Producer="Skia/PDF mNNN" and
+    /Creator="Mozilla/5.0 …" (or similar). We want both to pass
+    through to the cropped output so the metadata truthfully describes
+    what produced the bytes. The mechanism is two-step:
+
+      1. Copy ALL /Info entries from the input into `info`, including
+         /Producer and /Creator.
+      2. Overlay only the four manifest-mapped keys (title, author,
+         subject, keywords). /Producer and /Creator are NOT in the
+         mapping, so they keep their copied-from-input values.
+
+    The final `writer.add_metadata(info)` call respects explicitly-
+    passed /Producer / /Creator values (verified in pypdf 5.9.0, the
+    pinned version). Future pypdf versions could in principle change
+    that — the regression gate is
+    `test_does_not_override_creator_or_producer` in
+    tests/test_crop_pdf.py, which round-trips a synthetic PDF and
+    asserts the input's values survive. A pypdf bump that breaks this
+    will fail that test before reaching production.
     """
     info = {}
 
-    # Copy any pre-existing metadata from the input first.
+    # Copy any pre-existing metadata from the input first. This is
+    # what carries /Producer and /Creator through (see docstring).
     if reader.metadata:
         for k, v in reader.metadata.items():
             # pypdf returns keys already prefixed with '/'.
@@ -130,10 +153,10 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
     # Overlay manifest values.
     if meta_path is not None:
         manifest = json.loads(meta_path.read_text(encoding='utf-8'))
-        # Map our manifest keys to PDF /Info keys. We deliberately do
-        # NOT override /Creator or /Producer — Chromium's defaults
-        # (Chromium / Skia/PDF) pass through, truthfully describing
-        # what produced the bytes.
+        # Map our manifest keys to PDF /Info keys. The mapping
+        # deliberately omits /Creator and /Producer — they pass through
+        # from the input via the copy above. See the docstring's
+        # "/Producer and /Creator preservation" section.
         mapping = {
             'title':    '/Title',
             'author':   '/Author',
@@ -177,7 +200,12 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
         except (OSError, json.JSONDecodeError):
             # Manifest unreadable — keep the default rather than fail.
             pass
-    writer._root_object[NameObject('/Lang')] = TextStringObject(lang)
+    # `writer.root_object` is pypdf's public accessor for the document
+    # catalog (verified in pypdf 5.9.0, the pinned version). The
+    # leading-underscore `_root_object` works too but is private and
+    # subject to rename across versions; the public name is the
+    # forward-compatible choice.
+    writer.root_object[NameObject('/Lang')] = TextStringObject(lang)
 
 
 def main() -> int:
@@ -188,7 +216,15 @@ def main() -> int:
         '--meta',
         type=Path,
         default=None,
-        help="Optional JSON manifest with title/author/subject/keywords/creator/producer.",
+        help="Optional JSON manifest with title/author/subject/keywords/lang.",
+    )
+    parser.add_argument(
+        '--quiet', action='store_true',
+        help="Suppress the success-summary lines (Cropped, Stamped metadata). "
+             "Errors and warnings still print. Used by render.js's dual-PDF "
+             "flow to avoid emitting identical summary lines twice — the "
+             "first crop invocation runs normally, the second runs with "
+             "--quiet so only the per-variant 'Wrote PDF' lines vary.",
     )
     args = parser.parse_args()
 
@@ -218,6 +254,9 @@ def main() -> int:
         c.detail("a PDF viewer (Adobe Reader, Edge, Chrome, SumatraPDF, an IDE")
         c.detail("preview pane). Close the viewer and re-run.")
         return 1
+
+    if args.quiet:
+        return 0
 
     # Report final dimensions for visibility. The relative-to-cwd display
     # path keeps the output uniform with build.py and snapshot_pdf.py.

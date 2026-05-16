@@ -1,0 +1,39 @@
+{
+  "_comment": "Cross-language constants. Read by build/_console.{py,js} and build/_env_contract.{py,js} at module init. Do not edit values here without considering the visual + functional impact across both runtimes; the snapshot test will catch user-visible regressions, but env-var name changes silently break the contract between processes. See _console.py and _env_contract.py for usage docs.",
+
+  "console": {
+    "_comment_ansi": "ANSI dim/reset sequences. \\u001b is ESC (0x1B). JSON does not support \\x; the \\u form is portable to both Python and Node JSON parsers.",
+    "RESET": "\u001b[0m",
+    "DIM": "\u001b[2m",
+
+    "_comment_symbols": "Status emoji. ⚠ and ℹ carry the U+FE0F variation selector to force emoji (not text/monochrome) presentation on terminals that default them otherwise.",
+    "SYM_OK": "✅",
+    "SYM_ERR": "❌",
+    "SYM_WARN": "⚠️",
+    "SYM_INFO": "ℹ️",
+
+    "_comment_banner": "Banner geometry: total width 70, including spaces around the label. '─── ' (4 columns) + label + ' ' (1) + tail = 70.",
+    "BANNER_WIDTH": 70,
+    "BANNER_LEAD": "─── ",
+
+    "_comment_indent": "Bullet lines render as (BULLET_INDENT) + (emoji, 2 cols) + ' ' + message. Detail text aligned under the message starts at column BULLET_INDENT + 3, which is 5 spaces.",
+    "BULLET_INDENT": "  ",
+    "DETAIL_INDENT": "     ",
+
+    "_comment_pad": "Label-value pairing for ok_pair / err_pair / etc. The value column starts after a colon + padding so a sequence of pair lines aligns vertically. 23 covers every label currently used.",
+    "LABEL_PAD_WIDTH": 23
+  },
+
+  "env_contract": {
+    "_comment": "Env-var NAMES (the strings used as os.environ.get() / process.env[...] keys), not their values. Values are documented at each consumer's read site since they carry domain-specific meaning.",
+
+    "_comment_data_source": "Selects which YAML data file the build consumes. 'default' → require data/resume_default.yml (error if missing). 'local' → require data/resume.local.yml (error if missing). unset → use local if present, else default (developer-friendly).",
+    "RESUME_DATA_SOURCE": "RESUME_DATA_SOURCE",
+
+    "_comment_skip_snapshot": "When '1', render.js skips the visual-regression snapshot step. Set by snapshot_pdf.py --update-all so the two intermediate builds (whose PDFs ARE the new fixtures) don't compare against the fixtures they're about to replace.",
+    "SKIP_SNAPSHOT": "SKIP_SNAPSHOT",
+
+    "_comment_suffix": "Free-form label appended to render.js's first phase banner so the user sees 'Tests (default data)' / 'Tests (local data)' at the top of each pass during a multi-source rebuild. Set by snapshot_pdf.py --update-all; unset in normal builds.",
+    "RESUME_PIPELINE_SUFFIX": "RESUME_PIPELINE_SUFFIX"
+  }
+}

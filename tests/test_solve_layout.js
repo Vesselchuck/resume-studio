@@ -1,5 +1,5 @@
 /**
- * test_solve_layout.js — Unit tests for scripts/solve_layout.js.
+ * test_solve_layout.js — Unit tests for build/solve_layout.js.
  *
  * The solver is a pure function. Tests feed synthetic measurements
  * (matching the shape produced by measure_dom.js) and assert the
@@ -15,55 +15,13 @@ const {
   sidebarBlockHeight,
   jobHeight,
   SolverError,
-} = require(path.resolve(__dirname, '..', 'scripts', 'solve_layout'));
+  MIN_JOB_BULLETS_ON_PAGE,
+  MIN_SIDEBAR_ITEMS_ON_ORIGIN,
+  MIN_SIDEBAR_ITEMS_ON_RECEIVER,
+  MAX_CONSECUTIVE_PUSHES,
+} = require(path.resolve(__dirname, '..', 'build', 'solve_layout'));
 
-
-// ─── Tiny test framework ────────────────────────────────────────
-let passed = 0;
-let failed = 0;
-const failures = [];
-
-function assertEq(actual, expected, name) {
-  const a = JSON.stringify(actual);
-  const e = JSON.stringify(expected);
-  if (a === e) {
-    passed++;
-    process.stdout.write('.');
-  } else {
-    failed++;
-    failures.push({ name, actual: a, expected: e });
-    process.stdout.write('F');
-  }
-}
-
-function assertThrows(fn, predicate, name) {
-  try {
-    fn();
-  } catch (err) {
-    if (predicate(err)) {
-      passed++;
-      process.stdout.write('.');
-      return;
-    }
-    failed++;
-    failures.push({ name, error: 'predicate failed', actual: err.message });
-    process.stdout.write('F');
-    return;
-  }
-  failed++;
-  failures.push({ name, error: 'expected throw, got success' });
-  process.stdout.write('F');
-}
-
-function test(name, fn) {
-  try {
-    fn();
-  } catch (err) {
-    failed++;
-    failures.push({ name, error: err.stack });
-    process.stdout.write('E');
-  }
-}
+const { assertEq, assertThrows, test, report } = require('./_framework');
 
 
 // ─── Helpers — synthesize measurement-shaped data ───────────────
@@ -325,7 +283,7 @@ test('main: job bridges across pages (2 bullets on origin, 1 on receiver)', () =
   // Available 140. Job whole = 30 + 120 = 150 (no fit).
   // Bridge: 30 + 40 = 70 ≤ 140 (1 bullet), 30 + 80 = 110 ≤ 140 (2 bullets ✓),
   //         30 + 120 = 150 > 140 (3 bullets fail). bestK = 2.
-  // Tail: 1 bullet on receiver (≥ MIN_JOB_BULLETS_ON_PAGE = 1).
+  // Tail: 1 bullet on receiver (≥ MIN_JOB_BULLETS_ON_PAGE).
   const s = summary(30, 50);
   const j = job('jbridge', 30, [40, 40, 40]);
   const result = solveMainColumn(
@@ -661,17 +619,19 @@ test('non-progressing: oversized LATER item also detected (not just first)', () 
 });
 
 
+// ─── Tunable freeze ─────────────────────────────────────────────
+// Pins the current widow/orphan policy. If any of these values
+// changes, this test will fail — forcing a deliberate review of
+// the bridging tests (which encode boundary scenarios around these
+// values) before the new policy ships. Update both the constant in
+// solve_layout.js AND this test in the same commit.
+test('tunables: widow/orphan policy is frozen at expected values', () => {
+  assertEq(MIN_JOB_BULLETS_ON_PAGE, 1, 'MIN_JOB_BULLETS_ON_PAGE');
+  assertEq(MIN_SIDEBAR_ITEMS_ON_ORIGIN, 3, 'MIN_SIDEBAR_ITEMS_ON_ORIGIN');
+  assertEq(MIN_SIDEBAR_ITEMS_ON_RECEIVER, 1, 'MIN_SIDEBAR_ITEMS_ON_RECEIVER');
+  assertEq(MAX_CONSECUTIVE_PUSHES, 2, 'MAX_CONSECUTIVE_PUSHES');
+});
+
+
 // ─── Report ─────────────────────────────────────────────────────
-console.log('');
-console.log(`${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  console.log('\nFailures:');
-  for (const f of failures) {
-    console.log(`  ${f.name}`);
-    if (f.error) console.log(`    error: ${f.error}`);
-    if (f.actual) console.log(`    actual:   ${f.actual}`);
-    if (f.expected) console.log(`    expected: ${f.expected}`);
-  }
-  process.exit(1);
-}
-process.exit(0);
+report();

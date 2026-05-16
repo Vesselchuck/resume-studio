@@ -41,6 +41,65 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.5.0] — 2026-05-16
+
+*Breaking: the PDF moved and was renamed, the build scripts moved, and a
+snapshot flag was renamed.*
+
+- **Changed — Breaking.** The PDF is no longer written to `print.pdf` in
+  the project root. Each build now writes two PDFs:
+  `dist/resume-color.pdf` and `dist/resume-grayscale.pdf`.
+- **Changed — Breaking.** The build scripts moved from `scripts/` to
+  `build/`, so every documented command changed with them, for example
+  `python build/snapshot_pdf.py`.
+- **Changed — Breaking.** `snapshot_pdf.py --update-both` is now
+  `--update-all`. `--update` now refreshes both variants for the current
+  data source.
+- **Changed — Breaking.** The styles moved from `assets/styles/` to
+  `styles/`, and the fonts from `assets/fonts/` to `fonts/`.
+- **Changed.** The snapshot fixtures are renamed to
+  `expected_resume-{color,grayscale}.pdf`, with a `.local.pdf` pair for
+  your data. There are four fixtures now; a missing one is created
+  automatically.
+- **Added.** A grayscale PDF. It is printed with four color tokens
+  swapped rather than with a CSS `filter`. A filter would turn the page
+  into one large image, about six times the file size, and shift the
+  layout.
+- **Added.** `build/_constants.json`, holding values the Python and Node
+  code share: console styling and environment variable names.
+- **Added.** `RESUME_PIPELINE_SUFFIX`, a label that `--update-all` adds to
+  the first log banner of each build it runs.
+- **Added.** The build fails if `dist/styles.css` is older than the Sass
+  it was compiled from. Running `python build/build.py` on its own skips
+  the Sass step, so that is when this catches a stale stylesheet.
+- **Added.** `dist/favicon.svg` showing the person's initials in the
+  accent color; Open Graph, `theme-color` and `robots noindex` tags; and,
+  on screens 1728px wide or more, pages shown side by side.
+- **Added.** Validation for `role`, `contact` and `meta.lang`.
+- **Added.** `crop_pdf.py --quiet`.
+- **Added.** Tests for the data loader, PDF metadata, accent reading and
+  cropping, plus a shared JavaScript test helper.
+- **Changed.** Jinja escapes HTML characters in every template.
+  Previously a few places were missed, including the page title, the
+  meta tags and the name.
+- **Changed.** `<html lang>` now comes from `meta.lang`. It used to be
+  hard-coded as `en`, so the HTML and the PDF could report different
+  languages.
+- **Changed.** `***triple asterisks***` are left as typed instead of
+  becoming bold.
+- **Changed.** Visual:
+  - All rules are 1pt.
+  - The top rule is gray.
+  - Bullets are small dots.
+  - Monochrome printing darkens more tokens.
+- **Changed.** `playwright` and `sass` are pinned to exact versions, and
+  setup uses `npm ci`.
+- **Changed.** `measurement.j2` uses the same macros as the final
+  template, so the heights the solver measures and the page it lays out
+  come from the same markup.
+- **Removed.** `tests/README.md`. Its content moved into the README.
+- **Fixed.** Sidebar link addresses are now HTML-escaped.
+
 ## [0.4.3] — 2026-05-10
 
 *Visual and accessibility adjustments; nothing new, nothing broken.*
@@ -211,6 +270,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.5.0]: #050--2026-05-16
 [0.4.3]: #043--2026-05-10
 [0.4.2]: #042--2026-05-10
 [0.4.1]: #041--2026-05-09

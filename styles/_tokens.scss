@@ -15,19 +15,39 @@
   --surface-page:   #ffffff;
   --text-primary:   #1a1a1a;
   --text-muted:     #555555;
+  --text-muted-soft:#666666;   /* one tier lighter than --text-muted.
+                                  Used for the gap-entry meta line so it
+                                  reads as softer than regular meta. In
+                                  the monochrome / force-grayscale paths
+                                  (see _print.scss) this collapses to
+                                  --text-muted's overridden value because
+                                  italic + smaller size + no bullets
+                                  already carry the gap-entry rank, and
+                                  a mid-grey at that size sits inside
+                                  laser-printer halftone territory. */
   --border-rule:    #d8d8d8;   /* thin separator rules between sections,
                                   date/location separators, etc. */
   --accent:         #2d4a3e;   /* deep slate-green; structural accent.
-                                  Applied to: top rule, section heading bars,
-                                  link interactions. Reserved for the single
-                                  top frame element + accents inside content;
-                                  NOT applied to the column divider (which
-                                  uses --border-rule instead) to keep the
-                                  green exclusive to the document's top
-                                  structural frame.
-                                  Luminance ≈ 20% — survives greyscale
-                                  conversion without a monochrome override. */
-  --accent-rule:    2pt;       /* shared thickness for all rules (top rule,
+                                  Applied to: section heading bars,
+                                  link interactions. All structural rules
+                                  (top rule, column divider, section
+                                  separators) render in --border-rule
+                                  so the accent stays exclusive to
+                                  content-level emphasis.
+
+                                  In the monochrome / force-grayscale
+                                  paths the accent is explicitly
+                                  overridden — NOT to its luminance
+                                  match (which would land at ~#434343
+                                  and place section headings LIGHTER
+                                  than the meta captions below them,
+                                  inverting hierarchy). The override
+                                  collapses headings to --text-primary
+                                  and lets typography (serif face,
+                                  14pt size, all-caps, letter-spacing)
+                                  carry the rank instead. See the
+                                  rationale block in _print.scss. */
+  --rule:    1pt;       /* shared thickness for all rules (top rule,
                                   column divider, section separator).
                                   Must be a whole-number pt value: fractional
                                   pt values (e.g. 1.5pt) land at non-integer
@@ -66,13 +86,7 @@
                                   (date, location), the role label,
                                   and contact rows. Quietly subordinated
                                   below body-level content. Variable
-                                  font; clean rendering at 9pt in print.
-                                  Previously this scale had a separate
-                                  8.5pt --size-small token — collapsed
-                                  into --size-caption because the 0.5pt
-                                  difference fell below the just-noticeable
-                                  difference threshold and added complexity
-                                  without perceivable hierarchy. */
+                                  font; clean rendering at 9pt in print. */
 
   /* Spacing scale — geometric ~1.4× steps, in rem so they scale
      with root font-size in print. Use these tokens for every gap
@@ -97,12 +111,8 @@
   /* SECTION RHYTHM — total visible distance between sibling sections
      separated by <hr class="section-sep">. Both columns have gap: 0
      so the hr margins carry the full budget with no flex gap to
-     subtract. Formula: margin-block = (rhythm - --accent-rule) / 2.
-     One token, one formula, unified across sidebar and main column.
-     Reduced from 35px to 26px after removing section heading underline
-     bars: the bars previously filled visual weight in the heading zone,
-     making 35px feel appropriate. Without them the heading text has no
-     anchor below it and the rhythm reads as excessive empty air.       */
+     subtract. Formula: margin-block = (rhythm - --rule) / 2.
+     One token, one formula, unified across sidebar and main column. */
   --section-rhythm: 26px;
 
   /* TYPOGRAPHY MICRO-TOKENS — values that recur in multiple places. */

@@ -39,7 +39,7 @@
  *   sidebarSeparatorHeight: same, for the sidebar's <hr>. Differs from
  *                           the main-col value because the rhythm calc
  *                           subtracts a different parent gap per context
- *                           (see assets/styles/_layout.scss .section-sep rules).
+ *                           (see styles/_layout.scss .section-sep rules).
  *
  * Inter-block spacing on a page = separatorHeight + 2 * blockGap
  * (the gap appears once on each side of the <hr>; use the column-
@@ -81,11 +81,13 @@ async function measurePageGeometry(page) {
     const page1Capacity = pageHeightPx - padTop - padBottom - headerOffset;
     const pageNCapacity = pageHeightPx - padTop - padBottom;
 
-    // Per-column separator: the rhythm calc subtracts a different parent
-    // gap in each context (--sp-lg in main-col, --sp-xl in sidebar), so
-    // the two HRs have different total heights for the same
-    // --section-rhythm token. Measure each column's separator
-    // independently and let the solver charge the right cost per column.
+    // Per-column separator height. Today both columns produce the
+    // same value because .section-sep uses one unified formula and
+    // both .sidebar and .main-col have gap: 0 (see styles/_layout.scss
+    // — the gap: 0 is a load-bearing invariant the solver relies on).
+    // We still measure each column independently so a future per-
+    // column rhythm override would propagate to the solver without
+    // any code change here.
     const measureHr = (el) => {
       if (!el) return 0;
       const sepCS = window.getComputedStyle(el);

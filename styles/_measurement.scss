@@ -1,6 +1,6 @@
 /* ─── MEASUREMENT MODE ─────────────────────────────────────────
    Activated when <body class="measurement-mode"> is set, i.e.
-   when scripts/build.py runs with --mode=measurement.
+   when build/build.py runs with --mode=measurement.
 
    The single .page in that document needs to grow tall enough to
    contain ALL content (no overflow clipping, no fixed height).

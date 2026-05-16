@@ -22,7 +22,7 @@ HTML escaping for special characters (& < >) is done via Jinja's
 built-in `e` (escape) filter at the template call sites.
 
 Run via `node render.js`, which calls this first; or directly with
-`python3 scripts/build.py` (run from project root).
+`python3 build/build.py` (run from project root).
 """
 
 import sys
@@ -31,7 +31,7 @@ import sys
 # before any other (non-builtin) import so child imports also
 # inherit the flag. Equivalent to running with `python -B` but
 # enforces the no-cache rule even for direct invocations like
-# `python scripts/build.py`.
+# `python build/build.py`.
 sys.dont_write_bytecode = True
 
 import os
@@ -41,18 +41,21 @@ import argparse
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, select_autoescape, StrictUndefined
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-# Local console helper (sibling module). Inserted at import time so
-# the same `c.ok()` / `c.err()` API is available everywhere.
+# Local sibling modules. Inserted at import time so the same `c.ok()`
+# / `c.err()` API and shared constants are available everywhere.
 sys.path.insert(0, str(Path(__file__).parent))
 import _console as c  # noqa: E402
+from _env_contract import ENV_RESUME_DATA_SOURCE  # noqa: E402
 
 
-ROOT = Path(__file__).parent.parent      # this script lives in scripts/
+ROOT = Path(__file__).parent.parent      # this script lives in build/
 DATA_DIR = ROOT / "data"
 TEMPLATES_DIR = ROOT / "templates"
 OUT_FILE = ROOT / "dist" / "index.html"
+FAVICON_FILE = ROOT / "dist" / "favicon.svg"
+TOKENS_FILE = ROOT / "styles" / "_tokens.scss"
 
 # Data-file precedence: local (real, gitignored) wins over the
 # committed placeholder. This lets the repo ship a template
@@ -84,9 +87,9 @@ def markdown_filter(text):
     """
     Minimal markdown for resume bullets: `**bold**` → `<strong>bold</strong>`.
 
-    Anything else is left as-is for the `typo` filter to handle. HTML
-    metacharacters in the input are NOT auto-escaped here — that's the
-    template's job (or the typo filter, for ampersands). The contract:
+    Anything else is left as-is. HTML metacharacters in the input are NOT
+    auto-escaped here — that's the template's job (Jinja's `e` filter runs
+    before `md` in the chain `bullet | e | md | safe`). The contract:
       • Input is plain text plus `**bold**` runs.
       • Output is HTML-safe to inject inside a <li> via `| safe`.
       • Any literal '<' or '>' in YAML source will pass through to the
@@ -94,12 +97,20 @@ def markdown_filter(text):
 
     Bold spans cannot cross newlines, cannot be empty (`****`), and the
     pattern is non-greedy so `**a** **b**` produces two distinct spans.
+
+    The negative lookarounds `(?<!\\*)` and `(?!\\*)` reject delimiters
+    that are immediately adjacent to a third asterisk. This stops
+    `***triple***` from bleeding to `*<strong>triple</strong>*` — three
+    asterisks are ambiguous (no convention for what they mean here) and
+    the safe thing is to leave the literal alone rather than emit
+    half-rendered output.
     """
     if text is None:
         return ""
     s = str(text)
-    # Non-greedy match; require at least one non-asterisk character inside.
-    return re.sub(r"\*\*([^*\n]+?)\*\*", r"<strong>\1</strong>", s)
+    # Non-greedy match; require at least one non-asterisk character inside;
+    # reject runs of 3+ asterisks via lookarounds.
+    return re.sub(r"(?<!\*)\*\*([^*\n]+?)\*\*(?!\*)", r"<strong>\1</strong>", s)
 
 
 def load_data():
@@ -112,18 +123,23 @@ def load_data():
       • RESUME_DATA_SOURCE=local   → require resume.local.yml (error if missing)
       • unset (default) → original behavior (local if present, else default)
 
-    The env var is consumed by snapshot_pdf.py --update-both to force a
+    The env var is consumed by snapshot_pdf.py --update-all to force a
     specific data source for each of the two builds it runs.
 
-    Stamps `_data_source` on the returned dict so downstream consumers
-    (notably the PDF metadata + snapshot test) can tell which file
-    backed this build. Values: 'local' or 'default'.
+    Returns a (data, source) tuple where `source` is 'local' or
+    'default'. Callers thread `source` explicitly into the PDF metadata
+    manifest. Previously this function stamped a `_data_source` field
+    on the returned dict, which (a) mutated the user-data dict so
+    iteration over its keys saw a phantom underscore-prefixed entry,
+    and (b) made the function's effect on its return value implicit.
+    Returning a tuple keeps the data dict clean and the contract
+    explicit.
     """
-    override = os.environ.get('RESUME_DATA_SOURCE', '').strip().lower()
+    override = os.environ.get(ENV_RESUME_DATA_SOURCE, '').strip().lower()
     if override == 'local':
         if not DATA_FILE_LOCAL.exists():
             fail(
-                f"RESUME_DATA_SOURCE=local but no local data file at "
+                f"{ENV_RESUME_DATA_SOURCE}=local but no local data file at "
                 f"{DATA_FILE_LOCAL.relative_to(ROOT)}"
             )
         path = DATA_FILE_LOCAL
@@ -131,14 +147,14 @@ def load_data():
     elif override == 'default':
         if not DATA_FILE_DEFAULT.exists():
             fail(
-                f"RESUME_DATA_SOURCE=default but no default data file at "
+                f"{ENV_RESUME_DATA_SOURCE}=default but no default data file at "
                 f"{DATA_FILE_DEFAULT.relative_to(ROOT)}"
             )
         path = DATA_FILE_DEFAULT
         source = 'default'
     elif override:
         fail(
-            f"invalid RESUME_DATA_SOURCE={override!r}; "
+            f"invalid {ENV_RESUME_DATA_SOURCE}={override!r}; "
             f"expected 'default', 'local', or unset"
         )
     elif DATA_FILE_LOCAL.exists():
@@ -161,17 +177,21 @@ def load_data():
             f"{path.relative_to(ROOT)} is empty or not a YAML "
             f"mapping at the top level (parsed as {type(data).__name__})."
         )
-    data['_data_source'] = source
-    return data
+    return data, source
 
 
-def derive_pdf_metadata(data):
+def derive_pdf_metadata(data, lang, data_source):
     """
     Derive authoritative PDF metadata from the resume data.
 
     Source of truth is `resume_default.yml` (or `resume.local.yml`); we don't
     duplicate. Title and author come from the name; subject from the
     description; keywords from the page-1 sidebar's "Key Skills" block.
+
+    `lang` and `data_source` are passed in explicitly by the caller
+    (build()) — both are resolved once at the top of the build and
+    threaded through every consumer, so there is exactly one place
+    that decides them.
 
     Returned values are written to `dist/pdf_meta.json` and consumed
     by `crop_pdf.py`, which stamps them into the final PDF's /Info
@@ -185,6 +205,9 @@ def derive_pdf_metadata(data):
     # Pull keywords from the sidebar's "Key Skills" block (id='key-skills'
     # if the convention holds; falls back to heading match).
     # Items may be plain strings or {group: "..."} dicts — skip dicts.
+    # Cap at 10: PDF /Keywords has no hard limit, but viewer UIs and
+    # search indexers truncate long lists aggressively; the first 10
+    # skills are what we care about being searchable.
     keywords = []
     try:
         for block in data['sidebar']['blocks']:
@@ -204,19 +227,113 @@ def derive_pdf_metadata(data):
         'author':   name,
         'subject':  description,
         'keywords': ', '.join(keywords),
-        # BCP-47 language tag for the document. Optional in YAML;
-        # defaults to en-US. Stamped into the PDF catalog as /Lang
-        # by crop_pdf.py — assistive tech (screen readers, refresh-
-        # able braille) reads this to pick pronunciation/voice.
-        'lang':     (data.get('meta', {}).get('lang') or 'en-US').strip(),
+        # BCP-47 language tag for the document. Resolved once at the
+        # top of build() and passed in. Stamped into the PDF catalog
+        # as /Lang by crop_pdf.py — assistive tech (screen readers,
+        # refreshable braille) reads this to pick pronunciation/voice.
+        'lang':     lang,
         # Whether the build used the placeholder template data or a
         # local override. Consumed by snapshot_pdf.py so the visual
         # regression test compares against the matching fixture.
-        'data_source': data.get('_data_source', 'default'),
+        'data_source': data_source,
         # maxPages cap from meta.maxPages — read by render.js to feed
         # the layout solver.
         'max_pages': data['meta']['maxPages'],
     }
+
+
+def resolve_lang(data: dict) -> str:
+    """
+    Resolve the document's BCP-47 language tag.
+
+    Single source of truth for the en-US fallback used when meta.lang is
+    absent or empty. Called exactly once per build, from build(), which
+    then threads the resolved value into:
+      • template.render(lang=…) — drives <html lang="…">
+      • derive_pdf_metadata(data, lang, …) — written into the PDF /Lang
+                                              catalog entry by crop_pdf.py
+
+    Keeping the default in one place — and resolving it exactly once
+    per build — ensures the HTML and PDF never disagree on the
+    document language.
+    """
+    return (data.get('meta', {}).get('lang') or 'en-US').strip()
+
+
+def read_accent() -> str:
+    """
+    Read the canonical --accent colour from styles/_tokens.scss.
+
+    Single source of truth: the SCSS token file is the design-system
+    canon for the accent. Other consumers that need the same value
+    (favicon SVG background, template's theme-color meta tag) read it
+    from here at build time instead of duplicating the literal.
+
+    This eliminates a drift surface that previously existed: before
+    centralization, `#2d4a3e` was hardcoded in three places; after
+    centralization there is exactly one literal in the codebase,
+    inside the SCSS declaration itself.
+
+    Returns the hex value with leading '#' (e.g. "#2d4a3e"). Fails
+    with a clear remediation message if the token file is missing or
+    doesn't define --accent.
+    """
+    if not TOKENS_FILE.exists():
+        fail(
+            f"{TOKENS_FILE.relative_to(ROOT)} not found — "
+            f"cannot determine accent colour for favicon and template."
+        )
+    source = TOKENS_FILE.read_text(encoding='utf-8')
+    # Match only the :root declaration (the first --accent encountered).
+    # Subsequent overrides under @media print and (monochrome) and
+    # html.force-grayscale are intentional context-specific re-definitions
+    # — the canonical value for non-CSS consumers (favicon SVG, theme-color)
+    # is the chromatic :root value, not the grayscale fallback.
+    m = re.search(r'--accent:\s*(#[0-9a-fA-F]+)\s*;', source)
+    if not m:
+        fail(
+            f"{TOKENS_FILE.relative_to(ROOT)} does not declare --accent "
+            f"with a literal hex value.\n"
+            f"Add `--accent: #xxxxxx;` to :root (or use a literal hex "
+            f"value at the canonical declaration site) and retry."
+        )
+    return m.group(1)
+
+
+def write_favicon(data, out_path, accent_hex):
+    """
+    Generate a minimal SVG favicon with the person's initials and
+    write it to `out_path`.
+
+    Initials are derived from `name.first` and `name.last` — first
+    letter of each, uppercased. For "Gaius Caesar" → "GC"; for
+    "Marcus Antonius" → "MA". Falls back to "?" if either name part
+    is missing or empty (shouldn't happen given schema validation
+    requires both, but guards anyway).
+
+    The SVG background is `accent_hex`, threaded in by the caller from
+    read_accent() so the favicon visually matches the document's
+    section-heading colour without duplicating the hex literal here.
+    """
+    first = (data.get('name', {}).get('first') or '').strip()
+    last  = (data.get('name', {}).get('last')  or '').strip()
+    initials = (first[:1] + last[:1]).upper() or '?'
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+        f'<rect width="16" height="16" rx="2" fill="{accent_hex}"/>'
+        f'<text x="8" y="12" font-family="system-ui, sans-serif" '
+        f'font-size="9" font-weight="600" fill="white" '
+        f'text-anchor="middle">{initials}</text>'
+        '</svg>\n'
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out_path.write_text(svg, encoding='utf-8')
+    except PermissionError:
+        fail(
+            f"Permission denied writing {out_path}.\n"
+            f"Close any program holding the file open and re-run."
+        )
 
 
 VALID_SECTION_TYPES = {"summary", "experience", "education"}
@@ -229,7 +346,21 @@ class SchemaError(Exception):
 
 
 def _validate_id(value, ctx):
-    """Common id-field validation: required string, kebab-case."""
+    """Validate id is a non-empty kebab-case string.
+
+    Called for sidebar block ids and job ids. The kebab-case constraint
+    is stylistic, not load-bearing: ids surface as HTML `id` attribute
+    values on rendered <article>/<section> elements and as keys in
+    placement.json for resolving placement entries back to source data,
+    but neither use technically requires the shape. Underscores,
+    camelCase, or other patterns would work mechanically — the rule
+    keeps ids consistent and URL-fragment-friendly without escaping
+    concerns. Relax it if a stronger reason emerges; nothing downstream
+    will break.
+
+    `ctx` is a human-readable path prefix (e.g. 'sidebar.blocks[3]')
+    used in any SchemaError to locate the offending field.
+    """
     if not isinstance(value, str) or not value:
         raise SchemaError(f"{ctx}: 'id' must be a non-empty string")
     if not ID_PATTERN.match(value):
@@ -245,17 +376,22 @@ def validate_data(data):
     with clear messages instead of as KeyError / StopIteration deep
     in template rendering.
 
-    Schema (Bunch 4):
-      • Top-level keys: name, meta, sidebar, mainColumn — all required
+    Schema:
+      • Top-level required keys: name, meta, sidebar, mainColumn
+      • Top-level optional keys: role (string), contact (mapping)
       • name has 'first' and 'last' string fields
-      • meta has 'description' (string) and 'maxPages' (positive int)
+      • role, if provided, is a string
+      • contact, if provided, is a mapping with a required `rows` list
+        (each row: non-empty `value`, optional `href`) and an optional
+        string `address`
+      • meta has 'description' (string), 'maxPages' (positive int),
+        and an optional 'lang' (string)
       • sidebar.blocks is a flat list; each block has a unique kebab-case 'id',
         a 'type' in VALID_SIDEBAR_BLOCK_TYPES, and a heading
       • mainColumn is a list of section dicts; each 'type' is in
         VALID_SECTION_TYPES; exactly one of each section type exists
       • experience.jobs is a list; each job has a unique kebab-case 'id'
         and either bullets (regular job) or gap=true (gap entry)
-      • No 'bulletsPage1'/'bulletsPage2' keys (auto-flow handles bridging)
 
     Raises SchemaError on the first violation found.
     """
@@ -271,6 +407,40 @@ def validate_data(data):
         if not isinstance(data["name"].get(key), str):
             raise SchemaError(f"'name.{key}' must be a string")
 
+    # Role (optional). Free-form subtitle rendered under the name; if
+    # provided must be a string. A non-string would render via Python's
+    # default str() conversion inside the page header — usually weird.
+    if "role" in data and not isinstance(data["role"], str):
+        raise SchemaError("'role' must be a string if provided")
+
+    # Contact (optional). If provided must be a mapping. The header
+    # template iterates `contact.rows` unconditionally once the contact
+    # block opens, so `rows` is required as soon as you opt in (use an
+    # empty list if you only want an address). Each row needs a non-
+    # empty `value`; `href` is optional but must be a string when set.
+    if "contact" in data and data["contact"] is not None:
+        contact = data["contact"]
+        if not isinstance(contact, dict):
+            raise SchemaError("'contact' must be a mapping")
+        if "address" in contact and not isinstance(contact["address"], str):
+            raise SchemaError("'contact.address' must be a string")
+        rows = contact.get("rows")
+        if not isinstance(rows, list):
+            raise SchemaError(
+                "'contact.rows' must be a list (use an empty list if "
+                "you want only an address)"
+            )
+        for i, row in enumerate(rows):
+            ctx = f"contact.rows[{i}]"
+            if not isinstance(row, dict):
+                raise SchemaError(
+                    f"{ctx}: must be a mapping with 'value' (and optional 'href')"
+                )
+            if not isinstance(row.get("value"), str) or not row["value"]:
+                raise SchemaError(f"{ctx}: 'value' must be a non-empty string")
+            if "href" in row and not isinstance(row["href"], str):
+                raise SchemaError(f"{ctx}: 'href' must be a string if provided")
+
     # Meta.
     if not isinstance(data["meta"], dict):
         raise SchemaError("'meta' must be a mapping")
@@ -281,6 +451,10 @@ def validate_data(data):
         raise SchemaError(
             f"'meta.maxPages' must be a positive integer; got {max_pages!r}"
         )
+    # meta.lang (optional). If provided must be a string — resolve_lang()
+    # calls .strip() on it, which would AttributeError on a non-string.
+    if "lang" in data["meta"] and not isinstance(data["meta"]["lang"], str):
+        raise SchemaError("'meta.lang' must be a string if provided")
 
     # Sidebar.
     if not isinstance(data["sidebar"], dict):
@@ -328,8 +502,8 @@ def validate_data(data):
         if required not in seen_types:
             raise SchemaError(f"mainColumn is missing required section type: {required!r}")
 
-    # Experience.jobs: every job has a unique kebab-case id; no
-    # legacy bulletsPage1/bulletsPage2 keys allowed.
+    # Experience.jobs: every job has a unique kebab-case id; gap
+    # entries skip bullets, regular jobs require a non-empty list.
     experience = next(s for s in data["mainColumn"] if s["type"] == "experience")
     if not isinstance(experience.get("jobs"), list) or not experience["jobs"]:
         raise SchemaError("'experience.jobs' must be a non-empty list")
@@ -349,37 +523,106 @@ def validate_data(data):
                     f"{ctx}: regular job {job['id']!r} must have a non-empty "
                     f"'bullets' list (or set 'gap: true' for a gap entry)"
                 )
-        # Reject legacy keys explicitly so the migration is explicit.
-        for legacy in ("bulletsPage1", "bulletsPage2"):
-            if legacy in job:
-                raise SchemaError(
-                    f"{ctx}: legacy key {legacy!r} is no longer supported; "
-                    f"use a single 'bullets' list (auto-flow handles bridging)"
-                )
 
 
 def check_no_module_collisions():
     """
-    Fail fast if any .py module name appears in both scripts/ and tests/.
+    Fail fast if any .py module name appears in both build/ and tests/.
 
     Python's import resolution gets confused when the same module name
     exists in two directories that are both reachable from sys.path,
     producing cryptic 'incorrectly imported' errors. This check surfaces
     such state before unittest tries to import anything.
     """
-    scripts_dir = ROOT / "scripts"
+    build_dir = ROOT / "build"
     tests_dir = ROOT / "tests"
-    if not scripts_dir.exists() or not tests_dir.exists():
+    if not build_dir.exists() or not tests_dir.exists():
         return
-    scripts_modules = {p.stem for p in scripts_dir.glob("*.py")}
+    build_modules = {p.stem for p in build_dir.glob("*.py")}
     tests_modules = {p.stem for p in tests_dir.glob("*.py")}
-    overlap = scripts_modules & tests_modules
+    overlap = build_modules & tests_modules
     if overlap:
         names = ", ".join(sorted(overlap))
         fail(
-            f"module name collision between scripts/ and tests/: {names}\n"
+            f"module name collision between build/ and tests/: {names}\n"
             f"This breaks Python's import resolution. Delete the duplicate(s) "
             f"in whichever directory shouldn't have them."
+        )
+
+
+# Tolerance window (in seconds) for check_stylesheet_freshness's mtime
+# comparison. 2s covers FAT32's worst-case mtime granularity plus
+# inter-process clock jitter and short cloud-sync delays, while a real
+# forgot-to-compile stale stylesheet is off by minutes to days and
+# trips the check regardless. See the function's docstring for the
+# full rationale.
+FRESHNESS_TOLERANCE_SECONDS = 2.0
+
+
+def check_stylesheet_freshness():
+    """
+    Fail fast if dist/styles.css is missing or significantly older
+    than its SCSS sources.
+
+    The build pipeline compiles SCSS in render.js step 1, before this
+    script runs — so the canonical `node render.js` path always passes
+    this check immediately. Direct invocations of build.py
+    (`python build/build.py ...`) skip the Sass step entirely; without
+    this check, they'd render an HTML that silently references a missing
+    or stale stylesheet and produce visually broken output that's
+    indistinguishable from a real layout bug.
+
+    Tolerance window
+    ────────────────
+    Mtime comparison uses a small tolerance (FRESHNESS_TOLERANCE_SECONDS)
+    because a freshly-written CSS can legitimately appear microseconds
+    OLDER than an SCSS source under several common conditions:
+      • FAT32 has 2-second mtime granularity (worst common case).
+      • ext3 has 1-second; NTFS is 100ns but writes through Node's
+        fs.writeFileSync don't always commit at full precision.
+      • Cloud sync agents (OneDrive, Dropbox, iCloud Drive) bump
+        mtimes of synced files at sync-completion time, which can
+        fall AFTER an unrelated write to the same volume.
+      • Some editors and IDE indexers touch files post-save.
+    A real "I forgot to recompile" stale CSS is off by minutes to days,
+    well past any tolerance worth setting, so the check still catches
+    its actual target while ignoring sub-second filesystem noise.
+
+    The check is two stat() calls per .scss file — negligible cost.
+    """
+    css_file = ROOT / "dist" / "styles.css"
+    styles_dir = ROOT / "styles"
+    sass_cmd = (
+        f"npx sass {styles_dir.relative_to(ROOT)}/styles.scss "
+        f"{css_file.relative_to(ROOT)}"
+    )
+    if not css_file.exists():
+        fail(
+            f"{css_file.relative_to(ROOT)} not found.\n"
+            f"build.py does not compile SCSS — `node render.js` does that as step 1.\n"
+            f"Run `node render.js` for the canonical flow, or compile manually:\n"
+            f"  {sass_cmd}"
+        )
+    css_mtime = css_file.stat().st_mtime
+    # Record (path, skew_seconds) for each genuinely-stale source so the
+    # error message can report the magnitude — small skews (< 1s) reveal
+    # a precision/sync artifact, large ones (minutes+) reveal real
+    # forgot-to-compile staleness.
+    stale = sorted(
+        (
+            (p.relative_to(ROOT), p.stat().st_mtime - css_mtime)
+            for p in styles_dir.glob("*.scss")
+            if p.stat().st_mtime - css_mtime > FRESHNESS_TOLERANCE_SECONDS
+        ),
+        key=lambda pair: -pair[1],  # largest skew first
+    )
+    if stale:
+        listing = "\n".join(f"  {p}  (+{skew:.1f}s)" for p, skew in stale)
+        fail(
+            f"{css_file.relative_to(ROOT)} is older than its SCSS sources:\n"
+            f"{listing}\n"
+            f"Recompile with `node render.js`, or:\n"
+            f"  {sass_cmd}"
         )
 
 
@@ -393,7 +636,8 @@ def build(mode='final'):
         fail(f"unknown build mode {mode!r}; expected 'final' or 'measurement'")
 
     check_no_module_collisions()
-    data = load_data()
+    check_stylesheet_freshness()
+    data, data_source = load_data()
     try:
         validate_data(data)
     except SchemaError as e:
@@ -410,13 +654,41 @@ def build(mode='final'):
     block_by_id = {b["id"]: b for b in data["sidebar"]["blocks"]}
     job_by_id = {j["id"]: j for j in experience["jobs"]}
 
+    # Canonical accent colour, read from the SCSS token file. Threaded
+    # into the template context (theme-color meta tag) and the favicon
+    # SVG so neither has to duplicate the hex literal. See read_accent's
+    # docstring for the centralization rationale.
+    accent = read_accent()
+
+    # Document language (BCP-47). Same single-source-of-truth pattern as
+    # accent: resolved once here, passed into both templates' <html lang>
+    # attribute and into derive_pdf_metadata for the PDF /Lang catalog
+    # entry. Without this, the HTML hardcoded "en" while the PDF used
+    # meta.lang, so a French user got an English-tagged HTML and a
+    # French-tagged PDF.
+    lang = resolve_lang(data)
+
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        autoescape=select_autoescape(
-            disabled_extensions=("j2",),
-            default_for_string=False,
-            default=False,
-        ),
+        # Autoescape is ON for every template extension. This is the
+        # single defense against an injected '&', '<', or '"' in the
+        # YAML data (resume names, descriptions, URLs) producing
+        # malformed HTML in <title>, <meta content="…">, or <a href="…">.
+        # Before the flip every `{{ var }}` had to be hand-written as
+        # `{{ var | e }}`, and several sites had been missed (<title>,
+        # meta author/description, og:* properties, the .name-first /
+        # .name-last spans). Flipping the default closes that whole
+        # category.
+        #
+        # Filter sites that need to emit literal HTML (the markdown
+        # filter expands `**bold**` into `<strong>` tags) MUST end the
+        # chain with `| safe` so autoescape doesn't re-escape the tags.
+        # In practice the only such chain is `bullet | e | md | safe`:
+        # the leading `| e` does real work (escapes '&' etc. before
+        # markdown_filter sees the text, which it would otherwise pass
+        # through raw), and `| safe` blocks the auto-escape that would
+        # otherwise hit `<strong>` and produce `&lt;strong&gt;`.
+        autoescape=True,
         undefined=StrictUndefined,
         trim_blocks=False,
         lstrip_blocks=False,
@@ -438,6 +710,8 @@ def build(mode='final'):
             experience=experience,
             education=education,
             sidebar_blocks=data["sidebar"]["blocks"],
+            accent=accent,
+            lang=lang,
         )
     else:
         # Final paginated build. Requires dist/placement.json (written
@@ -459,6 +733,16 @@ def build(mode='final'):
         c.ok_pair("Loaded placement",
                   f"{placement_path.relative_to(ROOT)} "
                   f"({n_pages} {page_word})")
+        # Per-page sidebar aria-label. Each page lists the headings of
+        # the (non-continuation) blocks it contains, joined by " and ".
+        # Computed here in plain Python instead of inside the template
+        # (where it lived as a side-effecting `headings.append()` loop).
+        for page in placement.get('pages', []):
+            page['sidebar_aria'] = ' and '.join(
+                block_by_id[entry['block_id']]['heading']
+                for entry in page.get('sidebar_blocks', [])
+                if not entry.get('continuation', False)
+            )
         template = env.get_template("resume.j2")
         rendered = template.render(
             name=data["name"],
@@ -471,6 +755,8 @@ def build(mode='final'):
             placement=placement,
             block_by_id=block_by_id,
             job_by_id=job_by_id,
+            accent=accent,
+            lang=lang,
         )
 
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -482,17 +768,13 @@ def build(mode='final'):
             f"Another program is holding the file open (most likely a browser tab\n"
             f"or editor previewing the rendered HTML). Close it and re-run."
         )
-    # NOTE: dist/styles.css is produced by Sass (compiled from
-    # assets/styles/styles.scss in render.js step 1), not copied here.
-    # Direct invocations of build.py (`python scripts/build.py ...`)
-    # without going through render.js will leave dist/styles.css
-    # missing or stale; the rendered HTML will reference a missing
-    # stylesheet. That's expected — direct invocations are a
-    # debugging path, not the canonical build.
+    # dist/styles.css is produced by Sass (compiled from
+    # styles/styles.scss in render.js step 1). The freshness
+    # of that file is verified up-front by check_stylesheet_freshness().
     # Emit PDF metadata manifest for crop_pdf.py to consume.
     # In measurement mode we still emit it so render.js can read
     # data_source consistently regardless of mode.
-    pdf_meta = derive_pdf_metadata(data)
+    pdf_meta = derive_pdf_metadata(data, lang, data_source)
     try:
         PDF_META_FILE.write_text(
             json.dumps(pdf_meta, ensure_ascii=False, indent=2) + "\n",
@@ -505,6 +787,11 @@ def build(mode='final'):
         )
     kb = len(rendered.encode('utf-8')) / 1024
     c.ok_pair("Wrote HTML", f"{OUT_FILE.relative_to(ROOT)} ({kb:.1f} KB)")
+    # Favicon — generated from the person's initials. Written in both
+    # measurement and final modes since the rendered HTML's <head>
+    # references it; opening dist/index.html with a missing favicon
+    # would show a 404 in dev tools.
+    write_favicon(data, FAVICON_FILE, accent)
     # Measurement mode is the first pass that produces pdf_meta.json;
     # final mode rewrites it (typically with identical content). Use
     # different verbs so the user can tell them apart in the log.

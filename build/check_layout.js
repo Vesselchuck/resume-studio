@@ -2,17 +2,23 @@
  * check_layout.js — Layout invariant assertions for the rendered HTML.
  *
  * Exports:
- *   • checkLayoutInvariants(page) — async function that takes a Playwright
- *     Page (already navigated to the resume HTML) and returns
- *     { ok, violations, rhythmMeasurements }. Does not throw.
+ *   • checkLayoutInvariants(page, options) — async function that takes
+ *     a Playwright Page (already navigated to the resume HTML) plus an
+ *     optional { expectedPageCount } override (defaults to
+ *     LAYOUT_CONSTANTS.EXPECTED_PAGE_COUNT). Returns { ok, violations,
+ *     rhythmMeasurements }. Does not throw.
  *
- * The three invariants checked:
+ * The four invariants checked:
  *   1. EXPECTED_PAGE_COUNT .page elements exist.
  *   2. Each .body-grid's bottom edge equals (page bottom − padding-bottom),
  *      so the column divider terminates at the print margin.
  *   3. Section rhythm — visible spacing between sibling .block elements
  *      separated by .section-sep — is identical across all instances
  *      (sidebar and main column).
+ *   4. No content overflow — each page's content fits within its
+ *      padding-bottom. The .page elements use overflow:hidden, so a
+ *      placement bug would otherwise silently clip content (invisible
+ *      until someone inspects the PDF).
  */
 
 const LAYOUT_CONSTANTS = Object.freeze({

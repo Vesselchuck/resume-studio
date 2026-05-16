@@ -22,13 +22,11 @@
      Measured from TTF metrics at 30pt:
        Newsreader:  0.027in ascender padding above cap-height
        Manrope:     0.144in
-       Montserrat:  ~0.10in (similar to Manrope)
 
-     The original code used margin-block-start: -0.05in to
-     compensate Montserrat. Newsreader's padding is small enough
-     (and further reduced by .name's line-height: 0.98 cropping
-     the line-box) that no compensation is needed — cap-height
-     aligns with the page-padding edge naturally with margin: 0.
+     Newsreader's padding is small enough (and further reduced by
+     .name's line-height: 0.98 cropping the line-box) that no
+     compensation is needed — cap-height aligns with the
+     page-padding edge naturally with margin: 0.
 
      IF YOU SWAP THE DISPLAY FONT: re-measure. Most sans faces
      and several serifs need ~ -0.05in here. Verify by rendering
@@ -90,11 +88,8 @@
 
 /* ─── SECTION HEADING ───────────────────────────────────── */
 /* No underline bar — spacing alone communicates section
-   boundaries. The previous 2.4em fixed-width bar produced
-   inconsistent coverage across headings of different lengths
-   (27% of "WORK EXPERIENCE", 40% of "KEY SKILLS") and read
-   as a template pattern. --section-rhythm carries the visual
-   separation load instead.                                   */
+   boundaries. --section-rhythm carries the visual separation
+   load.                                                       */
 .section-heading {
   font-family: var(--font-display);
   /* Auto opsz selection — see .name. At 14pt the browser picks
@@ -315,18 +310,24 @@
   font-size: var(--size-body);
   position: relative;
 }
-/* En-dash marker — positioned absolutely so it sits in the
-   padding-inline-start gutter without affecting line wrapping.
-   Color is --text-muted (not --accent) to keep the accent
-   reserved for structural elements (divider, heading bars,
-   top rule) where it reads as architecture rather than
-   decoration. At --size-body (10pt) a muted dash reads as
-   refined print design rather than default browser styling. */
+/* Dot marker — a 3×3px filled circle positioned absolutely in the
+   padding-inline-start gutter so it sits outside the text column and
+   doesn't affect line wrapping. Background is --text-muted (not
+   --accent) to keep the accent reserved for structural elements
+   (heading bars) where it reads as architecture rather than
+   decoration. `top: 0.6em` aligns the dot optically with the visual
+   centre of the line (between x-height and baseline) rather than
+   mathematically with x-height, which lets the small filled dot
+   read as a peer to the text instead of floating above it.       */
 .bullets li::before {
-  content: "\2013";           /* U+2013 EN DASH */
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-muted);
   position: absolute;
-  inset-inline-start: calc(-1 * var(--sp-xl));
-  color: var(--text-muted);
+  inset-inline-start: calc(-1 * var(--sp-lg));
+  top: 0.6em;
 }
 .bullets strong { font-weight: 600; }
 
@@ -334,22 +335,23 @@
 
 /* ─── GAP ENTRY ─────────────────────────────────────────────
    Non-employment periods (relocation, career break, etc.).
-   Uses explicit colour values rather than opacity to keep meta
+   Uses explicit colour tokens rather than opacity to keep meta
    text above WCAG AA contrast (4.5:1 on white) while still
    de-emphasising the entry one tier below regular jobs.
 
    Title colour is already set above via `.job--gap .entry-title`
-   at #555555 (7.46:1 on white). Meta gets its own slightly
-   lighter tone to widen the visual gap from regular meta.
+   using --text-muted (#555555, 7.46:1 on white). Meta uses
+   --text-muted-soft, one tier lighter, to widen the visual gap
+   from regular meta.
 
-     title  → #555555 → 7.46:1 on white (AA + AAA pass)
-     meta   → #666666 → 5.74:1 on white (AA pass)
+     title  → --text-muted      → #555555 → 7.46:1 (AA + AAA)
+     meta   → --text-muted-soft → #666666 → 5.74:1 (AA)
 
-   Previously used `opacity: 0.7` on the whole article which
-   compounded with the already-muted meta colour (#555 × 0.7 ≈
-   #878787, contrast 3.59 — failing AA Normal). Direct colour
-   assignment hits the same visual de-emphasis without the
-   accessibility cost.                                          */
+   Both tokens collapse to #333333 under @media print and
+   (monochrome) and on html.force-grayscale (see _print.scss):
+   the entry's italic title + no-bullets layout + smaller block
+   height carry the rank on paper without a tonal step, which
+   at this size would risk visible halftone on B&W laser. */
 .job--gap .entry-meta {
-  color: #666666;
+  color: var(--text-muted-soft);
 }
