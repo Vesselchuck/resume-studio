@@ -41,6 +41,14 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [0.5.1] — 2026-05-16
+
+*A new visible element, and no change to the interface.*
+
+- **Added.** A "Page N of M" footer at the bottom right of every page when
+  the resume runs to more than one page. It sits in the page's bottom
+  margin, so the layout solver doesn't have to allow room for it.
+
 ## [0.5.0] — 2026-05-16
 
 *Breaking: the PDF moved and was renamed, the build scripts moved, and a
@@ -270,6 +278,7 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+[0.5.1]: #051--2026-05-16
 [0.5.0]: #050--2026-05-16
 [0.4.3]: #043--2026-05-10
 [0.4.2]: #042--2026-05-10

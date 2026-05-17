@@ -88,6 +88,17 @@
         </div>
 
       </div>
+
+{%- if placement.pages | length > 1 %}
+      {#- Page marker — bottom-right of every page on a multi-page resume.
+          Suppressed for single-page output because "Page 1 of 1" is noise.
+          aria-hidden because the surrounding <article aria-label="Resume
+          page N"> already announces page transitions for screen readers;
+          the visible "Page N of M" is for sighted readers only. -#}
+      <footer class="page-footer entry-meta" aria-hidden="true">
+        Page {{ page.page_number }} of {{ placement.pages | length }}
+      </footer>
+{%- endif %}
     </article>
 
 {% endfor %}

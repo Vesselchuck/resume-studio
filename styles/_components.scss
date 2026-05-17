@@ -355,3 +355,32 @@
 .job--gap .entry-meta {
   color: var(--text-muted-soft);
 }
+
+
+/* ─── PAGE-MARKER FOOTER ─────────────────────────────────────
+   Renders bottom-right of every page on a multi-page resume.
+   Composes with .entry-meta to inherit caption size and muted
+   color — visually a sibling of the date·location meta lines
+   that already use the same typographic register.
+
+   Pinned to .page (position: relative) so it lives in the
+   page's bottom padding without consuming body-grid height.
+   The solver therefore doesn't need to subtract its height
+   from page capacity.
+
+   `inset-block-end: 0.25in` places it halfway into the
+   page's 0.5in padding — clear of typical laser-printer
+   non-printable margins (~0.17in worst case) while staying
+   visually anchored to the page rather than floating in the
+   body. `inset-inline-end: var(--page-margin)` anchors the
+   marker's right edge with the contact strip on page 1, so
+   the page's right side acquires a consistent meta-info
+   rail: contact info (top-right) to page marker (bottom-
+   right). The left side is already heavy with the sidebar
+   column; placing the footer right rather than left balances
+   the page's visual weight rather than piling it up.       */
+.page-footer {
+  position: absolute;
+  inset-block-end: 0.25in;
+  inset-inline-end: var(--page-margin);
+}

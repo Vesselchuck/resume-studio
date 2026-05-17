@@ -168,19 +168,19 @@ sidebar:
         - Nullam Maximus Dolor
         - Nullam Posuere Aliquet
         - In Maximus Justo Nec
-        - Aliquam Ac Diam Quis
         - group: "Aliquam Non"
+        - Aliquam Ac Diam Quis
         - Pellentesque Egestas Turpis
         - Suspendisse Non Turpis
         - Quisque Ut Eleifend Massa
+        - group: "Vestibulum Ante"
         - Nullam Sed Neque Nulla
         - Morbi Placerat Orci
         - Morbi Pharetra Blandit
-        - group: "Vestibulum Ante"
         - In Cursus Libero Vitae
         - Morbi Ac Tortor Mauris
-        - Fusce Pharetra Sodales
         - group: "Donec Justo"
+        - Fusce Pharetra Sodales
         - Sed Quis Imperdiet Magna
         - Vestibulum A Est Non
         - Aliquam Vehicula Blandit
@@ -190,9 +190,6 @@ sidebar:
         - Cras Blandit Orci Lectus
         - Duis Viverra Varius Dolor
         - Curabitur Pharetra Leo Quam
-        - Nam Tincidunt Enim
-        - Integer Dignissim Tempor
-        - Proin Posuere Nulla
 
     - id: certifications
       type: list
@@ -216,7 +213,6 @@ sidebar:
         - In Tincidunt Dui Viverra
         - Nullam Porta Consectetur
         - Consequat In Lacinia Mi Vitae
-        - Vivamus Quis Tempus Purus
 
 
 # ─── Main column (the wide right side of the page) ───────────────
@@ -328,6 +324,7 @@ mainColumn:
         bullets:
           - "Maecenas vel interdum nunc. Integer ac arcu sagittis, iaculis ipsum in, tristique leo. Vestibulum ut risus non nunc malesuada pulvinar."
           - "Curabitur sed efficitur risus, eu eleifend turpis. Fusce bibendum ex mauris, et tempus eros bibendum quis. Aliquam egestas tortor ac."
+          - "Curabitur vehicula dapibus mauris, vel imperdiet diam sagittis eu. Praesent tempus feugiat lorem, sit amet ultrices enim cursus eu. Phasellus."
 
       - id: aenean
         title: Aenean consectetur, Morbi massa
@@ -337,7 +334,6 @@ mainColumn:
         bullets:
           - "Maecenas euismod, tellus sed laoreet laoreet, orci lacus sodales augue, eget facilisis velit eros a ante. Nulla condimentum lacus in."
           - "Aliquam nisi mauris, venenatis ut vehicula sit amet, vulputate ut massa. Duis in fringilla nibh. Maecenas diam magna, blandit ut."
-          - "Integer faucibus scelerisque metus, vitae pharetra lorem tempus id. Donec sollicitudin sapien magna, in tincidunt dui viverra. Nullam porta."
 
       - id: vivamus-vulputate
         title: Vivamus vulputate auctor, Nulla pharetra
