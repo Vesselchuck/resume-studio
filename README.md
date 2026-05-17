@@ -1,10 +1,12 @@
 # Resume
 
-Version 0.5.0. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+Version 0.5.1. See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 Single-source-of-truth resume pipeline. Edit YAML, get a pixel-faithful
 US Letter PDF in two variants (full-color and grayscale). Page
 placement is computed automatically — no manual page-break management.
+Multi-page resumes get a "Page N of M" footer at the bottom right of
+each page.
 
 ## What it does
 
@@ -18,9 +20,10 @@ placement is computed automatically — no manual page-break management.
    on which page, including bridging (a job's bullets split across
    pages, or a sidebar list split across pages).
 5. Renders the final paginated HTML against the solved placement.
-6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
-   (8.5×11 in), stamps PDF metadata and language for accessibility.
-7. Pixel-diffs each variant against a snapshot fixture to catch
+6. Prints a color and a grayscale PDF via Playwright/Chromium, crops
+   each to exact US Letter (8.5×11 in), and stamps PDF metadata and
+   language for accessibility.
+7. Pixel-diffs each variant against a committed snapshot to catch
    accidental visual changes.
 
 The outputs: `dist/resume-color.pdf` and `dist/resume-grayscale.pdf`.
@@ -107,35 +110,27 @@ snapshot test picks the matching fixtures.
 
 ## What you can change in the YAML
 
-- **Personal info** — `name.first`, `name.last`; an optional `role`
-  (a short line under the name); an optional `contact` block with an
-  `address` and a list of `rows` (each a `value` plus an optional
-  `href`, such as `tel:` or `mailto:`), shown at the top right of
-  page 1.
+- **Personal info** — `name.first`, `name.last`, an optional `role`
+  line under the name, and an optional `contact` block (`address` plus
+  `rows` of `value` and optional `href`) shown in the page header.
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
   Each block has a kebab-case `id` (must be unique), a `type`
-  (`details` or `list`), a `heading`, and content. The first block
+  (`details` or `list`), a `heading`, and content (`rows` for
+  `details`, `items` for `list`). `list` items can include
+  `- group: "..."` entries, shown as subheadings. The first block
   with `id: key-skills` (or heading "Key Skills") drives the PDF's
-  /Keywords metadata (its first 10 plain items). In `list` blocks, an
-  item written as `- group: "…"` becomes a subheading inside the list
-  and is left out of the keywords.
+  /Keywords metadata.
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
-  `mainColumn[experience].jobs`. Each job needs a unique kebab-case
-  `id` and either a `bullets` list or `gap: true` (a gap entry, such
-  as a career break, with no bullets).
+  `mainColumn[experience].jobs`. A job with `gap: true` (and no
+  `location` or `bullets`) marks a non-employment period.
 - **Bullets** — add or remove freely under each job's `bullets:` list.
-  Bullets (and the summary text) support `**bold**` markdown;
-  everything else is treated as plain text, including
-  `***triple asterisks***`, which are left as typed. The layout solver decides where page breaks land.
-- **Description** — `meta.description` (required) is used for the
-  page's meta description and the PDF's subject.
-- **Page cap** — `meta.maxPages` (required, a positive integer; the
-  placeholder uses 10). Lower it to force tighter layouts; the build
-  fails clearly if content can't fit.
-- **Language** — `meta.lang: en-US` (BCP-47, optional; defaults to
-  `en-US`). Drives the document's `<html lang>` and the PDF's `/Lang`
-  catalog entry.
+  Bullets (and the summary text) support `**bold**` markdown; everything else is treated as
+  plain text. The layout solver decides where page breaks land.
+- **Page cap** — `meta.maxPages: 10` is the default. Lower it to force
+  tighter layouts; the build fails clearly if content can't fit.
+- **Language** — `meta.lang: en-US` (BCP-47). Drives the document's
+  `<html lang>` and the PDF's `/Lang` catalog entry.
 
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
@@ -146,7 +141,7 @@ Running `node render.js` writes everything to `dist/`:
 
 - `dist/index.html` — the rendered HTML (final mode by default)
 - `dist/styles.css` — compiled from `styles/styles.scss` via Sass
-- `dist/favicon.svg` — the person's initials in the accent color
+- `dist/favicon.svg` — favicon with the initials in the accent color
 - `dist/pdf_meta.json` — derived PDF metadata + data source identifier
 - `dist/placement.json` — the solver's per-page placement decisions
 - `dist/resume-color.pdf` — final color PDF (US Letter)
@@ -163,16 +158,15 @@ All of `dist/` is gitignored.
 │                             data file + its private fixtures.
 ├── LICENSE                   MIT license for project code (font files
 │                             under fonts/ are OFL 1.1 — see License section).
+├── CHANGELOG.md              Release history.
 ├── README.md                 This file.
-├── CHANGELOG.md              What changed in each release.
 ├── package.json              Node dependencies (playwright, sass).
 ├── package-lock.json         Exact-pinned lockfile for npm ci.
 ├── render.js                 Build orchestrator (11-phase pipeline, 0–10).
 ├── requirements.txt          Python dependencies (exact-pinned).
 ├── data/
-│   ├── resume_default.yml    Placeholder data (Gaius Caesar;
-│   │                         committed).
-│   └── resume.local.yml      Your own data (gitignored; absent until you
+│   ├── resume_default.yml    Placeholder data (committed).
+│   └── resume.local.yml      Real data (gitignored; absent until you
 │                             create it — see "Editing your resume").
 ├── styles/                   Sass source — compiled to dist/styles.css.
 │   ├── styles.scss           Entry point (@use's the partials).
@@ -214,14 +208,12 @@ All of `dist/` is gitignored.
     ├── test_crop_pdf.py                 PDF cropping + /Lang stamping.
     ├── test_solve_layout.js             Layout solver.
     ├── test_check_layout.js             Layout invariants (Playwright).
-    └── fixtures/                        Snapshot fixtures. A missing one is
+    └── fixtures/                        Snapshot fixtures; a missing one is
                                          created on the next build.
         ├── expected_resume-color.pdf            Snapshot (placeholder data, committed).
         ├── expected_resume-grayscale.pdf        Snapshot (placeholder data, committed).
-        ├── expected_resume-color.local.pdf      Snapshot (local data, gitignored;
-        │                                        absent until you build with it).
-        ├── expected_resume-grayscale.local.pdf  Snapshot (local data, gitignored;
-        │                                        absent until you build with it).
+        ├── expected_resume-color.local.pdf      Snapshot (local data, gitignored).
+        ├── expected_resume-grayscale.local.pdf  Snapshot (local data, gitignored).
         └── diff_*_pageN.png                     Generated on failure (gitignored).
 ```
 
@@ -236,9 +228,9 @@ All of `dist/` is gitignored.
 5.  Build final HTML against the placement
 6.  Reload the final HTML
 7.  Check layout invariants (page count, divider, rhythm, overflow)
-8.  Print to PDF: color, then grayscale
-9.  Crop each to US Letter, stamp metadata + /Lang
-10. Snapshot test (auto-bootstraps any missing fixture)
+8.  Print to PDF (color, then grayscale)
+9.  Crop each PDF to US Letter, stamp metadata + /Lang
+10. Snapshot test (auto-bootstraps missing fixtures on first build)
 ```
 
 Steps 0, 7, and 10 act as gates — the build stops if any of them fail.
@@ -311,7 +303,7 @@ node build/run_tests.js
 doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
 It runs automatically as part of `node render.js` (step 10). It
 rasterizes the freshly-built `dist/resume-color.pdf` and
-`dist/resume-grayscale.pdf`, compares each page-by-page to its
+`dist/resume-grayscale.pdf`, compares each page-by-page to a committed
 fixture, and fails the build if visible pixels changed beyond the
 configured tolerance in either variant.
 
@@ -334,18 +326,15 @@ Each fixture matches the data file that produced it. There is no
 "shared" fixture — that would mean comparing one data set's render
 against another's pixels, which is meaningless.
 
-#### First build (missing fixtures)
+#### First build (no fixtures yet)
 
 ```
 node render.js
 ```
 
-The two placeholder-data fixtures are committed. The first time you
-build with `data/resume.local.yml`, its two `.local.pdf` fixtures don't
-exist yet: the snapshot step auto-bootstraps any missing fixture from
-the current `dist/resume-*.pdf` and prints a notice. Subsequent builds
-diff against the fixtures. Inspect the PDFs visually before relying on
-them.
+The snapshot step auto-bootstraps any missing fixture from the current
+`dist/resume-*.pdf` and prints a notice. Subsequent builds diff against
+the fixtures. Inspect the PDFs visually before committing them.
 
 #### Refreshing after an intentional change
 
@@ -377,14 +366,8 @@ The local fixtures stay gitignored — they live only on your machine.
 
 #### Running snapshot test on its own
 
-```bash
-# macOS / Linux
-python build/snapshot_pdf.py
 ```
-
-```cmd
-:: Windows
-py build\snapshot_pdf.py
+py build/snapshot_pdf.py
 ```
 
 Useful when iterating on tolerances or inspecting a regression without
@@ -411,9 +394,9 @@ Environment variables that affect the build:
 |                            | rendered column heights (developer diagnostic).        |
 | `SKIP_SNAPSHOT=1`          | Skip the visual regression step (used internally by    |
 |                            | `--update-all`).                                       |
-| `RESUME_PIPELINE_SUFFIX`   | Label appended to the first phase heading of each      |
-|                            | build during `--update-all`, so you can see which data |
-|                            | source is being processed.                             |
+| `RESUME_PIPELINE_SUFFIX`   | Label appended to the first phase heading during       |
+|                            | `--update-all` so you can see which data source is     |
+|                            | being processed.                                       |
 | `NO_COLOR` / `FORCE_COLOR` | Control ANSI output (default: auto-detect from TTY).   |
 
 ## Requirements
@@ -526,7 +509,7 @@ should not happen with reasonable content.
 
 **The build fails with "exceeds maxPages".**
 Your content doesn't fit in the configured cap. Either increase
-`meta.maxPages` in the YAML (the placeholder uses 10) or trim content. The error
+`meta.maxPages` in the YAML (default is 10) or trim content. The error
 identifies which column ran out of pages.
 
 **`pip install -r requirements.txt` fails to install Pillow on a new Python version.**
@@ -555,12 +538,6 @@ produces the wrong output, check that the woff2 files exist and that
 the templates haven't been edited to reference an external font URL.
 The build deliberately does NOT use Google Fonts CDN (see "Why
 vendored fonts" above).
-
-**The build fails with "dist/styles.css is older than its SCSS sources".**
-You edited a file under `styles/` and then ran `python build/build.py`
-on its own, which doesn't compile Sass. Run `node render.js` (which
-compiles Sass first), or compile manually with
-`npx sass styles/styles.scss dist/styles.css`.
 
 **Where do I put real resume data without committing it?**
 Put it in `data/resume.local.yml`. That file is gitignored; the build
