@@ -221,7 +221,7 @@ def main() -> int:
     parser.add_argument(
         '--quiet', action='store_true',
         help="Suppress the success-summary lines (Cropped, Stamped metadata). "
-             "Errors and warnings still print. Used by render.js's dual-PDF "
+             "Errors and warnings still print. Used by resume.js's dual-PDF "
              "flow to avoid emitting identical summary lines twice — the "
              "first crop invocation runs normally, the second runs with "
              "--quiet so only the per-variant 'Wrote PDF' lines vary.",

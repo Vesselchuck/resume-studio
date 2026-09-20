@@ -1,39 +1,60 @@
 {
-  "_comment": "Cross-language constants. Read by build/_console.{py,js} and build/_env_contract.{py,js} at module init. Do not edit values here without considering the visual + functional impact across both runtimes; the snapshot test will catch user-visible regressions, but env-var name changes silently break the contract between processes. See _console.py and _env_contract.py for usage docs.",
-
+  "_comment": "Cross-language constants. Read by build/_console.{py,js}, build/_env_contract.{py,js} and build/_output_name.{py,js} at module init. Do not edit values here without considering the visual + functional impact across both runtimes; the snapshot test will catch user-visible regressions, but env-var name changes silently break the contract between processes. See _console.py and _env_contract.py for usage docs.",
   "console": {
     "_comment_ansi": "ANSI dim/reset sequences. \\u001b is ESC (0x1B). JSON does not support \\x; the \\u form is portable to both Python and Node JSON parsers.",
     "RESET": "\u001b[0m",
     "DIM": "\u001b[2m",
-
     "_comment_symbols": "Status emoji. ⚠ and ℹ carry the U+FE0F variation selector to force emoji (not text/monochrome) presentation on terminals that default them otherwise.",
     "SYM_OK": "✅",
     "SYM_ERR": "❌",
     "SYM_WARN": "⚠️",
     "SYM_INFO": "ℹ️",
-
     "_comment_banner": "Banner geometry: total width 70, including spaces around the label. '─── ' (4 columns) + label + ' ' (1) + tail = 70.",
     "BANNER_WIDTH": 70,
     "BANNER_LEAD": "─── ",
-
     "_comment_indent": "Bullet lines render as (BULLET_INDENT) + (emoji, 2 cols) + ' ' + message. Detail text aligned under the message starts at column BULLET_INDENT + 3, which is 5 spaces.",
     "BULLET_INDENT": "  ",
     "DETAIL_INDENT": "     ",
-
     "_comment_pad": "Label-value pairing for ok_pair / err_pair / etc. The value column starts after a colon + padding so a sequence of pair lines aligns vertically. 23 covers every label currently used.",
     "LABEL_PAD_WIDTH": 23
   },
-
   "env_contract": {
     "_comment": "Env-var NAMES (the strings used as os.environ.get() / process.env[...] keys), not their values. Values are documented at each consumer's read site since they carry domain-specific meaning.",
-
-    "_comment_data_source": "Selects which YAML data file the build consumes. 'default' → require data/resume_default.yml (error if missing). 'local' → require data/resume.local.yml (error if missing). unset → use local if present, else default (developer-friendly).",
+    "_comment_data_source": "Selects which YAML data file the build consumes. 'default' → require data/resume_default.yml, the shipped placeholder (error if missing). 'mine' → require data/resume.yml, your real resume (error if missing). unset → use yours if present, else the placeholder.",
     "RESUME_DATA_SOURCE": "RESUME_DATA_SOURCE",
-
-    "_comment_skip_snapshot": "When '1', render.js skips the visual-regression snapshot step. Set by snapshot_pdf.py --update-all so the two intermediate builds (whose PDFs ARE the new fixtures) don't compare against the fixtures they're about to replace.",
+    "_comment_data_file": "An explicit data file to read, overriding RESUME_DATA_SOURCE and the mine/default search entirely. Absolute, or relative to the project root. Exists so a tool can preview an arbitrary file WITHOUT copying it over data/resume.yml — reading a file and replacing someone's file are very different things, and only one of them was ever wanted. LETTER_DATA_FILE is the same for build_letter.py.",
+    "RESUME_DATA_FILE": "RESUME_DATA_FILE",
+    "LETTER_DATA_FILE": "LETTER_DATA_FILE",
+    "_comment_skip_snapshot": "When '1', resume.js skips the visual-regression snapshot step. Set by snapshot_pdf.py --update-all so the two intermediate builds (whose PDFs ARE the new fixtures) don't compare against the fixtures they're about to replace.",
     "SKIP_SNAPSHOT": "SKIP_SNAPSHOT",
-
-    "_comment_suffix": "Free-form label appended to render.js's first phase banner so the user sees 'Tests (default data)' / 'Tests (local data)' at the top of each pass during a multi-source rebuild. Set by snapshot_pdf.py --update-all; unset in normal builds.",
-    "RESUME_PIPELINE_SUFFIX": "RESUME_PIPELINE_SUFFIX"
+    "_comment_suffix": "Free-form label appended to resume.js's first phase banner so the user sees 'Tests (default data)' / 'Tests (my data)' at the top of each pass during a multi-source rebuild. Set by snapshot_pdf.py --update-all; unset in normal builds.",
+    "RESUME_PIPELINE_SUFFIX": "RESUME_PIPELINE_SUFFIX",
+    "_comment_variants": "Which PDF variants a build produces. Comma-separated, from 'color' and 'grayscale'. Unset means both, which is what the CLI has always done and what the snapshot fixtures assume. Studio sets it from its per-document checkboxes. A variant that is not built has its dist/ file REMOVED, so a stale PDF from an earlier both-variant build can never be mistaken for a fresh one by the snapshot test or the app.",
+    "RESUME_VARIANTS": "RESUME_VARIANTS",
+    "_comment_snapshot": "Whether a build checks its PDFs against the committed fixtures. 'off' (the default) skips the check entirely. 'on' runs it and REPORTS a difference without failing — the PDFs are written before the snapshot runs, so a difference is news about the document, not a reason to withhold it. 'strict' restores the original behavior of failing the build, for anyone wiring this into CI. SKIP_SNAPSHOT=1 still forces a skip regardless.",
+    "RESUME_SNAPSHOT": "RESUME_SNAPSHOT",
+    "_comment_tests": "Whether a build runs the unit suites before producing anything. 'on' (the default) keeps `npm run resume` honest, because from a terminal you may have just changed code. 'off' skips straight to the build, which is what Studio asks for: editing a bullet does not change the layout solver, and ~9s of proving that it still works is a tax on every save. The checks that validate YOUR data — validate_data, the layout invariants, the maxPages ceiling — live in the build itself and always run.",
+    "RESUME_TESTS": "RESUME_TESTS"
+  },
+  "output_name": {
+    "_comment": "What the finished PDFs in dist/ are called. Read by build/_output_name.{py,js}. The name is derived from the profile's name.first / name.last, so it is the one part of the build whose output filenames depend on your data — see _output_name.py for the derivation and why only Python performs it.",
+    "_comment_doc_suffix": "The trailing word(s) identifying the document, appended after the person's name. Keyed by pipeline variant ('resume' / 'letter'). Also the whole stem when no usable name is available, so each value must stand alone as a filename.",
+    "DOC_SUFFIX": {
+      "resume": "Resume",
+      "letter": "Cover_Letter"
+    },
+    "_comment_separator": "Joins name parts to each other and to DOC_SUFFIX. Stripped out of the name parts themselves, so it cannot appear inside one and the stem's structure stays unambiguous.",
+    "SEPARATOR": "_",
+    "_comment_grayscale": "Appended to the stem for the black-and-white variant. The color variant takes the bare stem, because it is the file you send out most often and deserves the clean name. It sits after DOC_SUFFIX, which always ends the stem, so it can share the separator without becoming ambiguous.",
+    "GRAYSCALE_SUFFIX": "_Grayscale",
+    "_comment_retired_grayscale": "Grayscale suffixes this project has used before. Only _output_name.js reads them, and only to widen the prune pattern, so a PDF written under an older spelling is cleaned up by the next build instead of being stranded in dist/ under a name nothing recognizes.",
+    "RETIRED_GRAYSCALE_SUFFIXES": ["-grayscale"],
+    "_comment_max_part": "Per-name-part character cap. Windows' 260-char path limit is the real constraint; two parts plus a suffix plus the dist/ prefix stays far inside it at 64 each.",
+    "MAX_PART": 64,
+    "_comment_legacy": "Filenames this project used before outputs were named after you. Pruned from dist/ after a successful build so an old resume-color.pdf cannot be mistaken for today's output — by you, by the Studio tray, or by anything that globs the directory.",
+    "LEGACY": {
+      "resume": ["resume-color.pdf", "resume-grayscale.pdf"],
+      "letter": ["letter-color.pdf", "letter-grayscale.pdf"]
+    }
   }
 }

@@ -1,0 +1,299 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "resume.schema.json",
+  "title": "Resume data",
+  "description": "The single source of truth for your resume. build/build.py reads this, measures it in a browser, solves the page layout and prints the PDF. You never edit HTML.",
+  "type": "object",
+  "required": ["sidebar", "mainColumn"],
+  "properties": {
+    "name": {
+      "type": "object",
+      "description": "Your name, split in two because the design styles them differently — the last name is set bolder than the first. Optional here: if data/_profile.yml supplies it, omit it and this file inherits it. The build still fails if neither provides one.",
+      "required": ["first", "last"],
+      "additionalProperties": false,
+      "properties": {
+        "first": { "type": "string", "description": "Given name, shown in the lighter weight." },
+        "last": { "type": "string", "description": "Family name, shown bolder." }
+      }
+    },
+
+    "role": {
+      "type": "string",
+      "description": "Optional subtitle under your name — usually the role you are applying for. Delete the line entirely for no subtitle."
+    },
+
+    "contact": {
+      "type": "object",
+      "description": "Contact details, rendered top-right on page 1. Usually lives in data/_profile.yml instead, since it is the same on every application. Setting it here overrides that file entirely — including the whole `rows` list, which replaces rather than adds to it.",
+      "required": ["rows"],
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Shown on its own line. Usually just 'City, State' — a street address is rarely wanted on a resume."
+        },
+        "rows": {
+          "type": "array",
+          "description": "Clickable contact lines. Use an empty list if you want only an address.",
+          "items": { "$ref": "#/definitions/contactRow" }
+        }
+      }
+    },
+
+    "meta": {
+      "type": "object",
+      "description": "Document-level settings. These reach the PDF's metadata and the layout solver, not the visible page. 'lang' and 'maxPages' normally come from data/_profile.yml; 'description' names the target role, so it belongs to this document.",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "One sentence, stamped into the PDF's metadata. Some applicant tracking systems read it."
+        },
+        "maxPages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The hard ceiling the layout solver works under. It will fit your content into this many pages or fail loudly — it will never silently truncate. Normally omitted here and inherited from data/_profile.yml; set it here only to override that for this one document."
+        },
+        "lang": {
+          "type": "string",
+          "description": "BCP 47 language tag, e.g. 'en-US'. Stamped into the PDF so screen readers pronounce it correctly.",
+          "examples": ["en-US", "en-GB", "ru-RU"]
+        }
+      }
+    },
+
+    "sidebar": {
+      "type": "object",
+      "description": "The narrow left column. Blocks flow down it and split across pages automatically.",
+      "required": ["blocks"],
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Sidebar blocks, rendered top to bottom in this order.",
+          "items": { "$ref": "#/definitions/sidebarBlock" }
+        }
+      }
+    },
+
+    "mainColumn": {
+      "type": "array",
+      "description": "The wide right column. Exactly one summary, one experience and one education section, in whatever order you list them.",
+      "minItems": 3,
+      "items": { "$ref": "#/definitions/section" }
+    }
+  },
+
+  "definitions": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Kebab-case identifier: lowercase letters and digits, single hyphens between. Must be unique. It becomes the HTML id and the key the layout solver uses to place this entry, so changing it invalidates a solved layout.",
+      "examples": ["key-skills", "acme-corp", "transition-gap"]
+    },
+
+    "contactRow": {
+      "type": "object",
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The text people see."
+        },
+        "href": {
+          "type": "string",
+          "description": "What clicking it does. 'tel:+15551234567' opens the dialer, 'mailto:you@example.com' opens mail, 'https://...' opens a site.",
+          "examples": ["tel:+15551234567", "mailto:you@example.com", "https://example.com"]
+        }
+      }
+    },
+
+    "sidebarBlock": {
+      "type": "object",
+      "required": ["id", "type", "heading"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "type": {
+          "enum": ["list", "details"],
+          "description": "'list' is a column of lines with optional group headings. 'details' is a label/value table, e.g. for licenses or clearances."
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The block's visible heading, e.g. 'Key Skills'."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] },
+          "then": {
+            "required": ["items"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "description": "Each entry is either a plain line of text, or a group heading written as 'group: Heading Text' to label the lines beneath it.",
+                "items": {
+                  "oneOf": [
+                    { "type": "string", "description": "A single line in the list." },
+                    {
+                      "type": "object",
+                      "description": "A subheading inside the list.",
+                      "required": ["group"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "group": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "details" } }, "required": ["type"] },
+          "then": {
+            "required": ["rows"],
+            "properties": {
+              "rows": {
+                "type": "array",
+                "description": "Label/value pairs, rendered as a two-column table.",
+                "items": {
+                  "type": "object",
+                  "required": ["label", "value"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": { "type": "string", "minLength": 1, "description": "The left-hand label." },
+                    "value": { "type": "string", "minLength": 1, "description": "The right-hand value." },
+                    "href": { "type": "string", "description": "Optional — makes the value a link." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "section": {
+      "type": "object",
+      "required": ["type", "heading"],
+      "properties": {
+        "type": {
+          "enum": ["summary", "experience", "education"],
+          "description": "Which section this is. Exactly one of each must appear in mainColumn."
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The visible heading, e.g. 'Work Experience'. Rename it freely; the 'type' above is what the build keys off."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "summary" } }, "required": ["type"] },
+          "then": {
+            "required": ["text"],
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A single paragraph. Supports **bold** and *italic*. Use a YAML folded block ('>-') so you can wrap it across lines without inserting line breaks into the output."
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "experience" } }, "required": ["type"] },
+          "then": {
+            "required": ["jobs"],
+            "properties": {
+              "jobs": {
+                "type": "array",
+                "minItems": 1,
+                "description": "Your roles, newest first. The solver may split a job's bullets across a page break, but never orphans its header.",
+                "items": { "$ref": "#/definitions/job" }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "education" } }, "required": ["type"] },
+          "then": {
+            "required": ["items"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "description": "Degrees and qualifications.",
+                "items": {
+                  "type": "object",
+                  "required": ["title"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "title": { "type": "string", "minLength": 1, "description": "The qualification, e.g. 'BA in History'." },
+                    "subtitle": { "type": "string", "description": "A second line under the title — dates, honors, field of study." },
+                    "institution": { "type": "string", "description": "Where you earned it." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "job": {
+      "type": "object",
+      "required": ["id", "title", "date"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Role and employer, e.g. 'Operations Lead, Acme Coffee'."
+        },
+        "date": {
+          "type": "string",
+          "description": "The dates as you want them printed, e.g. 'Mar 2019 – Aug 2021'. Free text — it is never parsed.",
+          "examples": ["Mar 2019 – Aug 2021", "2019 – Present"]
+        },
+        "datetime": {
+          "type": "string",
+          "description": "Machine-readable start date for the HTML <time> element, e.g. '2019-03'. Not shown to the reader.",
+          "examples": ["2019-03", "2019"]
+        },
+        "location": {
+          "type": "string",
+          "description": "Where the job was, e.g. 'Springfield, IL'. Omit on a gap entry."
+        },
+        "gap": {
+          "type": "boolean",
+          "description": "Set true to render this as a career-gap entry: italic title, no location, no bullets. Must be unquoted true or false — 'true' in quotes is a string, and every non-empty string counts as true."
+        },
+        "bullets": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Achievement lines. Required unless 'gap: true'. Supports **bold** and *italic*. Lead with the result, not the responsibility.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              { "not": { "required": ["gap"] } },
+              { "properties": { "gap": { "const": false } } }
+            ]
+          },
+          "then": {
+            "required": ["bullets"]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "resume-studio"
+version = "0.6.0"
+description = "Desktop shell for the resume build pipeline"
+edition = "2021"
+rust-version = "1.77"
+
+# The shell is a launcher, not the application: it starts
+# build/studio_server.js and shows the URL that server reports. That is
+# why the dependency list is this short — there is no IPC surface, no
+# command handlers, no state shared with the webview.
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

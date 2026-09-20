@@ -1,0 +1,224 @@
+/* ───────────────────────────────────────────────────────────────
+   COVER LETTER — single-column letter body.
+
+   The cover letter reuses the resume's header (.resume-header +
+   .top-rule) and its fixed US-Letter .page sheet UNCHANGED — see
+   _components.scss and _layout.scss. The only thing this partial adds
+   is the layout for everything BELOW the top rule: one flowing column
+   of prose instead of the resume's two-column .body-grid.
+
+   Tokens only (spacing scale, type scale, color roles) so the letter
+   shares the document's rhythm and the color/grayscale print paths
+   in _print.scss apply automatically — no letter-specific print
+   rules are needed.
+   ─────────────────────────────────────────────────────────────── */
+
+/* The letter occupies the page area beneath the header, mirroring how
+   .body-grid fills it for the resume (flex: 1 1 auto inside the .page
+   flex column). Content is top-aligned: a letter reads top-down, and
+   the sign-off sits in the natural flow rather than pinned to the page
+   bottom. */
+.letter-page .letter {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+  /* Vertical rhythm between the letter's parts (date, recipient,
+     body, signature). Flex gap only appears between present children,
+     so omitting an optional part leaves no empty space. It is also
+     what now holds the signing space open: the signature is a direct
+     child, so the gap above it is this one. */
+  gap: var(--sp-xl);
+  /* The letter's scaffolding — date, recipient, signature — sits at
+     the standard body size. The body PARAGRAPHS below take the
+     resume summary's editorial lead treatment instead (see .letter-body),
+     so they're the visual focus, mirroring how the summary stands out
+     from 10pt body content in the resume. */
+  font-size: var(--size-body);
+}
+
+/* Date line — quiet, caption-sized, muted, like the resume's meta
+   lines so it reads as subordinate metadata rather than body text. */
+.letter-date {
+  font-size: var(--size-caption);
+  color: var(--text-muted);
+}
+
+/* Recipient address block. <address>'s italic UA default is reset to
+   normal in _base.scss; this just stacks the lines. */
+.letter-recipient {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+/* Body paragraphs. */
+/* Body paragraphs — styled to match the resume's summary paragraph
+   (.summary-text in _components.scss) so the two documents share one
+   editorial voice, not just a font size:
+     • --size-jobtitle (11pt) — a touch larger than 10pt body, reads as
+       a lead
+     • font-weight 350 — lighter than the 400 body default; airy,
+       confident editorial feel at the larger size
+     • line-height 1.4 — same leading as the summary
+   Same tokens/values, so the body and summary stay in visual lockstep
+   if either is retuned. */
+.letter-body {
+  display: flex;
+  flex-direction: column;
+  /* MEASURE — the prose only.
+
+     The sheet's content area is 7.5in (8.5in less two 0.5in margins),
+     which at 11pt is about 98 characters per line. The comfortable
+     range is 45-75 and the resume's own main column runs about 68, so
+     the letter was setting the same voice at half again the line
+     length.
+
+     6.5in is the classic business-letter measure: US Letter with one
+     inch either side, about 85 characters. Still at the top of the
+     range, and chosen for that reason — it is the width no reader
+     registers as a decision.
+
+     It is capped HERE, on the prose, and not on .letter. Narrowing
+     the whole letter block would pull the date, the address and the
+     signature in with it and leave the header and the top rule
+     running edge to edge above an obviously empty right-hand column.
+     Those three parts are short enough that their own width is
+     invisible; only the prose has lines long enough for the cap to
+     mean anything. */
+  max-inline-size: 6.5in;
+  /* Paragraph spacing — one step down from the inter-part gap so
+     paragraphs read as a group while still being clearly separated. */
+  gap: var(--sp-lg);
+  font-size: var(--size-jobtitle);
+  font-weight: 350;
+  line-height: 1.4;
+}
+/* Left-aligned, never justified: at this measure justification opens
+   rivers of whitespace and uneven word spacing.
+
+   The three properties below are set HERE and not in _base.scss, so
+   the resume is not touched. That is not timidity about scope: the
+   resume's layout solver measures rendered block heights and then
+   decides what goes on which page, so anything that changes where
+   lines break changes the numbers it solves from — and the committed
+   pixel fixtures with them. The letter has no solver, so it is free
+   to ask for better line breaking. The two documents look the same
+   because none of this changes type size, weight, color or rhythm;
+   it only changes where a line happens to end.
+
+     hyphens        A cover letter is a formal document that a person
+                    reads once. Broken words read as carelessness, and
+                    at this measure there is no justification pressure
+                    that would make them worth it.
+     text-wrap      `pretty` asks the browser to avoid leaving a
+                    single word alone on a paragraph's last line.
+                    Ignored by renderers that do not support it, which
+                    is exactly the right failure mode.
+     orphans/widows Two lines minimum either side of a page break.
+                    Only reachable once a letter runs long — and
+                    verifyLetterFits stops that first — but the cost
+                    of declaring it is nil and the cost of it missing
+                    is a page 2 holding one stranded line. */
+.letter-body p {
+  text-align: left;
+  hyphens: none;
+  text-wrap: pretty;
+  orphans: 2;
+  widows: 2;
+}
+
+/* THE GREETING AND THE SIGN-OFF STILL BREATHE.
+
+   They used to be their own elements — .letter-salutation and
+   .letter-closing — separated from the body by .letter's --sp-xl gap
+   rather than the body's tighter --sp-lg. Folding them into `body`
+   made them easier to write and, by accident, closed that air up.
+
+   The air is restored structurally instead. A cover letter's first
+   paragraph is the greeting and its last is the sign-off; that is not
+   a guess about this letter, it is the form. The top-ups below are
+   written as the arithmetic that produced them rather than as literal
+   values, so they follow the spacing scale if it is ever retuned:
+
+     first → rest    --sp-lg + (--sp-xl - --sp-lg)            = 16px
+     rest  → last    --sp-lg + (--sp-xl + --sp-sm - --sp-lg)  = 22px
+
+   16px is exactly the old salutation gap. 22px is the old closing
+   gap — --sp-xl plus the --sp-sm nudge .letter-signoff used to add —
+   and the extra 6px is doing real work: it marks the turn from
+   argument to farewell, which is the one paragraph break in a letter
+   that carries meaning.
+
+   A letter written without a greeting or a sign-off simply gets a
+   little more air above and below its prose, which is not wrong. */
+.letter-body p:first-child {
+  margin-block-end: calc(var(--sp-xl) - var(--sp-lg));
+}
+.letter-body p:last-child {
+  margin-block-start: calc(var(--sp-xl) + var(--sp-sm) - var(--sp-lg));
+}
+
+/* ...and they keep their own type, too.
+
+   The spacing above restored the gaps exactly — measured, 16px above
+   the body and 22px above the sign-off, the same numbers as when
+   these were separate elements. The letter still read as though it
+   had lost air, and the gaps were not the reason. The greeting was
+   10pt at weight 500 against 11pt at weight 350 body; folding it into
+   `body` made it look like a first paragraph rather than the letter's
+   opening, and no amount of space brings that distinction back
+   because the distinction was never space.
+
+   So the scaffolding treatment comes back with it: --size-body and
+   the weights these two lines carried before. Same rule of thumb as
+   the margins — the first paragraph of a cover letter is its greeting
+   and the last is its sign-off. That is the form, not a guess about
+   one letter, and a letter written without either simply gets its
+   opening and closing lines set slightly smaller, which is not
+   wrong. */
+.letter-body p:first-child,
+.letter-body p:last-child {
+  font-size: var(--size-body);
+}
+.letter-body p:first-child {
+  font-weight: 500;
+}
+.letter-body p:last-child {
+  /* .letter's own 400, not .letter-body's lighter 350. */
+  font-weight: 400;
+}
+/* **bold** lead-ins pop at 600 against the 350 surrounding text — the
+   same ~250-unit weight contrast the summary uses for its bold lead-in.
+   Matches .bullets strong / .summary strong. */
+.letter-body strong {
+  font-weight: 600;
+}
+
+/* The typed name, with room above it for a handwritten or image
+   signature if the letter is printed and signed.
+
+   That room used to come from a .letter-signoff wrapper that held the
+   closing and the name together. The closing is an ordinary body
+   paragraph now, so the wrapper is gone and the space is simply
+   .letter's own --sp-xl gap — the same measurement, one fewer
+   element. */
+.letter-signature {
+  /* Never alone at the top of a page. A signature separated from the
+     letter it signs is the single worst break this document can make,
+     and it is the one a page break would choose by default. */
+  break-before: avoid;
+  break-inside: avoid;
+  /* Echo the name header so the letter closes with the same
+     typographic identity it opens with: same display face
+     (Newsreader), same 600 weight and 0.02em tracking as .name. Kept
+     at the scaffolding body size — it's a signature, not a second name
+     header — and like .name it leaves font-optical-sizing on auto, so
+     the browser selects Newsreader's text opsz at this size. This
+     mirrors the header's own serif-name / sans-supporting pairing: the
+     serif signature sits under the sans closing paragraph just as the
+     serif .name sits over the sans .name-role. */
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}

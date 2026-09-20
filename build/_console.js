@@ -19,7 +19,7 @@
  *   warn(msg)  → ⚠️   warning; build continues
  *   ok_pair / err_pair / warn_pair / info_pair  → aligned label:value
  *
- *   The status symbols are emoji with intrinsic colour. ANSI codes
+ *   The status symbols are emoji with intrinsic color. ANSI codes
  *   are NOT applied to them. ⚠ and ℹ get U+FE0F appended to force
  *   emoji presentation on terminals that otherwise default these
  *   to text/monochrome glyphs.
@@ -30,9 +30,9 @@
  *   line. Banner dashes ARE dimmed via ANSI when the stream is a
  *   TTY (the dashes are text, not emoji).
  *
- * Colour suppression
+ * Color suppression
  * ──────────────────
- *   Banner ANSI emitted iff the target stream is a TTY. Honours
+ *   Banner ANSI emitted iff the target stream is a TTY. Honors
  *   NO_COLOR and FORCE_COLOR env vars (https://no-color.org).
  *   Emoji are emitted unconditionally — they're not ANSI.
  *
@@ -67,7 +67,7 @@ const _DETAIL_INDENT   = _consoleConstants.DETAIL_INDENT;
 const _LABEL_PAD_WIDTH = _consoleConstants.LABEL_PAD_WIDTH;
 
 
-function colourEnabled(stream) {
+function colorEnabled(stream) {
   if (process.env.NO_COLOR) return false;
   if (process.env.FORCE_COLOR) return true;
   return Boolean(stream && stream.isTTY);
@@ -86,7 +86,7 @@ function banner(label) {
   const tailLen = Math.max(0, _BANNER_WIDTH - used);
   const tail = '─'.repeat(tailLen);
   let line;
-  if (colourEnabled(process.stdout)) {
+  if (colorEnabled(process.stdout)) {
     line = `${_DIM}${_BANNER_LEAD}${_RESET}${label} ${_DIM}${tail}${_RESET}`;
   } else {
     line = `${_BANNER_LEAD}${label} ${tail}`;

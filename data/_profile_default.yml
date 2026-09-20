@@ -1,0 +1,81 @@
+# ═════════════════════════════════════════════════════════════════
+# SHARED PROFILE — SHIPPED PLACEHOLDER
+#
+# COPY THIS FILE TO data/_profile.yml AND EDIT THAT COPY.
+# Nothing reads this one. The build looks for _profile.yml exactly;
+# this file exists to show you the shape and to give you a starting
+# point that survives in version control.
+#
+#   cp data/_profile_default.yml data/_profile.yml
+#
+# WHAT IT IS FOR
+#   The things that are true of you regardless of which job you are
+#   applying for. Every build merges _profile.yml UNDERNEATH the
+#   document it is building, so your phone number lives in one file
+#   instead of one per application.
+#
+#   Your document always wins. Anything a resume or cover letter
+#   sets for itself is used; this file only fills in what the
+#   document leaves out. Nothing references it by name — it applies
+#   to every .yml beside it in data/ simply by being there, and the
+#   build log says so on every run:
+#
+#     Shared profile  data/_profile.yml -> name, contact, meta.lang
+#
+# WHAT BELONGS HERE
+#   Only what is identical across every application.
+#
+# WHAT DOES NOT
+#   role              names the job you are applying for
+#   meta.description  the PDF metadata sentence, which names it too
+#   Anything under sidebar / mainColumn / letter.
+#
+# TO TURN IT OFF
+#   Delete data/_profile.yml. Every document still carries whatever
+#   it carries, so nothing breaks — documents you have already
+#   stripped will just be missing a name until you put one back.
+# ═════════════════════════════════════════════════════════════════
+
+
+# ─── Your name ───────────────────────────────────────────────────
+# Split in two because the design styles them differently: the last
+# name is set bolder than the first.
+name:
+  first: Gaius
+  last: Caesar
+
+
+# ─── Contact details ─────────────────────────────────────────────
+# Change a number here and it changes on every resume and every
+# cover letter. That is the entire point of this file.
+#
+# NOTE: `rows` REPLACES rather than merges. A document that sets
+# contact.rows at all owns the whole list — it does not add to this
+# one. That is deliberate: a concatenating merge would give you rows
+# in an order nobody chose and make overriding a single row
+# impossible to express.
+contact:
+  address: Roma, Imperium Romanum
+  rows:
+    - value: (000) 000-0000
+      href: "tel:+10000000000"
+    - value: gcaesar@email.com
+      href: "mailto:gcaesar@email.com"
+
+
+# ─── Document settings ───────────────────────────────────────────
+# `lang` is a BCP 47 tag, stamped into the PDF so screen readers
+# pronounce it correctly.
+#
+# `maxPages` is the ceiling the layout solver works under. If your
+# content cannot fit, the build STOPS with a clear error rather than
+# quietly producing a longer PDF. It lives here because it is a
+# standing decision about your resumes, not about one application —
+# override it in a single document if that one needs more room.
+# The cover letter has no solver and ignores it.
+#
+# `description` does NOT belong here: it names the target role, so it
+# stays in each document.
+meta:
+  lang: en-US
+  maxPages: 4

@@ -29,7 +29,7 @@
    when the variable font's default instance is not Regular —
    Manrope's default is ExtraLight (200). In affected environments
    the entire weight range silently renders as ExtraLight in the
-   PDF output (verifiable via `pdffonts dist/resume-color.pdf`).
+   PDF output (verifiable via `pdffonts` on the built PDF).
 
    This is a Chromium environment issue, not a project issue. In
    correctly-configured environments (modern desktop Chrome,

@@ -2,7 +2,7 @@
   measurement.j2 — Single-page flowing layout for the layout solver.
 
   This template renders ALL sidebar blocks and ALL jobs/bullets in a
-  single tall page (no page breaks). The solver in render.js opens
+  single tall page (no page breaks). The solver in resume.js opens
   this in Playwright, measures the height/position of every
   data-measure element, and produces the placement that drives the
   final build.
@@ -53,7 +53,7 @@
 <body class="measurement-mode">
 
   <!-- This is the MEASUREMENT-MODE HTML. It is NOT the final paginated
-       output. The layout solver in render.js opens this in Playwright,
+       output. The layout solver in resume.js opens this in Playwright,
        measures positions of [data-measure] elements, and writes
        dist/placement.json which drives the final build. -->
   <main class="resume" aria-label="Resume (measurement)">

@@ -25,8 +25,8 @@ has four parts:
 
 1. **The data format** — the keys and structure of the YAML files you
    write.
-2. **The commands** — what you run: the `node …` and `python …`
-   invocations.
+2. **The commands** — what you run: npm scripts, `node …` and
+   `python …` invocations, the `.bat` launchers.
 3. **The environment variables** the build reads.
 4. **The outputs** — where the PDFs are written and what they are
    called.
@@ -38,6 +38,301 @@ Headings under each release: **Added** for new capability, **Changed**
 for existing behavior that now works differently, **Removed** for what
 is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 **Breaking** marks the changes that forced a new minor version.
+
+---
+
+## [0.6.0] — 2026-09-20
+
+*Breaking: `node render.js` is gone, your data file and the
+`RESUME_DATA_SOURCE` values were renamed, YAML is read with different
+typing rules, and the PDFs have new names. All four parts of the
+interface changed.*
+
+### Upgrading from 0.5.x
+
+1. Build with `npm run resume` (or `node resume.js`) instead of
+   `node render.js`.
+2. Rename your data file: `data/resume.local.yml` → `data/resume.yml`.
+   The shipped placeholder keeps its name, `data/resume_default.yml`.
+3. Change `RESUME_DATA_SOURCE=local` to `RESUME_DATA_SOURCE=mine`.
+4. Look for your PDFs under their new names:
+   `dist/<First>_<Last>_Resume.pdf` and
+   `dist/<First>_<Last>_Resume_Grayscale.pdf`.
+5. Write booleans as `true`/`false`. `yes`, `no`, `on` and `off` are now
+   plain strings.
+6. If you relied on the snapshot test failing the build, set
+   `RESUME_SNAPSHOT=strict`. It is now off unless you turn it on.
+
+### Commands
+
+- **Removed — Breaking.** `render.js`, the only build command in 0.5.x.
+  `resume.js` replaces it and keeps the same phases. The phases now
+  live in `build/pipeline.js`, which `resume.js` drives.
+- **Added.** npm scripts. There were none before:
+
+  | script | runs |
+  | --- | --- |
+  | `resume`, `build` | `node resume.js` |
+  | `letter` | `node letter.js` |
+  | `test` | `node build/run_tests.js` |
+  | `ui` | Resume Studio in your browser |
+  | `ui:serve` | the Studio server without opening a browser |
+  | `studio` | Resume Studio as a desktop app (`tauri dev`) |
+  | `studio:build` | the desktop installer (`tauri build`) |
+
+- **Added.** Windows launchers. `build.bat` shows a menu (resume, cover
+  letter, or both) and also takes `resume`, `letter` or `both` as an
+  argument. `studio.bat` runs `npm run studio` and `ui.bat` runs
+  `npm run ui`.
+
+### Cover letter
+
+- **Added.** A one-page cover letter, built with `npm run letter`. It
+  reuses the resume's header, top rule, page sheet, type and color
+  tokens, and its color/grayscale printing, so the two read as a set.
+  There is no layout solver because a letter is one flowing column.
+  The files are `letter.js`, `build/build_letter.py`,
+  `templates/letter.j2` and `styles/_letter.scss`.
+- **Added.** Letter data lives in `data/letter.yml` (yours, gitignored),
+  with `data/letter_default.yml` as the shipped template. It has two
+  fields:
+  - `letter.body` is the whole letter, greeting and sign-off included.
+    Write it as one block, with blank lines between paragraphs, or as a
+    list with one paragraph per entry.
+  - `letter.recipient` is the address block. Write it as a pasted block
+    or as a list. A block splits on every line, not on blank lines, and
+    blank lines are dropped.
+- **Added.** The date is stamped when the letter is built. How it is
+  written depends on `meta.lang`:
+  - `September 20, 2026` for `en-US`
+  - `20 September 2026` for day-first English: `en-GB`, `en-AU`,
+    `en-IE`, `en-IN` and others
+  - ISO `2026-09-20` for any other language
+
+  The month names are written out in the code rather than read from
+  the system locale, so the same file produces the same letter on any
+  machine. The HTML also carries the date as
+  `<time datetime="2026-09-20">`.
+- **Added.** The name under the sign-off is filled in from `name`, which
+  the shared profile provides.
+- **Added.** The build fails if the letter does not fit on one page, and
+  says roughly how many lines too long it is. `.page` hides whatever
+  overflows it, so without this check an over-long letter would lose
+  its sign-off without any warning.
+- **Added.** Letter typography:
+  - The prose is limited to 6.5in, about 85 characters per line.
+  - The greeting and sign-off are set in the scaffolding type, 10pt at
+    weights 500 and 400, against the 11pt/350 body.
+  - Gaps: 16px after the greeting, 22px before the sign-off, and 27px
+    between the date and the address.
+  - `hyphens: none`, `text-wrap: pretty`, and at least two lines kept
+    together at a page break.
+  - The signature is never the first line on a page.
+
+  All of this is set for the letter only. The resume's layout solver
+  measures rendered line heights, so changing how the resume breaks
+  lines would change its page layout and its snapshot fixtures.
+- **Changed.** Earlier development versions of the letter had `date`,
+  `salutation`, `closing` and `signature` fields. A file that still has
+  one is rejected with an error that says what to write instead.
+  Ignoring the field would drop that line from the letter without
+  saying so.
+
+### Resume Studio
+
+- **Added.** Resume Studio shows the printed PDF and updates it while
+  you edit the YAML in your own editor. It runs in a browser
+  (`npm run ui`) or as a Tauri desktop app (`npm run studio`), and the
+  desktop window opens maximized. The server listens only on
+  127.0.0.1, on a random port unless you set `STUDIO_PORT`.
+  `STUDIO_NODE` chooses which `node` the desktop app starts.
+- **Added.** Live preview. Changes in `data/` and `styles/` re-render the
+  page after a short delay. If the YAML has an error, the preview keeps
+  the last good render and shows the error beside it.
+- **Added.** A card for each document, each with its own **Build** button:
+  - **Color** and **Grayscale** checkboxes pick which PDFs to build.
+  - On the resume card only, **Compare against snapshot** and **Run
+    tests** control whether those checks run. Tests are off in the app,
+    so a build takes about a second instead of ten.
+  - After a build, the preview shows the PDF that was just written
+    rather than rendering the page a second time.
+- **Added.** The build tray has one row per PDF, labeled **Color** and
+  **Grayscale**. **Show (217 KB)** opens that PDF's folder in the file
+  manager.
+- **Added.** Drop a `.yml` on the window and Studio reads its top-level
+  keys to tell whether it is a resume or a cover letter, then opens it
+  on the matching card. It asks only when the file fits both or
+  neither. A dropped file is opened where it is; nothing in `data/` is
+  replaced.
+- **Added.** The data-file picker is split by document. The Resume card
+  never offers a letter file, and the Letter card never offers a
+  resume file.
+- **Added.** A warm engine (`build/engine.js`) that keeps a Chromium
+  page and a Python worker (`build/worker.py`) running between
+  previews, so a preview doesn't wait for either to start. Builds
+  still run the command-line script, so there is only one way to
+  produce a PDF.
+- **Security.** The desktop installer bundles only the three
+  `*_default.yml` templates from `data/`, never your own files.
+
+### Data files
+
+- **Changed — Breaking.** Your data file is renamed so the short name is
+  yours; the template already had the suffixed name:
+
+  | 0.5.x | 0.6.0 |
+  | --- | --- |
+  | `data/resume.local.yml` | `data/resume.yml` |
+
+  New in this release: `data/letter.yml` / `data/letter_default.yml`
+  and `data/_profile.yml` / `data/_profile_default.yml`.
+- **Changed — Breaking.** `RESUME_DATA_SOURCE` takes `default` or `mine`.
+  `local` is no longer accepted.
+- **Changed — Breaking.** YAML is read with YAML 1.2 core typing
+  instead of PyYAML's YAML 1.1 rules. Only `true` and `false` are
+  booleans. `22:30` stays a string instead of becoming 1350. A value
+  that looks like a date stays a string. `3.90` keeps its trailing
+  zero.
+- **Changed.** YAML is parsed with libyaml when it is available. On the
+  resume, parsing went from about 12.6ms to about 0.8ms.
+- **Added.** A shared profile. `data/_profile.yml` holds what is the
+  same in every application: `name`, `contact`, `meta.lang` and
+  `meta.maxPages`. It is merged under every document you build.
+  - The document's own value wins over the profile's.
+  - Lists are replaced, not combined.
+  - The build log shows which values came from the profile.
+
+  `role` and `meta.description` stay in each document because they
+  name the job you are applying for. The shipped templates use the
+  template profile, `_profile_default.yml`, and never yours (see
+  Privacy).
+- **Added.** `RESUME_DATA_FILE` and `LETTER_DATA_FILE` build from
+  any file you point them at, and that file is read where it is.
+- **Added.** JSON Schemas for all three kinds of data file in
+  `schemas/`. `.vscode/settings.json` connects them to the Red Hat YAML
+  extension, which then offers completion, hover help and inline
+  errors. SchemaStore is turned off there, because `resume.yml` is
+  also the standard JSON Resume filename and VS Code was checking your
+  file against the JSON Resume schema.
+- **Changed.** `gap` must be a real boolean.
+- **Changed.** The template's `meta.maxPages` is 4, down from 10. If the
+  value is missing entirely, the build still uses 10.
+
+### Output files
+
+- **Changed — Breaking.** PDFs are named after the person, using
+  `name.first` and `name.last`:
+
+  ```
+  dist/Gaius_Caesar_Resume.pdf
+  dist/Gaius_Caesar_Resume_Grayscale.pdf
+  dist/Gaius_Caesar_Cover_Letter.pdf
+  dist/Gaius_Caesar_Cover_Letter_Grayscale.pdf
+  ```
+
+  In 0.5.x they were `dist/resume-color.pdf` and
+  `dist/resume-grayscale.pdf`. The color PDF gets the name without a
+  suffix because it is the one you send.
+- **Added.** How names become filenames (`build/_output_name.py`):
+  - Accents are removed and the letter kept: José → Jose.
+  - Letters with no plain-ASCII form are spelled out: ß → ss, ø → o.
+  - Apostrophes are dropped: O'Brien → OBrien.
+  - Any other run of characters that aren't letters or digits becomes
+    one underscore.
+  - A name with no ASCII spelling at all is kept in its original
+    characters.
+
+  The Node code reads the finished name from the build metadata
+  (`output_stem`) instead of working it out a second time.
+- **Added.** Each build deletes older PDFs from `dist/` that it did not
+  just write: files with the 0.5.x names, files from a brief
+  `-grayscale` spelling used during development, and files left over
+  from an earlier spelling of your name. It only touches files that
+  match this project's own naming pattern, and it prints every file
+  it removes.
+- **Added.** `RESUME_VARIANTS` chooses which PDFs a build writes: `color`,
+  `grayscale`, or both, separated by a comma. If it is unset, both are
+  built, as before. When a variant is left out, its old PDF is deleted
+  so it can't be mistaken for a fresh one.
+- **Changed.** Snapshot fixtures keep fixed names:
+  `expected_resume-color.pdf`, and `expected_resume-color.mine.pdf` for
+  your data (0.5.x used `.local.pdf`). A committed test file named after
+  whoever last built it would change with every build and would put a
+  real name into the repository.
+
+### Build and snapshot test
+
+- **Changed — Breaking.** The snapshot test is off by default.
+  `RESUME_SNAPSHOT=on` reports differences without failing the build,
+  and `RESUME_SNAPSHOT=strict` fails the build as 0.5.x did. The PDFs are
+  written before the comparison runs, so a difference tells you
+  something changed; it is not a reason to withhold the file.
+- **Added.** `RESUME_TESTS`. The unit tests still run first from the
+  command line; `off` skips them.
+- **Changed.** The snapshot test compares only the variants the last
+  build produced. `--update-all` always builds both.
+- **Fixed.** If `dist/pdf_meta.json` held a `data_source` value the
+  snapshot test did not recognize, it compared against the committed
+  fixture without saying so. Your resume could then be checked against
+  the placeholder. It now stops with an error.
+- **Fixed.** The rasterizer left the PDF open after reading it, which
+  on Windows kept the file locked and stopped it being deleted.
+
+### Privacy
+
+- **Security.** `data/` in `.gitignore` is now an allowlist. Only the
+  three templates are tracked, so a new personal file stays private by
+  default. In 0.5.x it was a list of named private files, and every new
+  one had to be added to it. The pattern covers subfolders too, so
+  files kept in a folder such as `data/legacy/` stay private.
+- **Security.** A template document merges the template profile, never
+  yours. The committed snapshot fixtures are rendered from the
+  template, so if the template borrowed a field from your real profile,
+  your details would end up in a file that is committed.
+  `build.profile_for` rules this out.
+- **Added.** `tests/test_anonymized.py` checks everything that would be
+  committed, including the text of the committed PDFs. It fails if it
+  finds your name, contact details, employers or places from your own
+  data files, including any kept in subfolders of `data/`. In a git
+  checkout it asks git which files would be committed, so gitignored
+  files are never reported. In a checkout without your data it skips.
+- **Changed.** Personal details were removed from committable files:
+  the examples in the schemas, README and tests use invented places and
+  values. The only personal detail left is the copyright holder's name
+  in `LICENSE`, which the privacy test deliberately allows.
+- **Changed.** `.gitignore` also covers files an AI assistant saves into
+  the project folder (`Claude outputs/`), since previews rendered from
+  your data show your contact details. It also covers snapshot
+  fixtures under their 0.5.x names (`*.local.pdf`).
+
+### Tests
+
+- **Added.** `test_yaml_typing.py`, `test_profile_merge.py`,
+  `test_letter_data.py`, `test_output_name.py`,
+  `test_output_name.js`, `test_detect_doc.js`,
+  `test_worker_equivalence.py`, `test_engine_equivalence.js` and
+  `test_anonymized.py`.
+- **Added.** `jsonschema` in `requirements.txt`. The schema tests use it
+  and skip if it is missing.
+- **Changed.** `build/run_tests.js` prints why each skipped test was
+  skipped.
+- **Changed.** The unit tests run with `RESUME_DATA_SOURCE`,
+  `RESUME_DATA_FILE` and `LETTER_DATA_FILE` cleared, so a
+  variable set in the shell can't change their results.
+
+### Documentation and language
+
+- **Changed.** The README was rewritten for this release. It has new
+  sections on Resume Studio, the shared profile, editing in VS Code,
+  YAML typing, output names and the cover letter.
+- **Changed.** All comments, messages and documentation use American
+  English. Two file-private functions were renamed along with their
+  call sites: `colourEnabled` is now `colorEnabled`, and
+  `_colour_enabled` is now `_color_enabled`.
+- **Added.** This changelog.
+- **Added.** Screenshots in `docs/screenshots/`, shown in the README:
+  both documents, the color and grayscale variants, and the Studio in
+  light and dark themes. They use the shipped placeholder data.
 
 ---
 
@@ -278,6 +573,29 @@ The design first existed only as a PDF made with an online resume
 builder. This version recreates it in HTML and CSS, so the history
 starts from source files.
 
+---
+
+## Version history
+
+Before this changelog, versions were kept as folders with informal
+numbers. The archive folders are now named by version; this table
+records what each one used to be called, so older notes that mention
+the old names can still be followed.
+
+| version | previously | what the number records |
+| --- | --- | --- |
+| 0.1.0 | `0.1.pdf` | the design, recreated as a web page |
+| 0.2.0 | `0.2` | a hand-written web page |
+| 0.3.0 | `1.0` | the build pipeline |
+| 0.4.0 | `2.0` | breaking: A4 → US Letter, styles moved |
+| 0.4.1 | `3.0` | new optional fields |
+| 0.4.2 | `3.5` | new typefaces |
+| 0.4.3 | `4.0` | adjustments and a contrast fix |
+| 0.5.0 | `5.0` | breaking: the PDF and the scripts moved |
+| 0.5.1 | the May snapshot | the page-number footer |
+| 0.6.0 | — | breaking: `render.js` removed, files renamed |
+
+[0.6.0]: #060--2026-09-20
 [0.5.1]: #051--2026-05-16
 [0.5.0]: #050--2026-05-16
 [0.4.3]: #043--2026-05-10

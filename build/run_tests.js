@@ -100,7 +100,7 @@ function runNodeInherit(jsFile) {
  * Returns { exitCode, skipped }. `skipped` is true if the suite
  * exited 0 but reported skipped tests (unittest prints
  * "OK (skipped=N)" in that case). The dispatcher uses `skipped`
- * to honour STRICT_TESTS.
+ * to honor STRICT_TESTS.
  */
 function runPythonCaptured(args, label) {
   const start = Date.now();
@@ -122,6 +122,29 @@ function runPythonCaptured(args, label) {
   if (skipMatch) {
     const n = skipMatch[1];
     c.warn_pair(label, `${n} skipped (in ${elapsed}s)`);
+    // Say WHICH and WHY, not just how many.
+    //
+    // A bare "1 skipped" is a warning you cannot act on: it could be
+    // a missing optional dependency, a fixture that isn't built yet,
+    // or a test quietly disabled by a rename. Every skip in this
+    // suite carries a reason written to be read by a person, so
+    // print them — a skip nobody can explain is one nobody fixes.
+    //
+    // -v is what makes the reasons available at all: unittest prints
+    // them per test only in verbose mode. The verbose stream stays
+    // captured, so this costs nothing in normal output.
+    //
+    // The label is whatever precedes " ... skipped", deliberately
+    // loose: unittest prints the test's id normally, but substitutes
+    // the first line of its docstring when it has one, and most of
+    // these do. Matching either is what makes this work at all — an
+    // earlier version anchored on the id form and silently printed
+    // nothing for every documented test, which is the majority.
+    for (const [, label_, why] of combined.matchAll(
+      /^(.*?) \.\.\. skipped ['"](.+?)['"]\s*$/gm)) {
+      const reason = why.length > 110 ? `${why.slice(0, 107)}...` : why;
+      c.detail(`${label_.trim()} — ${reason}`);
+    }
     return { exitCode: 0, skipped: true };
   }
 
@@ -224,7 +247,7 @@ if (userArg) {
   }
 
   applyResult(runPythonCaptured(
-    ['-B', '-m', 'unittest', 'discover', 'tests/'],
+    ['-B', '-m', 'unittest', 'discover', '-v', 'tests/'],
     'Python',
   ));
   for (const jsFile of listJsTests()) {

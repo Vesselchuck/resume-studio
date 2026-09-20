@@ -132,12 +132,12 @@ class TestReadAccent(unittest.TestCase):
         # so a comment containing '--accent: #xxxxxx;' earlier in the
         # file will be matched in preference to the real declaration.
         #
-        # This test documents the CURRENT (buggy) behaviour so the
+        # This test documents the CURRENT (buggy) behavior so the
         # next person knows about M3 and can spot when the fix lands.
         # If/when M3 is fixed (the audit's recommended approach is to
         # strip /* */ comments before regex, or anchor the search to
         # the :root block), update this test to assert the new safer
-        # behaviour: read_accent() should return '#2d4a3e', not
+        # behavior: read_accent() should return '#2d4a3e', not
         # '#ff0000'.
         self.tokens.write_text(
             "/* TODO: change --accent: #ff0000; later */\n"

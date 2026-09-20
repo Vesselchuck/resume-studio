@@ -16,7 +16,7 @@ main.resume {
 /* The crucial element — a fixed-size Letter sheet. Every page is
    exactly 8.5 × 11 in, regardless of viewport. On screen we add a
    subtle shadow + border so the pages look like physical sheets
-   floating on a soft grey backdrop. In print these decorations
+   floating on a soft gray backdrop. In print these decorations
    disappear.                                                       */
 .page {
   position: relative;
@@ -65,7 +65,7 @@ main.resume {
    with .top-rule. Color stays --border-rule (not --accent) —
    section separators repeat 3–5× per page and giving them accent
    color would flood the document with green lines, collapsing the
-   visual hierarchy. The top rule is the single accent-coloured
+   visual hierarchy. The top rule is the single accent-colored
    structural element; the column divider and section separators
    both render in --border-rule so the accent stays exclusive
    to the document's top frame.                                     */
@@ -100,7 +100,7 @@ main.resume {
    or insert another flex-grow sibling between header and grid, the
    divider will silently stop short or extend wrong. Re-anchor it on
    .page::after with explicit `bottom: var(--page-margin)` if you
-   need the divider's extent decoupled from grid behaviour.         */
+   need the divider's extent decoupled from grid behavior.         */
 .body-grid {
   /* `display: grid` is for our two-column children (sidebar + main).
      `flex: 1 1 auto` is how we behave inside our parent, which is the
@@ -121,16 +121,16 @@ main.resume {
   content: "";
   position: absolute;
   inset-block: 0;            /* full grid height — see invariant above */
-  /* Centred in the column gap. With border-left the element has
+  /* Centered in the column gap. With border-left the element has
      inline-size: 0 — position it at the exact gap midpoint with
      no offset correction needed.                               */
   inset-inline-start: calc(var(--sidebar-w) + var(--col-gap) / 2);
   inline-size: 0;
   border: 0;
-  /* Hairline grey divider. The audit flagged that a 2pt accent-green
+  /* Hairline gray divider. The audit flagged that a 2pt accent-green
      vertical line running the full page height was the largest single
      brand element on the page and competed with content for visual
-     attention. The accent colour is now reserved entirely for content-
+     attention. The accent color is now reserved entirely for content-
      level emphasis (section heading bars, link interactions); all
      structural rules — top rule, divider, section separators — render
      in --border-rule. Thickness tracks --rule to stay consistent
@@ -174,7 +174,7 @@ main.resume {
      + 2 × 32px edge margin to viewport sides
      = 1728px minimum viewport
 
-   Vertical alignment uses `safe center` so the pages centre in
+   Vertical alignment uses `safe center` so the pages center in
    the viewport when there's enough height, but fall back to
    start-alignment when content overflows (e.g., laptops where
    the 1056px page is taller than the viewport). Without `safe`,

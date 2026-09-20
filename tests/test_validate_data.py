@@ -17,7 +17,7 @@ from build import validate_data, SchemaError
 
 
 def good_data():
-    """A minimal-but-valid resume_default.yml structure for use in tests."""
+    """A minimal-but-valid resume.yml structure for use in tests."""
     return {
         "name": {"first": "Gaius", "last": "Caesar"},
         "meta": {"description": "Test resume", "maxPages": 10},

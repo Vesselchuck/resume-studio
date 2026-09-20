@@ -1,0 +1,107 @@
+# ═════════════════════════════════════════════════════════════════
+# COVER LETTER — SHIPPED PLACEHOLDER
+#
+# This is the file a fresh clone builds from, so it is deliberately
+# self-contained: it carries its own name and contact block and does
+# not depend on data/_profile.yml existing.
+#
+# YOU PROBABLY WANT data/letter.yml INSTEAD.
+# That file is yours, it is gitignored, and the build prefers it
+# whenever it exists. This one is only read when it does not.
+#
+#   data/letter.yml           your real letter   (private)
+#   data/letter_default.yml   this placeholder   (committed)
+#
+# To start from here:  copy this file to data/letter.yml and
+# edit that copy. Leave this one as filler so the project still
+# builds for anyone who clones it — including you, a year from now,
+# on a new machine.
+#
+# Three rules, same as the resume:
+#   1. INDENTATION MATTERS (always spaces, never tabs).
+#   2. SPECIAL CHARACTERS: if a value has a colon or hash, or starts
+#      with a dash or quote, wrap it in "double quotes".
+#   3. LINES STARTING WITH # ARE NOTES, ignored by the build.
+# ═════════════════════════════════════════════════════════════════
+
+
+# ─── Your name ───────────────────────────────────────────────────
+# Split in two because the design weights them differently — the
+# last name is set bolder than the first.
+#
+# In your own copy you can delete this block entirely and let
+# data/_profile.yml supply it, so one edit updates every document.
+name:
+  first: Gaius
+  last: Caesar
+
+
+# ─── Role shown under your name (optional — delete to omit) ──────
+role: "Imperator Romanus"
+
+
+# ─── Contact block, top-right ────────────────────────────────────
+# Same shape as the resume's, so the two documents print a matching
+# letterhead. Like `name`, this usually belongs in _profile.yml.
+contact:
+  address: Roma, Imperium Romanum
+  rows:
+    - value: (000) 000-0000
+      href: "tel:+10000000000"
+    - value: gcaesar@email.com
+      href: "mailto:gcaesar@email.com"
+
+
+# ─── Document metadata ───────────────────────────────────────────
+meta:
+  # One sentence. Becomes the PDF's "subject" and the HTML page
+  # description. Some applicant tracking systems read it.
+  description: >-
+    Cover letter of Gaius Caesar for the position of Imperator
+    Romanus.
+
+  # BCP 47 language tag, so screen readers pick the right
+  # pronunciation. Optional; defaults to en-US.
+  lang: en-US
+
+
+# ─── The letter itself ───────────────────────────────────────────
+# Everything except `body` is optional.
+letter:
+  # No `date` field — the build stamps the day it runs.
+
+  # The address block. TWO FORMS ACCEPTED: a block starting with `|`,
+  # one entry per line (paste an address straight in), or a list of
+  # strings. Note this splits on EVERY line, not on blank ones.
+  recipient: |
+    Senatus Populusque Romanus
+    Curia Julia
+    Forum Romanum
+    Roma
+
+  # The whole letter. The greeting and the sign-off are the first and
+  # last paragraphs — there are no separate fields for them, and the
+  # typed name underneath comes from `name`.
+  #
+  # TWO FORMS ACCEPTED, and this is the easier one: a single block
+  # starting with `|`, where a blank line starts a new paragraph.
+  # Just paste your letter in and keep the indentation.
+  #
+  # The other form is a list of strings, one per paragraph:
+  #   body:
+  #     - First paragraph.
+  #     - Second paragraph.
+  #
+  # `**bold**` and `*italic*` work inside either form.
+  body: |
+    Patres Conscripti,
+
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Open with the role you are applying for and where you saw it. One sentence, no throat-clearing.
+
+    Use the second paragraph for the strongest thing you have done that the posting actually asks for. Lead with the outcome rather than the responsibility — what changed because you were there, with a number if you have one.
+
+    The third paragraph is for the objection the reader is already forming. If you are short on some requirement, name it and say what you bring instead. Pretending not to notice reads worse than addressing it.
+
+    Close by saying what you want to happen next and when you are available. Keep it to one line.
+
+    Vale,

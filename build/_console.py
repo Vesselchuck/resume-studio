@@ -9,8 +9,8 @@ The matching _console.js does the same. There is no longer a parallel
 hand-maintained constants block; cross-language parity is structural,
 not enforced by a sync test.
 
-Single source of truth for status symbols, ANSI colours, phase
-banners, and TTY-aware colour suppression. Imported by every script
+Single source of truth for status symbols, ANSI colors, phase
+banners, and TTY-aware color suppression. Imported by every script
 that prints to stdout/stderr so the pipeline's output is uniform.
 
 Symbols
@@ -20,9 +20,9 @@ Symbols
   warn(msg)  → ⚠️   something noteworthy; build continues
   ok_pair / err_pair / warn_pair / info_pair  → aligned label:value
 
-The status symbols are emoji with intrinsic colour. ANSI codes are
+The status symbols are emoji with intrinsic color. ANSI codes are
 NOT applied to them — the emoji glyphs already carry their own
-colour, and double-colouring would either fight (ANSI + emoji on
+color, and double-coloring would either fight (ANSI + emoji on
 some terminals) or be redundant. ⚠ and ℹ get the U+FE0F variation
 selector appended ("⚠️", "ℹ️") to force emoji presentation on
 terminals that otherwise default these to text/monochrome glyphs
@@ -45,7 +45,7 @@ Indented detail
   bullet lines, which is `(2 spaces lead) + (2-col emoji) +
   (1 space)` = column 5.
 
-Colour suppression
+Color suppression
 ──────────────────
   ANSI codes (used only for banner dimming) are emitted only when
   stdout is a TTY (or when NO_COLOR is unset and FORCE_COLOR is
@@ -98,14 +98,14 @@ _LABEL_PAD_WIDTH = _console_constants["LABEL_PAD_WIDTH"]
 del _console_constants, _f
 
 
-def _colour_enabled(stream) -> bool:
+def _color_enabled(stream) -> bool:
     """
     True if we should emit ANSI codes on `stream`.
 
-    Honours NO_COLOR (https://no-color.org) — if NO_COLOR is set to
+    Honors NO_COLOR (https://no-color.org) — if NO_COLOR is set to
     any value, all output is monochrome regardless of TTY status.
-    Honours FORCE_COLOR for the inverse case (e.g. CI tools that
-    capture output but want colour preserved). Default is "colour
+    Honors FORCE_COLOR for the inverse case (e.g. CI tools that
+    capture output but want color preserved). Default is "color
     iff TTY".
     """
     if os.environ.get('NO_COLOR'):
@@ -137,7 +137,7 @@ def banner(label: str) -> None:
     global _first_banner
     used = len(_BANNER_LEAD) + len(label) + 1  # leading dashes + label + trailing space
     tail = '─' * max(0, _BANNER_WIDTH - used)
-    if _colour_enabled(sys.stdout):
+    if _color_enabled(sys.stdout):
         # Dim the dashes so the label stands out without being shouty.
         head_dashes = _DIM + _BANNER_LEAD + _RESET
         tail_dashes = _DIM + tail + _RESET

@@ -267,7 +267,7 @@ function absolutePositionedFixture(opts = {}) {
 
 
   // ── Page-count: caller-provided expectedPageCount honored ─────
-  // Verifies CRIT-1's fix (render.js used to silently drop the option,
+  // Verifies CRIT-1's fix (resume.js used to silently drop the option,
   // so checkLayoutInvariants always saw the hardcoded default 2).
   {
     const html = buildFixture({ pageCount: 3 });

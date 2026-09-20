@@ -1,0 +1,33 @@
+{
+  "yaml.schemas": {
+    "./schemas/profile.schema.json": [
+      "data/_profile*.yml"
+    ],
+    "./schemas/resume.schema.json": [
+      "data/resume*.yml",
+      "data/legacy/resume*.yml"
+    ],
+    "./schemas/letter.schema.json": [
+      "data/letter*.yml"
+    ]
+  },
+  "yaml.schemaStore.enable": false,
+  "yaml.validate": true,
+  "yaml.completion": true,
+  "yaml.hover": true,
+  "yaml.format.enable": false,
+  "[yaml]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2,
+    "editor.autoIndent": "keep",
+    "editor.detectIndentation": false,
+    "editor.trimAutoWhitespace": false,
+    "editor.quickSuggestions": {
+      "other": true,
+      "comments": false,
+      "strings": true
+    }
+  },
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true
+}

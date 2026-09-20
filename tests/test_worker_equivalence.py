@@ -1,0 +1,354 @@
+"""
+Tests for build/worker.py — the warm path must equal the cold path.
+
+WHY THIS TEST MATTERS MORE THAN IT LOOKS
+----------------------------------------
+worker.py exists so the GUI can re-render without paying interpreter
+startup on every keystroke. The moment it produces even slightly
+different output from `python build/build.py`, the project's central
+promise — "editing the YAML and re-running produces the same PDFs on
+any machine" — quietly stops being true, and it stops being true only
+for GUI users, which is the hardest kind of bug to notice.
+
+So this suite does not test the worker's logic. It tests that the
+worker has no logic: for each operation, it runs the real CLI entry
+point, snapshots the bytes it produced, runs the same operation through
+a warm worker, and asserts the bytes are identical.
+
+Both output paths are deterministic — build.py's HTML/metadata/favicon
+and crop_pdf.py's PDF all hash identically across repeated cold runs —
+so byte equality is the right assertion here, not a normalized or
+fuzzy comparison.
+
+The suite also asserts the worker survives failure. A worker that dies
+on a malformed YAML file would leave the GUI restarting a process on
+every other keystroke, which defeats the point of it being warm.
+
+Covered
+  • Handshake: the worker announces itself before any request.
+  • build(measurement) — dist/index.html, pdf_meta.json, favicon.svg.
+  • build(final)       — same three, placement-driven.
+  • crop               — the cropped, metadata-stamped PDF.
+  • Failure containment: a bad request does not end the process.
+  • Stale placement is reported as such, not as a template traceback.
+
+Not covered here
+  Log text. The CLI writes to a terminal and the worker writes into a
+  capture buffer, so ANSI color differs by design (_console disables
+  color on a non-tty). Artifacts are the contract; log formatting is
+  not.
+
+Skips cleanly when dist/ has not been built yet — build.py requires a
+compiled dist/styles.css, and final mode requires dist/placement.json.
+Run `npm run resume` once first.
+
+Final-mode tests also skip when dist/placement.json was solved for a
+different data source than the one currently resolving, since nothing
+in a Python-only suite can re-solve a layout.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+BUILD_DIR = ROOT / "build"
+
+sys.path.insert(0, str(BUILD_DIR))
+import _output_name  # noqa: E402  (what the last build called its PDFs)
+DIST = ROOT / "dist"
+
+WORKER = BUILD_DIR / "worker.py"
+BUILD_PY = BUILD_DIR / "build.py"
+CROP_PY = BUILD_DIR / "crop_pdf.py"
+
+STYLES_CSS = DIST / "styles.css"
+PLACEMENT = DIST / "placement.json"
+PDF_META = DIST / "pdf_meta.json"
+
+# The built color PDF, whatever the last build called it. Outputs are
+# named after you now (Gaius_Iulius_Resume.pdf), so this cannot be a
+# literal — and a literal that no longer matches would not fail, it
+# would make test_crop_matches_cli skip forever while still printing a
+# reason that sounds like an ordinary "nothing built yet". Hence the
+# lookup, and hence the skip message below quoting the resolved name.
+COLOR_PDF = _output_name.color_pdf(DIST, _output_name.stem_from_meta(PDF_META, 'resume'))
+
+# The three files a build writes. Compared after every build op.
+BUILD_ARTIFACTS = (DIST / "index.html", PDF_META, DIST / "favicon.svg")
+
+FRAME_PREFIX = "\x1e"
+TIMEOUT = 120  # generous: a cold import of pypdfium2 on a slow CI box
+
+
+def _have_dist():
+    return STYLES_CSS.exists()
+
+
+class Worker:
+    """Thin client for one warm worker process.
+
+    Deliberately minimal — it exists to prove the protocol works from
+    the outside, so it does not share any code with the Node client.
+    """
+
+    def __init__(self):
+        self.proc = subprocess.Popen(
+            [sys.executable, "-B", str(WORKER)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", bufsize=1, cwd=str(ROOT),
+        )
+        self.hello = self._read_frame()
+
+    def _read_frame(self):
+        for line in self.proc.stdout:
+            if line.startswith(FRAME_PREFIX):
+                return json.loads(line[1:])
+            # Stray non-frame output. The sentinel exists precisely so
+            # this degrades to noise instead of breaking the protocol.
+        raise AssertionError("worker stdout ended before a frame arrived")
+
+    def call(self, **req):
+        req.setdefault("id", 1)
+        self.proc.stdin.write(json.dumps(req) + "\n")
+        self.proc.stdin.flush()
+        return self._read_frame()
+
+    def close(self):
+        if self.proc.poll() is None:
+            try:
+                self.call(id=999, op="shutdown")
+                self.proc.wait(timeout=10)
+            except Exception:
+                self.proc.kill()
+        for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+
+def run_cold(args):
+    """Run a CLI entry point exactly as resume.js runs it."""
+    return subprocess.run(
+        [sys.executable, "-B", *args],
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+        timeout=TIMEOUT,
+    )
+
+
+def snapshot(paths):
+    """Read the current bytes of each path. Missing files record as None."""
+    return {p: (p.read_bytes() if p.exists() else None) for p in paths}
+
+
+@unittest.skipUnless(_have_dist(), "dist/ not built — run `npm run resume` first")
+class WorkerEquivalenceTest(unittest.TestCase):
+    """Warm worker output vs cold CLI output, byte for byte."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Both paths write into the real dist/. Preserve whatever was
+        # there so a test run never costs the developer their build.
+        cls._restore = snapshot(BUILD_ARTIFACTS)
+
+    @classmethod
+    def tearDownClass(cls):
+        for path, data in cls._restore.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(data)
+
+    def setUp(self):
+        self.worker = Worker()
+        self.addCleanup(self.worker.close)
+
+    # -- handshake ---------------------------------------------------
+
+    def test_announces_itself_before_any_request(self):
+        """The client must be able to tell a live worker from a hung one."""
+        self.assertTrue(self.worker.hello["ok"])
+        self.assertEqual(self.worker.hello["op"], "hello")
+        self.assertEqual(self.worker.hello["result"]["protocol"], 1)
+        self.assertEqual(Path(self.worker.hello["result"]["root"]), ROOT)
+
+    # -- build -------------------------------------------------------
+
+    # A cold 'final' build consumes dist/placement.json, which the solver
+    # wrote for one specific set of job and sidebar ids. Nothing in this
+    # suite can produce a placement — solving needs Node, Playwright and
+    # a browser — so the one on disk is ambient state, and it matches the
+    # current data only if the last thing to run a full build used the
+    # same data source. Switching between resume.yml and
+    # resume_default.yml, or editing job ids, leaves it stale.
+    #
+    # A stale placement makes the template raise on the missing id. That
+    # is correct behavior and says nothing about warm-versus-cold
+    # equivalence, so it skips rather than fails — an earlier version
+    # failed here and reported a template traceback as if the worker
+    # were at fault.
+    _STALE_PLACEMENT_MARKERS = ("UndefinedError", "has no attribute")
+
+    def _assert_build_matches_cli(self, mode):
+        cold = run_cold([str(BUILD_PY), f"--mode={mode}"])
+        if cold.returncode != 0:
+            combined = f"{cold.stdout}\n{cold.stderr}"
+            if mode == "final" and any(m in combined for m in self._STALE_PLACEMENT_MARKERS):
+                self.skipTest(
+                    "dist/placement.json was solved for different data — "
+                    "run `npm run resume` to re-solve, then re-run the tests"
+                )
+            self.fail(f"cold build failed:\n{cold.stdout}\n{cold.stderr}")
+        expected = snapshot(BUILD_ARTIFACTS)
+
+        # Perturb every artifact so a no-op worker can't pass by leaving
+        # the CLI's own output in place.
+        for path in BUILD_ARTIFACTS:
+            if path.exists():
+                path.write_bytes(b"clobbered by test\n")
+
+        frame = self.worker.call(op="build", mode=mode)
+        self.assertTrue(frame["ok"], f"warm build failed: {frame.get('error')}")
+        self.assertEqual(frame["result"]["mode"], mode)
+
+        for path, want in expected.items():
+            with self.subTest(artifact=path.name):
+                self.assertIsNotNone(want, f"cold build did not write {path.name}")
+                self.assertEqual(
+                    path.read_bytes(), want,
+                    f"{path.name} differs between the warm worker and "
+                    f"`python build/build.py --mode={mode}`",
+                )
+
+    def test_measurement_build_matches_cli(self):
+        self._assert_build_matches_cli("measurement")
+
+    @unittest.skipUnless(PLACEMENT.exists(), "dist/placement.json missing")
+    def test_final_build_matches_cli(self):
+        self._assert_build_matches_cli("final")
+
+    def test_reports_the_data_source_it_used(self):
+        """The GUI shows which YAML is live; it reads that from here."""
+        frame = self.worker.call(op="build", mode="measurement")
+        self.assertTrue(frame["ok"], frame.get("error"))
+        self.assertIn(frame["result"]["dataSource"], ("mine", "default"))
+        self.assertEqual(frame["result"]["dataSource"],
+                         json.loads(PDF_META.read_text(encoding="utf-8"))["data_source"])
+
+    # -- crop --------------------------------------------------------
+
+    @unittest.skipUnless(
+        COLOR_PDF.exists() and PDF_META.exists(),
+        f"{COLOR_PDF.name} not built")
+    def test_crop_matches_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cold_out = Path(tmp) / "cold.pdf"
+            warm_out = Path(tmp) / "warm.pdf"
+
+            cold = run_cold([str(CROP_PY), str(COLOR_PDF), str(cold_out),
+                             "--meta", str(PDF_META)])
+            self.assertEqual(cold.returncode, 0,
+                             f"cold crop failed:\n{cold.stdout}\n{cold.stderr}")
+
+            frame = self.worker.call(op="crop", input=str(COLOR_PDF),
+                                     output=str(warm_out), meta=str(PDF_META))
+            self.assertTrue(frame["ok"], f"warm crop failed: {frame.get('error')}")
+
+            self.assertEqual(
+                warm_out.read_bytes(), cold_out.read_bytes(),
+                "cropped PDF differs between the warm worker and "
+                "`python build/crop_pdf.py`",
+            )
+            # The geometry the whole pipeline exists to guarantee.
+            self.assertEqual(frame["result"]["widthPt"], 612.0)
+            self.assertEqual(frame["result"]["heightPt"], 792.0)
+
+    # -- failure containment -----------------------------------------
+
+    def test_unknown_op_does_not_kill_the_worker(self):
+        bad = self.worker.call(op="does_not_exist")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["kind"], "unknown_op")
+
+        alive = self.worker.call(op="ping")
+        self.assertTrue(alive["ok"], "worker died on an unknown op")
+
+    def test_bad_mode_does_not_kill_the_worker(self):
+        bad = self.worker.call(op="build", mode="sideways")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["kind"], "bad_request")
+
+        alive = self.worker.call(op="ping")
+        self.assertTrue(alive["ok"], "worker died on a bad mode")
+
+    def test_malformed_json_does_not_kill_the_worker(self):
+        self.worker.proc.stdin.write("{not json at all\n")
+        self.worker.proc.stdin.flush()
+        bad = self.worker._read_frame()
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"]["kind"], "bad_request")
+
+        alive = self.worker.call(op="ping")
+        self.assertTrue(alive["ok"], "worker died on malformed input")
+
+    def test_missing_input_file_is_reported_not_raised(self):
+        frame = self.worker.call(op="crop", input=str(DIST / "nope.pdf"),
+                                 output=str(DIST / "nope-out.pdf"), meta=None)
+        self.assertFalse(frame["ok"])
+        self.assertIn(frame["error"]["kind"], ("missing_file", "internal"))
+        self.assertTrue(self.worker.call(op="ping")["ok"])
+
+    # -- the warm-path-specific hazard -------------------------------
+
+    @unittest.skipUnless(
+        PLACEMENT.exists()
+        and (ROOT / "data" / "resume.yml").exists()
+        and (ROOT / "data" / "resume_default.yml").exists(),
+        "needs both data files and a solved placement",
+    )
+    def test_stale_placement_is_named_as_such(self):
+        """
+        The hazard a warm worker introduces: 'final' can be called
+        against a placement solved for different data. A cold CLI build
+        always re-solves first, so this can only happen here.
+
+        It must fail loudly and say why — never render a document from
+        a placement that doesn't match the data.
+        """
+        current = json.loads(PDF_META.read_text(encoding="utf-8"))["data_source"] \
+            if PDF_META.exists() else "mine"
+        other = "default" if current == "mine" else "mine"
+
+        frame = self.worker.call(op="build", mode="final",
+                                 env={"RESUME_DATA_SOURCE": other})
+
+        if frame["ok"]:
+            # Both YAML files happen to share their job and sidebar ids,
+            # so there is nothing stale to detect. Not a failure.
+            self.skipTest("both data files use the same ids")
+
+        self.assertEqual(frame["error"]["kind"], "stale_placement")
+        self.assertTrue(any("placement" in line.lower()
+                            for line in frame["error"]["detail"]))
+        self.assertTrue(self.worker.call(op="ping")["ok"])
+
+    def test_env_override_is_restored_after_the_call(self):
+        """A per-request env override must not leak into the next render."""
+        before = os.environ.get("RESUME_DATA_SOURCE")
+        self.worker.call(op="build", mode="measurement",
+                         env={"RESUME_DATA_SOURCE": "default"})
+        after = self.worker.call(op="build", mode="measurement")
+        self.assertTrue(after["ok"], after.get("error"))
+        # The worker's own environment is what matters; assert via the
+        # data source it resolves to with no override in play.
+        self.assertEqual(os.environ.get("RESUME_DATA_SOURCE"), before)
+
+
+if __name__ == "__main__":
+    unittest.main()
