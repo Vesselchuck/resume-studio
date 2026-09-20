@@ -1,11 +1,23 @@
 {
   "name": "resume-studio",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
+  "description": "Single-source-of-truth resume and cover letter, built to pixel-exact US Letter PDFs.",
+  "scripts": {
+    "resume": "node resume.js",
+    "build": "node resume.js",
+    "letter": "node letter.js",
+    "test": "node build/run_tests.js",
+    "ui": "node build/studio_server.js --open",
+    "ui:serve": "node build/studio_server.js",
+    "studio": "tauri dev",
+    "studio:build": "tauri build"
+  },
   "dependencies": {
     "playwright": "1.60.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
     "sass": "1.99.0"
   }
 }

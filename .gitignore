@@ -1,18 +1,51 @@
 # ─── Build outputs ──────────────────────────────────────────────
-# Regenerated on every `node render.js`. Each user produces their
-# own; never check these in. The PDFs (resume-color.pdf and
-# resume-grayscale.pdf) are written into dist/ alongside the HTML
-# and other build artifacts.
+# Regenerated on every `npm run resume`. Each user produces their
+# own; never check these in. The PDFs are named after whoever built
+# them (Gaius_Caesar_Resume.pdf) and are written into dist/ alongside
+# the HTML and other build artifacts — one more reason the whole
+# directory stays out of the repository.
 dist/
 
 # ─── Private data ───────────────────────────────────────────────
-# The committed `data/resume_default.yml` is a placeholder. Real resume
-# data lives in `data/resume.local.yml`, which stays local only.
-# Its matching snapshot fixtures (color + grayscale variants)
-# are also private.
-data/resume.local.yml
-tests/fixtures/expected_resume-color.local.pdf
-tests/fixtures/expected_resume-grayscale.local.pdf
+# AN ALLOWLIST, NOT A DENYLIST. Everything under data/ is yours and
+# stays on this machine; the three shipped templates are the only
+# exceptions, and they are named one by one below.
+#
+# This used to list the private files individually, which meant a new
+# file in data/ was committed unless someone remembered to add a line
+# for it — and several did slip through that way. Inverting it makes
+# the failure mode "I have to un-ignore my template" instead of "my
+# phone number is on GitHub".
+#
+# Renaming a data file therefore cannot expose it, and neither can
+# moving it into a subfolder such as data/legacy/. Only adding a
+# `!data/..._default.yml` line can, and that is a deliberate act.
+#
+# `data/**` rather than `data/*.yml`: a `*` stops at a slash, so the
+# narrower pattern left every file in a subfolder committable.
+data/**
+
+# The shipped placeholders, so a fresh clone still builds.
+!data/resume_default.yml
+!data/letter_default.yml
+!data/_profile_default.yml
+
+# Snapshot fixtures built from your data. The committed ones
+# (expected_resume-color.pdf, expected_resume-grayscale.pdf) come from
+# the template and stay tracked.
+tests/fixtures/expected_resume-color.mine.pdf
+tests/fixtures/expected_resume-grayscale.mine.pdf
+# The same two files under their pre-rename names. Nothing writes
+# these any more, but a copy made before the rename is a render of
+# your real resume.
+tests/fixtures/*.local.pdf
+
+# ─── Assistant output ───────────────────────────────────────────
+# Files an AI assistant saves into the project folder: preview
+# renders, drafts, comparisons. They are made from YOUR data — a
+# render of your letter shows your name, phone number and email — so
+# they are private for exactly the reason data/ is.
+Claude outputs/
 
 # ─── Test artifacts ─────────────────────────────────────────────
 # Diff images written when a snapshot test fails. They're useful
@@ -51,9 +84,36 @@ coverage/
 npm-debug.log*
 
 # ─── Editor / OS ────────────────────────────────────────────────
-.vscode/
+# Editor settings, except the one that is part of the project.
+#
+# .vscode/settings.json maps schemas/ onto data/, which is what gives
+# the YAML files completion and inline validation — and what turns off
+# SchemaStore, without which `resume.yml` draws errors from the
+# unrelated JSON Resume spec. Someone cloning this needs it, so it is
+# committed; everything else under .vscode/ is per-machine noise.
+#
+# NOTE the trailing /* rather than /. Git cannot re-include a file
+# whose parent DIRECTORY is excluded — it never descends into it — so
+# `.vscode/` followed by `!.vscode/settings.json` silently ignores the
+# file anyway. Excluding the directory's contents instead leaves git
+# free to walk in and honor the exception.
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.bak
 .DS_Store
 Thumbs.db
+
+# ─── Desktop shell (Resume Studio) ───────────────────────────────
+# Rust build artifacts. `npm run studio` fills this with several GB
+# of compiled crates on the first run; none of it is source.
+src-tauri/target/
+
+# Bundled installers produced by `npm run studio:build`.
+src-tauri/gen/
+
+# Studio no longer writes to data/ at all, but old timestamped copies
+# may still be lying around. Covered by `data/*.yml.bak` and the
+# blanket `*.bak` above; kept explicit so the intent survives a tidy-up.
+data/*.yml.*.bak

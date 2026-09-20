@@ -324,7 +324,7 @@ async function measureMainColumn(page) {
  *
  * @param {playwright.Page} page  Already navigated to dist/index.html
  *                                in measurement mode.
- * @param {number} maxPages       From meta.maxPages in resume_default.yml.
+ * @param {number} maxPages       From meta.maxPages in resume.yml.
  */
 async function extractMeasurements(page, maxPages) {
   const pageGeometry = await measurePageGeometry(page);

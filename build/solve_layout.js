@@ -117,7 +117,7 @@ const MIN_JOB_BULLETS_ON_PAGE = 1;
 // A bridged sidebar 'list' block must keep at least this many items on
 // the page where its heading lives (the "origin"). Prevents a lonely
 // heading + 1-2 items from appearing on one page with the bulk of the
-// list on the next — visually that reads as a labelling mistake rather
+// list on the next — visually that reads as a labeling mistake rather
 // than a deliberate split. 3 is the minimum that looks intentional.
 const MIN_SIDEBAR_ITEMS_ON_ORIGIN = 3;
 

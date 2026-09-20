@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "letter.schema.json",
+  "title": "Cover letter data",
+  "description": "The cover letter's source. build/build_letter.py renders it as a single flowing column — no measurement pass, no layout solver. Building it never touches the resume's files.",
+  "type": "object",
+  "required": ["letter"],
+  "properties": {
+    "name": {
+      "type": "object",
+      "description": "Your name, split in two so the design can weight them differently. Same shape as the resume's. Optional here: if data/_profile.yml supplies it, omit it and this file inherits it.",
+      "required": ["first", "last"],
+      "additionalProperties": false,
+      "properties": {
+        "first": { "type": "string", "description": "Given name." },
+        "last": { "type": "string", "description": "Family name." }
+      }
+    },
+
+    "role": {
+      "type": "string",
+      "description": "Optional subtitle under your name — usually the role this letter is for."
+    },
+
+    "contact": {
+      "type": "object",
+      "description": "Contact details in the letterhead. Normally omitted here and inherited from data/_profile.yml, which is the same file the resume inherits from — that is how the two documents stay in sync.",
+      "required": ["rows"],
+      "additionalProperties": false,
+      "properties": {
+        "address": { "type": "string", "description": "Shown on its own line." },
+        "rows": {
+          "type": "array",
+          "description": "Clickable contact lines. Use an empty list for address only.",
+          "items": {
+            "type": "object",
+            "required": ["value"],
+            "additionalProperties": false,
+            "properties": {
+              "value": { "type": "string", "minLength": 1, "description": "The text people see." },
+              "href": {
+                "type": "string",
+                "description": "Where it points: 'tel:', 'mailto:' or 'https:'.",
+                "examples": ["tel:+15551234567", "mailto:you@example.com"]
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "meta": {
+      "type": "object",
+      "description": "Optional document metadata. Only these two fields are read.",
+      "properties": {
+        "description": { "type": "string", "description": "One sentence, stamped into the PDF's metadata." },
+        "lang": {
+          "type": "string",
+          "description": "BCP 47 language tag, e.g. 'en-US'.",
+          "examples": ["en-US", "en-GB"]
+        }
+      }
+    },
+
+    "letter": {
+      "type": "object",
+      "description": "The letter itself.",
+      "required": ["body"],
+      "additionalProperties": false,
+      "properties": {
+        "recipient": {
+          "description": "The address block — name, company, street, city. Two forms, both accepted: a list of strings (one per line), or a single block scalar written with '|', which you can paste an address straight into. Unlike body, this splits on EVERY line, not on blank ones: each line is its own entry.",
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "description": "One entry per line.",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "description": "One block of text; each non-empty line becomes an entry."
+            }
+          ],
+          "examples": [["Hiring Team", "Acme Corp", "100 Main St", "Springfield, IL 62701"]]
+        },
+        "body": {
+          "description": "The whole letter, greeting and sign-off included. Two forms, both accepted: a list of strings (one per paragraph), or a single block scalar written with '|' where blank lines separate paragraphs. The block form is easier to paste into and easier to read. Start with 'Dear …,' and end with 'Sincerely,' — they are paragraphs like any other; the typed name below them is added from your profile.",
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "description": "One entry per paragraph.",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "description": "One block of text; blank lines split it into paragraphs."
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -93,7 +93,7 @@
 .section-heading {
   font-family: var(--font-display);
   /* Auto opsz selection — see .name. At 14pt the browser picks
-     opsz=14, which is the text-optimised shape Newsreader's
+     opsz=14, which is the text-optimized shape Newsreader's
      authors designed for small headings.                       */
   font-weight: 700;
   font-size: var(--size-section);
@@ -145,7 +145,7 @@
    feel like part of one typographic system that scales proportionally
    with size.                                                         */
 /* Generic subgroup label — bold/tracked all-caps used for any
-   labelled cluster of items inside a sidebar block. Two contexts:
+   labeled cluster of items inside a sidebar block. Two contexts:
    the DETAILS block (ADDRESS / PHONE / EMAIL above their values),
    and the per-group headers inside grouped Key Skills lists.
    Sized at --size-jobtitle so labels are visibly distinct from
@@ -192,7 +192,7 @@
    - Lighter weight (350 vs 400) — counterintuitive but it works
      at the larger size; produces airy, confident editorial feel
      used by The Economist and The New Yorker for lead paragraphs
-   - Bold lead-in via **markdown** in resume_default.yml renders as
+   - Bold lead-in via **markdown** in resume.yml renders as
      <strong> at weight 600, creating a 250-unit weight contrast
      against the 350 surrounding text — strong attention hook
    The combination differentiates the summary as the document's
@@ -238,7 +238,7 @@
 
 /* A "gap" entry — used for non-employment periods (relocation, career
    break, sabbatical, parental leave, etc.). Italicized and rendered
-   in muted grey so it reads visually as a soft note in the timeline
+   in muted gray so it reads visually as a soft note in the timeline
    rather than a role with the same weight as employment.            */
 .job--gap .entry-title {
   font-style: italic;
@@ -289,8 +289,8 @@
    character (U+00B7) rather than a pseudo-element rule — softer
    typographic texture, optically aligned with x-height instead of
    the full text body. The :last-child suppression prevents a stray
-   trailing dot on entries that have only a date (e.g. the "Transitus in
-   Cursum Novum" gap entry).                            */
+   trailing dot on entries that have only a date (e.g. a gap entry,
+   which has no location).                                          */
 .job-date::after {
   content: "·";
   margin-inline: var(--sp-sm);
@@ -316,7 +316,7 @@
    --accent) to keep the accent reserved for structural elements
    (heading bars) where it reads as architecture rather than
    decoration. `top: 0.6em` aligns the dot optically with the visual
-   centre of the line (between x-height and baseline) rather than
+   center of the line (between x-height and baseline) rather than
    mathematically with x-height, which lets the small filled dot
    read as a peer to the text instead of floating above it.       */
 .bullets li::before {
@@ -335,11 +335,11 @@
 
 /* ─── GAP ENTRY ─────────────────────────────────────────────
    Non-employment periods (relocation, career break, etc.).
-   Uses explicit colour tokens rather than opacity to keep meta
+   Uses explicit color tokens rather than opacity to keep meta
    text above WCAG AA contrast (4.5:1 on white) while still
-   de-emphasising the entry one tier below regular jobs.
+   de-emphasizing the entry one tier below regular jobs.
 
-   Title colour is already set above via `.job--gap .entry-title`
+   Title color is already set above via `.job--gap .entry-title`
    using --text-muted (#555555, 7.46:1 on white). Meta uses
    --text-muted-soft, one tier lighter, to widen the visual gap
    from regular meta.

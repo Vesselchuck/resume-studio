@@ -74,7 +74,7 @@ meta:
   # If your content can't fit in this many pages, the build STOPS
   # with a clear error instead of silently producing a longer PDF.
   # Raise this number if you genuinely need more room.
-  maxPages: 10
+  maxPages: 4
 
   # The language your resume is written in. Used by screen readers
   # and other assistive tech to pick the right pronunciation.
@@ -252,7 +252,7 @@ mainColumn:
   #   datetime: the START date in a machine-readable form. This is for
   #             screen readers (so they can announce dates correctly)
   #             and is NEVER displayed visually. Format: "YYYY" or
-  #             "YYYY-MM". Examples:  "2026"   or   "2026-01"
+  #             "YYYY-MM". Examples:  "2021"   or   "2021-03"
   #
   #   location: city, country/state. Free text.
   #
@@ -260,8 +260,8 @@ mainColumn:
   #             a concrete result, ideally with a number. To make part
   #             of a bullet appear bold, wrap it in double asterisks:
   #
-  #               "Reached **99% on-time** delivery..."
-  #                        ↑              ↑
+  #               "Cut onboarding time by **30%**..."
+  #                                       ↑     ↑
   #                        these become bold in the output
   #
   #             Only `**bold**` works. Other markdown (italics, links,

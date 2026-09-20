@@ -9,9 +9,10 @@
    layout IS the print layout — Ctrl/Cmd+P → Save as PDF in any
    Chromium browser produces a pixel-faithful PDF.
 
-   Content lives in data/resume_default.yml. The build pipeline
+   Content lives in data/resume.yml. The build pipeline
    (build/build.py + templates/) renders dist/index.html, then
-   render.js produces dist/resume-color.pdf and dist/resume-grayscale.pdf.
+   resume.js produces the color and grayscale PDFs in dist/, named
+   after you rather than after the document (build/_output_name.py).
    Page placement is
    AUTOMATIC: a layout solver (build/solve_layout.js) measures
    content heights from a single-column flowing render and decides
@@ -49,7 +50,7 @@
      4. The divider, an absolutely-positioned ::after pseudo-
         element of .body-grid, terminates there.
 
-   This invariant is checked at render time by render.js — if it
+   This invariant is checked at render time by resume.js — if it
    ever drifts, the build fails loudly.
 
    SECTION RHYTHM
@@ -59,7 +60,7 @@
    even though the columns use different parent-gap tokens.
    --section-rhythm encodes the total spacing; per-context margins
    are computed from it via calc(). This is also asserted at render
-   time by render.js.
+   time by resume.js.
 
    DESIGN PHILOSOPHY
    ─────────────────
@@ -69,8 +70,8 @@
        + tracking), not by decorative elements. The name relies on
        its size (30pt); section headings rely on weight + tracking
        + a short underline rule; job titles rely on weight alone.
-     • Colour is restrained: one ink, one muted, one separator-rule,
-       plus paper. Five tokens total. Adding a third text colour or
+     • Color is restrained: one ink, one muted, one separator-rule,
+       plus paper. Five tokens total. Adding a third text color or
        an accent should be deliberate and earned, not casual.
      • Whitespace does the work of separation between groups. The
        --section-rhythm token gives both columns identical visible
@@ -96,15 +97,15 @@
    All gaps and margins use the spacing scale (--sp-xs through
    --sp-xl, geometric ~1.4× steps). Page-geometry tokens are in
    absolute units (in) because they're physical print dimensions.
-   Type tokens are in pt for print fidelity. Colour tokens follow
+   Type tokens are in pt for print fidelity. Color tokens follow
    role-based naming (--text-primary, --text-muted, --border-rule,
    --surface-app, --surface-page) so the system extends predictably
-   if a third text colour or an accent is added later.
+   if a third text color or an accent is added later.
 
    FILE ORGANIZATION
    ─────────────────
    This file is the Sass entry point. Compiled to dist/styles.css
-   by `node render.js` (via the `sass` npm package). Edit the
+   by `npm run resume` (via the `sass` npm package). Edit the
    underscore-prefixed partials, not the compiled output.
 
      _tokens.scss        CSS custom properties (page geometry,
@@ -133,3 +134,4 @@
 @use 'components';
 @use 'print';
 @use 'measurement';
+@use 'letter';

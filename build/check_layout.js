@@ -37,7 +37,7 @@ const LAYOUT_CONSTANTS = Object.freeze({
 async function checkLayoutInvariants(page, options = {}) {
   // expectedPageCount: how many .page elements the caller expects.
   // Defaults to LAYOUT_CONSTANTS.EXPECTED_PAGE_COUNT for backward
-  // compatibility; render.js passes the value from the placement.
+  // compatibility; resume.js passes the value from the placement.
   const expectedPageCount = options.expectedPageCount
     ?? LAYOUT_CONSTANTS.EXPECTED_PAGE_COUNT;
 

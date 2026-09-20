@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "profile.schema.json",
+  "title": "Shared profile",
+  "description": "data/_profile.yml — values common to every document, merged underneath each resume and cover letter beside it. The document always wins; this file only fills in what a document leaves out. Delete the file to turn the whole mechanism off.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "object",
+      "description": "Your name, split in two because the design styles them differently — the last name is set bolder than the first.",
+      "required": ["first", "last"],
+      "additionalProperties": false,
+      "properties": {
+        "first": { "type": "string", "minLength": 1, "description": "Given name, shown in the lighter weight." },
+        "last": { "type": "string", "minLength": 1, "description": "Family name, shown bolder." }
+      }
+    },
+
+    "contact": {
+      "type": "object",
+      "description": "Contact details. Change a number here and it changes on every resume and every cover letter — that is the point of this file.",
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Shown on its own line. Usually just 'City, State'."
+        },
+        "rows": {
+          "type": "array",
+          "description": "Clickable contact lines. A document that sets contact.rows replaces this whole list rather than adding to it.",
+          "items": {
+            "type": "object",
+            "required": ["value"],
+            "additionalProperties": false,
+            "properties": {
+              "value": { "type": "string", "minLength": 1, "description": "The text people see." },
+              "href": {
+                "type": "string",
+                "description": "What clicking it does: 'tel:', 'mailto:' or 'https:'.",
+                "examples": ["tel:+15551234567", "mailto:you@example.com"]
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "role": {
+      "type": "string",
+      "description": "A fallback subtitle under your name. Rarely useful here — 'role' names the job you are applying for, so it almost always belongs in the document instead. Kept available for a standing title you never change."
+    },
+
+    "meta": {
+      "type": "object",
+      "description": "'lang' and 'maxPages' belong here — both are standing decisions rather than per-application ones. 'description' names the target role, so it stays in each document.",
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "string",
+          "description": "BCP 47 language tag, stamped into the PDF so screen readers pronounce it correctly.",
+          "examples": ["en-US", "en-GB", "ru-RU"]
+        },
+        "description": {
+          "type": "string",
+          "description": "A fallback metadata sentence for a document that sets none. Prefer writing a specific one per application — this sentence names the target role and is read by some applicant tracking systems."
+        },
+        "maxPages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The ceiling the layout solver works under, for every resume. A document that needs more room sets its own maxPages, which wins. The cover letter has no solver and ignores this."
+        }
+      }
+    }
+  }
+}

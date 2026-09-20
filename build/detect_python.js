@@ -6,7 +6,7 @@
  * responds to `--version` with exit code 0 AND doesn't appear to be
  * the Microsoft Store alias stub on Windows.
  *
- * Used by render.js (build pipeline) and run_tests.js (test runner)
+ * Used by resume.js (build pipeline) and run_tests.js (test runner)
  * so both pick the same interpreter without duplicating logic.
  */
 
@@ -39,9 +39,9 @@ function detectPython() {
   c.detail(`Tried: ${candidates.join(', ')}`);
   c.detail('');
   c.detail('Install Python 3 or set the PYTHON env var explicitly:');
-  c.detail('  bash/zsh:    PYTHON=python3.12 node render.js');
-  c.detail('  cmd.exe:     set PYTHON=py && node render.js');
-  c.detail('  PowerShell:  $env:PYTHON="py"; node render.js');
+  c.detail('  bash/zsh:    PYTHON=python3.12 npm run resume');
+  c.detail('  cmd.exe:     set PYTHON=py && npm run resume');
+  c.detail('  PowerShell:  $env:PYTHON="py"; npm run resume');
   process.exit(1);
 }
 

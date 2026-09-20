@@ -170,8 +170,8 @@ class TestDerivePDFMetadata(unittest.TestCase):
     # ── data_source (passed in by caller) ──────────────────────────
 
     def test_data_source_passed_through_verbatim(self):
-        m = call(good_data(), data_source="local")
-        self.assertEqual(m["data_source"], "local")
+        m = call(good_data(), data_source="mine")
+        self.assertEqual(m["data_source"], "mine")
 
     def test_data_source_is_not_read_from_data(self):
         # The function takes data_source as a parameter; any
@@ -193,7 +193,7 @@ class TestDerivePDFMetadata(unittest.TestCase):
         # max_pages has no default. The validator catches this much
         # earlier in the build flow (validate_data requires it), so
         # by the time derive_pdf_metadata runs, it's guaranteed
-        # present. This test pins that hard-fail behaviour so a
+        # present. This test pins that hard-fail behavior so a
         # regression that adds a silent default would be caught.
         d = good_data()
         del d["meta"]["maxPages"]

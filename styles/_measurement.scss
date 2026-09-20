@@ -4,7 +4,7 @@
 
    The single .page in that document needs to grow tall enough to
    contain ALL content (no overflow clipping, no fixed height).
-   The layout solver in render.js then measures positions of
+   The layout solver in resume.js then measures positions of
    [data-measure] elements to decide where real page breaks land.
 
    Everything else stays the same as the print layout — same column

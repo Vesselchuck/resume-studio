@@ -40,7 +40,7 @@ def make_pdf_with_page(width_pt: float, height_pt: float,
                        creator: str = "Test/Creator") -> io.BytesIO:
     """Synthesize an in-memory PDF with one blank page of the given size.
 
-    Stamps a recognisable Producer/Creator so we can verify that
+    Stamps a recognizable Producer/Creator so we can verify that
     apply_metadata leaves them alone.
     """
     w = PdfWriter()

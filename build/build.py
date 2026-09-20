@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-build.py — Generate dist/index.html from data/resume_default.yml.
+build.py — Generate dist/index.html from data/resume.yml.
+           (data/resume_default.yml is the shipped placeholder.)
 
 Reads the resume data, validates its shape, computes derived fields
 (page-2 jobs, continuation job, PDF metadata), and renders
@@ -9,9 +10,9 @@ templates/resume.j2 to dist/index.html.
 Two modes:
   • --mode=final (default) — produces the paginated resume from a
     placement read from dist/placement.json. The placement is
-    written by render.js after the layout solver runs.
+    written by resume.js after the layout solver runs.
   • --mode=measurement — produces a single-page flowing layout
-    that the layout solver in render.js measures to decide
+    that the layout solver in resume.js measures to decide
     page placement.
 
 Custom Jinja filter:
@@ -21,7 +22,7 @@ Custom Jinja filter:
 HTML escaping for special characters (& < >) is done via Jinja's
 built-in `e` (escape) filter at the template call sites.
 
-Run via `node render.js`, which calls this first; or directly with
+Run via `npm run resume`, which calls this first; or directly with
 `python3 build/build.py` (run from project root).
 """
 
@@ -40,14 +41,15 @@ import json
 import argparse
 from pathlib import Path
 
-import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 # Local sibling modules. Inserted at import time so the same `c.ok()`
 # / `c.err()` API and shared constants are available everywhere.
 sys.path.insert(0, str(Path(__file__).parent))
 import _console as c  # noqa: E402
-from _env_contract import ENV_RESUME_DATA_SOURCE  # noqa: E402
+import _yaml_loader  # noqa: E402  (libyaml + YAML 1.2 core typing)
+import _output_name  # noqa: E402  (derives the PDF filename from your name)
+from _env_contract import ENV_RESUME_DATA_SOURCE, ENV_RESUME_DATA_FILE  # noqa: E402
 
 
 ROOT = Path(__file__).parent.parent      # this script lives in build/
@@ -57,18 +59,27 @@ OUT_FILE = ROOT / "dist" / "index.html"
 FAVICON_FILE = ROOT / "dist" / "favicon.svg"
 TOKENS_FILE = ROOT / "styles" / "_tokens.scss"
 
-# Data-file precedence: local (real, gitignored) wins over the
-# committed placeholder. This lets the repo ship a template
-# resume_default.yml while real resumes live in resume.local.yml outside
-# version control.
-DATA_FILE_LOCAL = DATA_DIR / "resume.local.yml"
+# Data-file precedence: your resume wins over the shipped template.
+#
+# data/resume.yml is yours and is gitignored. data/resume_default.yml
+# is the Caesar placeholder the repo ships so the project builds for
+# someone who has just cloned it.
+#
+# The unsuffixed name belongs to the real document on purpose: the
+# file you edit every week should have the obvious name, and the one
+# you touch once should carry the qualifier. .gitignore is written as
+# an allowlist to match — everything in data/ is private except the
+# three *_default.yml templates — so a new file you drop in there is
+# private by default rather than exposed until someone remembers to
+# add a line for it.
+DATA_FILE_MINE = DATA_DIR / "resume.yml"
 DATA_FILE_DEFAULT = DATA_DIR / "resume_default.yml"
 PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
 
 
 def fail(msg: str) -> None:
     """
-    Emit a coloured error headline (and any subsequent newline-
+    Emit a colored error headline (and any subsequent newline-
     separated detail lines) via _console, then exit non-zero.
 
     Replaces the old `sys.exit('ERROR: ...')` pattern. The message
@@ -113,20 +124,168 @@ def markdown_filter(text):
     return re.sub(r"(?<!\*)\*\*([^*\n]+?)\*\*(?!\*)", r"<strong>\1</strong>", s)
 
 
+# ─── The shared profile ──────────────────────────────────────────
+
+#: A file of values common to every document, merged underneath each
+#: one. Named with a leading underscore so it sorts to the top of
+#: data/ and so the Studio app has a clean rule for keeping it out of
+#: the document picker: it is not a document.
+PROFILE_NAME = "_profile.yml"
+
+#: The profile the shipped templates merge instead. See profile_for.
+DEFAULT_PROFILE_NAME = "_profile_default.yml"
+
+
+def profile_for(doc_path):
+    """
+    The profile a document merges: the one beside it, from its own world.
+
+    There are two worlds in data/, and they must not mix:
+
+      yours      resume.yml, letter.yml      → _profile.yml
+      template   resume_default.yml,         → _profile_default.yml
+                 letter_default.yml
+
+    A template document merges the template profile, never yours. That
+    matters more than it looks, because the template is what the
+    COMMITTED snapshot fixtures are rendered from
+    (`snapshot_pdf.py --update-all` builds it and writes
+    tests/fixtures/expected_resume-*.pdf, which git tracks). If the
+    template merged your real profile, any key it left out — delete its
+    `contact` block and let the profile "fill it in" — would put your
+    real phone number into a file that goes to the repository. Keeping
+    the worlds apart makes that impossible by construction rather than
+    by the template happening to be complete.
+
+    A document is a template when its file name ends in `_default`
+    before the extension, which is the naming the project already uses
+    for everything it ships.
+    """
+    doc = Path(doc_path)
+    name = DEFAULT_PROFILE_NAME if doc.stem.endswith("_default") else PROFILE_NAME
+    return doc.parent / name
+
+
+def deep_merge(base, override):
+    """
+    Merge `override` onto `base`, recursing into nested mappings.
+
+    Mappings merge key by key; everything else — scalars and lists —
+    is replaced wholesale by `override`.
+
+    Lists replace rather than concatenate, and that is the important
+    decision here. `contact.rows` is the case that settles it: if a
+    document listed one row and the profile listed three, a
+    concatenating merge would produce four rows in an order nobody
+    chose, and "override one contact row" would be impossible to
+    express. Replacing means a document that mentions `rows` at all
+    owns the whole list, which is easy to predict and easy to undo.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def apply_profile(data, doc_path):
+    """
+    Merge the shared profile sitting beside `doc_path` under `data`.
+
+    Which profile — yours or the template's — is decided by
+    profile_for, and the template never sees yours.
+
+    Returns the merged mapping. The document always wins: the profile
+    supplies a key only where the document has not.
+
+    WHY THE PROFILE LIVES NEXT TO THE DOCUMENT
+    ──────────────────────────────────────────
+    The path is derived from the document's own directory rather than
+    from a module-level constant pointing at data/. That keeps the
+    rule simple to state — a profile applies to the files beside it —
+    and it means a document loaded from somewhere else entirely via
+    RESUME_DATA_FILE picks up the profile next to *it*, or none at
+    all, rather than silently inheriting this project's.
+
+    WHY THIS IS SAFE TO ADD TO AN EXISTING SETUP
+    ────────────────────────────────────────────
+    No profile file, no change. A profile that duplicates what the
+    documents already say, no change either — the document's own
+    values win. So the file can appear first and the duplicated blocks
+    can be deleted from each document later, one at a time, with every
+    intermediate state producing the same PDF.
+
+    The merge is announced in the build log. That is the whole reason
+    it is allowed to be implicit: a value can reach the PDF from a
+    file the document never mentions, so the build has to say so out
+    loud, every time, rather than leaving you to wonder where a phone
+    number came from.
+    """
+    profile_path = profile_for(doc_path)
+    if not profile_path.exists():
+        return data
+
+    with profile_path.open(encoding="utf-8") as f:
+        profile = _yaml_loader.load(f)
+
+    # An empty file is a reasonable thing to leave lying around while
+    # you decide what to put in it; a list or a string is a mistake.
+    if profile is None:
+        return data
+    if not isinstance(profile, dict):
+        fail(
+            f"{profile_path.name} must be a YAML mapping at the top level "
+            f"(parsed as {type(profile).__name__}).\n"
+            f"  {profile_path}"
+        )
+
+    try:
+        shown = profile_path.relative_to(ROOT)
+    except ValueError:
+        shown = profile_path
+    supplied = _profile_contributions(profile, data)
+    c.ok_pair(
+        "Shared profile",
+        f"{shown} → {', '.join(supplied) if supplied else 'nothing new'}",
+    )
+    return deep_merge(profile, data)
+
+
+def _profile_contributions(profile, data, prefix=""):
+    """
+    The dotted paths the profile actually fills in, for the build log.
+
+    Recurses so the log says 'meta.lang' rather than nothing at all
+    when the document has its own `meta` block but no `lang` inside
+    it — which is the common case, since `meta.description` belongs
+    to the document and `meta.lang` does not.
+    """
+    found = []
+    for key, value in profile.items():
+        path = f"{prefix}{key}"
+        if key not in data:
+            found.append(path)
+        elif isinstance(value, dict) and isinstance(data[key], dict):
+            found.extend(_profile_contributions(value, data[key], f"{path}."))
+    return sorted(found)
+
+
 def load_data():
     """Load resume data.
 
-    Default behavior: prefer resume.local.yml over resume_default.yml.
+    Default behavior: prefer resume.yml over resume_default.yml.
 
     Override via RESUME_DATA_SOURCE env var:
-      • RESUME_DATA_SOURCE=default → ignore resume.local.yml even if present
-      • RESUME_DATA_SOURCE=local   → require resume.local.yml (error if missing)
-      • unset (default) → original behavior (local if present, else default)
+      • RESUME_DATA_SOURCE=default → ignore resume.yml even if present
+      • RESUME_DATA_SOURCE=mine    → require resume.yml (error if missing)
+      • unset (default) → yours if present, else the shipped template
 
     The env var is consumed by snapshot_pdf.py --update-all to force a
     specific data source for each of the two builds it runs.
 
-    Returns a (data, source) tuple where `source` is 'local' or
+    Returns a (data, source) tuple where `source` is 'mine' or
     'default'. Callers thread `source` explicitly into the PDF metadata
     manifest. Previously this function stamped a `_data_source` field
     on the returned dict, which (a) mutated the user-data dict so
@@ -135,15 +294,45 @@ def load_data():
     Returning a tuple keeps the data dict clean and the contract
     explicit.
     """
-    override = os.environ.get(ENV_RESUME_DATA_SOURCE, '').strip().lower()
-    if override == 'local':
-        if not DATA_FILE_LOCAL.exists():
+    # An explicit file wins over everything else.
+    #
+    # This exists so a tool can render an arbitrary YAML file without
+    # copying it over data/resume.yml first. Reading a file and
+    # replacing someone's file are very different operations, and the
+    # absence of this option made a preview feature reach for the
+    # destructive one.
+    explicit = os.environ.get(ENV_RESUME_DATA_FILE, '').strip()
+    if explicit:
+        path = Path(explicit)
+        if not path.is_absolute():
+            path = ROOT / path
+        if not path.exists():
+            fail(f"{ENV_RESUME_DATA_FILE} points at a file that does not exist:\n  {path}")
+        try:
+            shown = path.relative_to(ROOT)
+        except ValueError:
+            shown = path
+        c.ok_pair("Loaded data", str(shown))
+        with path.open(encoding="utf-8") as f:
+            data = _yaml_loader.load(f)
+        if not isinstance(data, dict):
             fail(
-                f"{ENV_RESUME_DATA_SOURCE}=local but no local data file at "
-                f"{DATA_FILE_LOCAL.relative_to(ROOT)}"
+                f"{shown} is empty or not a YAML mapping at the top "
+                f"level (parsed as {type(data).__name__})."
             )
-        path = DATA_FILE_LOCAL
-        source = 'local'
+        # 'mine' for metadata purposes: it is not the shipped template,
+        # so the snapshot machinery should treat it as private data.
+        return apply_profile(data, path), 'mine'
+
+    override = os.environ.get(ENV_RESUME_DATA_SOURCE, '').strip().lower()
+    if override == 'mine':
+        if not DATA_FILE_MINE.exists():
+            fail(
+                f"{ENV_RESUME_DATA_SOURCE}=mine but no data file at "
+                f"{DATA_FILE_MINE.relative_to(ROOT)}"
+            )
+        path = DATA_FILE_MINE
+        source = 'mine'
     elif override == 'default':
         if not DATA_FILE_DEFAULT.exists():
             fail(
@@ -155,38 +344,40 @@ def load_data():
     elif override:
         fail(
             f"invalid {ENV_RESUME_DATA_SOURCE}={override!r}; "
-            f"expected 'default', 'local', or unset"
+            f"expected 'default', 'mine', or unset"
         )
-    elif DATA_FILE_LOCAL.exists():
-        path = DATA_FILE_LOCAL
-        source = 'local'
+    elif DATA_FILE_MINE.exists():
+        path = DATA_FILE_MINE
+        source = 'mine'
     elif DATA_FILE_DEFAULT.exists():
         path = DATA_FILE_DEFAULT
         source = 'default'
     else:
         fail(
             f"no data file found. Expected one of:\n"
-            f"  {DATA_FILE_LOCAL.relative_to(ROOT)}\n"
+            f"  {DATA_FILE_MINE.relative_to(ROOT)}\n"
             f"  {DATA_FILE_DEFAULT.relative_to(ROOT)}"
         )
     c.ok_pair("Loaded data", str(path.relative_to(ROOT)))
     with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = _yaml_loader.load(f)
     if not isinstance(data, dict):
         fail(
             f"{path.relative_to(ROOT)} is empty or not a YAML "
             f"mapping at the top level (parsed as {type(data).__name__})."
         )
-    return data, source
+    return apply_profile(data, path), source
 
 
 def derive_pdf_metadata(data, lang, data_source):
     """
     Derive authoritative PDF metadata from the resume data.
 
-    Source of truth is `resume_default.yml` (or `resume.local.yml`); we don't
+    Source of truth is `resume.yml` (or `resume_default.yml`); we don't
     duplicate. Title and author come from the name; subject from the
-    description; keywords from the page-1 sidebar's "Key Skills" block.
+    description; keywords from the page-1 sidebar's "Key Skills" block;
+    `output_stem` from the name again, this time folded into something
+    a filename can hold.
 
     `lang` and `data_source` are passed in explicitly by the caller
     (build()) — both are resolved once at the top of the build and
@@ -236,9 +427,15 @@ def derive_pdf_metadata(data, lang, data_source):
         # local override. Consumed by snapshot_pdf.py so the visual
         # regression test compares against the matching fixture.
         'data_source': data_source,
-        # maxPages cap from meta.maxPages — read by render.js to feed
+        # maxPages cap from meta.maxPages — read by resume.js to feed
         # the layout solver.
         'max_pages': data['meta']['maxPages'],
+        # The filename stem both PDF variants share, derived from the
+        # name above. Node cannot read the YAML this came from, so the
+        # derivation happens here and travels in this file; see
+        # _output_name.py for the folding rules and _output_name.js
+        # for who reads it back.
+        'output_stem': _output_name.stem(data['name'], 'resume'),
     }
 
 
@@ -262,7 +459,7 @@ def resolve_lang(data: dict) -> str:
 
 def read_accent() -> str:
     """
-    Read the canonical --accent colour from styles/_tokens.scss.
+    Read the canonical --accent color from styles/_tokens.scss.
 
     Single source of truth: the SCSS token file is the design-system
     canon for the accent. Other consumers that need the same value
@@ -281,7 +478,7 @@ def read_accent() -> str:
     if not TOKENS_FILE.exists():
         fail(
             f"{TOKENS_FILE.relative_to(ROOT)} not found — "
-            f"cannot determine accent colour for favicon and template."
+            f"cannot determine accent color for favicon and template."
         )
     source = TOKENS_FILE.read_text(encoding='utf-8')
     # Match only the :root declaration (the first --accent encountered).
@@ -313,7 +510,7 @@ def write_favicon(data, out_path, accent_hex):
 
     The SVG background is `accent_hex`, threaded in by the caller from
     read_accent() so the favicon visually matches the document's
-    section-heading colour without duplicating the hex literal here.
+    section-heading color without duplicating the hex literal here.
     """
     first = (data.get('name', {}).get('first') or '').strip()
     last  = (data.get('name', {}).get('last')  or '').strip()
@@ -391,7 +588,8 @@ def validate_data(data):
       • mainColumn is a list of section dicts; each 'type' is in
         VALID_SECTION_TYPES; exactly one of each section type exists
       • experience.jobs is a list; each job has a unique kebab-case 'id'
-        and either bullets (regular job) or gap=true (gap entry)
+        and either bullets (regular job) or gap=true (gap entry).
+        'gap', when present, must be an unquoted boolean
 
     Raises SchemaError on the first violation found.
     """
@@ -516,6 +714,19 @@ def validate_data(data):
         if job["id"] in seen_job_ids:
             raise SchemaError(f"{ctx}: duplicate job id {job['id']!r}")
         seen_job_ids.add(job["id"])
+        # 'gap' must be a real boolean, not a string that looks like one.
+        #
+        # build/_yaml_loader.py resolves an unquoted `gap: true` to True,
+        # but `gap: "true"` and `gap: "false"` both arrive as non-empty
+        # strings — and every non-empty string is truthy in Python, so
+        # the quoted form would mark a gap entry while appearing to say
+        # the opposite. Checking the type costs nothing; debugging a job
+        # whose bullets silently vanished costs an afternoon.
+        if "gap" in job and not isinstance(job["gap"], bool):
+            raise SchemaError(
+                f"{ctx}: 'gap' must be true or false, unquoted; got "
+                f"{job['gap']!r}"
+            )
         # Gap entries skip bullets entirely; regular jobs must have a list.
         if not job.get("gap"):
             if not isinstance(job.get("bullets"), list) or not job["bullets"]:
@@ -564,8 +775,8 @@ def check_stylesheet_freshness():
     Fail fast if dist/styles.css is missing or significantly older
     than its SCSS sources.
 
-    The build pipeline compiles SCSS in render.js step 1, before this
-    script runs — so the canonical `node render.js` path always passes
+    The build pipeline compiles SCSS in resume.js step 1, before this
+    script runs — so the canonical `npm run resume` path always passes
     this check immediately. Direct invocations of build.py
     (`python build/build.py ...`) skip the Sass step entirely; without
     this check, they'd render an HTML that silently references a missing
@@ -599,8 +810,8 @@ def check_stylesheet_freshness():
     if not css_file.exists():
         fail(
             f"{css_file.relative_to(ROOT)} not found.\n"
-            f"build.py does not compile SCSS — `node render.js` does that as step 1.\n"
-            f"Run `node render.js` for the canonical flow, or compile manually:\n"
+            f"build.py does not compile SCSS — `npm run resume` does that as step 1.\n"
+            f"Run `npm run resume` for the canonical flow, or compile manually:\n"
             f"  {sass_cmd}"
         )
     css_mtime = css_file.stat().st_mtime
@@ -621,7 +832,7 @@ def check_stylesheet_freshness():
         fail(
             f"{css_file.relative_to(ROOT)} is older than its SCSS sources:\n"
             f"{listing}\n"
-            f"Recompile with `node render.js`, or:\n"
+            f"Recompile with `npm run resume`, or:\n"
             f"  {sass_cmd}"
         )
 
@@ -654,7 +865,7 @@ def build(mode='final'):
     block_by_id = {b["id"]: b for b in data["sidebar"]["blocks"]}
     job_by_id = {j["id"]: j for j in experience["jobs"]}
 
-    # Canonical accent colour, read from the SCSS token file. Threaded
+    # Canonical accent color, read from the SCSS token file. Threaded
     # into the template context (theme-color meta tag) and the favicon
     # SVG so neither has to duplicate the hex literal. See read_accent's
     # docstring for the centralization rationale.
@@ -715,15 +926,15 @@ def build(mode='final'):
         )
     else:
         # Final paginated build. Requires dist/placement.json (written
-        # by render.js after measurement + solving). Direct invocations
-        # of this script in --mode=final without a prior render.js run
+        # by resume.js after measurement + solving). Direct invocations
+        # of this script in --mode=final without a prior resume.js run
         # will fail with a clear message.
         placement_path = ROOT / "dist" / "placement.json"
         if not placement_path.exists():
             fail(
                 f"{placement_path.relative_to(ROOT)} not found.\n"
                 f"Final-mode build requires the layout solver's placement.\n"
-                f"Run `node render.js` to produce it, or `python "
+                f"Run `npm run resume` to produce it, or `python "
                 f"{Path(__file__).relative_to(ROOT)} --mode=measurement` "
                 f"to generate the measurement HTML for inspection."
             )
@@ -769,10 +980,10 @@ def build(mode='final'):
             f"or editor previewing the rendered HTML). Close it and re-run."
         )
     # dist/styles.css is produced by Sass (compiled from
-    # styles/styles.scss in render.js step 1). The freshness
+    # styles/styles.scss in resume.js step 1). The freshness
     # of that file is verified up-front by check_stylesheet_freshness().
     # Emit PDF metadata manifest for crop_pdf.py to consume.
-    # In measurement mode we still emit it so render.js can read
+    # In measurement mode we still emit it so resume.js can read
     # data_source consistently regardless of mode.
     pdf_meta = derive_pdf_metadata(data, lang, data_source)
     try:

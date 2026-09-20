@@ -52,7 +52,7 @@
   --accent:          #1a1a1a;
 }
 
-/* B&W / monochrome print: token-only colour overrides tuned for
+/* B&W / monochrome print: token-only color overrides tuned for
    what a 600dpi laser printer actually puts on paper, not just
    what a screen-side luminance calculation would predict.
    Rationale per token:
@@ -69,7 +69,7 @@
                         Collapse intentionally. The gap-entry's
                         distinctness is already carried by italic +
                         no-bullets + smaller block height — all of
-                        which survive any printer. A mid-grey at
+                        which survive any printer. A mid-gray at
                         Y=68 (#444) would sit inside the halftone
                         problem zone for a one-line element and
                         risk a visibly screened texture that reads
@@ -95,23 +95,23 @@
                         hierarchy inversion. Worse on paper: dot
                         gain compresses the dark end (#1a1a → near-
                         solid black at 14pt body) and expands the
-                        light end (#434343 stays visibly grey), so
+                        light end (#434343 stays visibly gray), so
                         the inversion is amplified, not mitigated.
-                        Collapse to body colour instead; typography
+                        Collapse to body color instead; typography
                         — Newsreader serif vs Manrope sans, 14pt vs
                         10pt, all-caps with --ls-wide letter-spacing,
                         surrounding whitespace — carries the heading
                         rank without depending on tonal value.
 
-   Result: in the colour version, recipients see four tonal layers
-   (accent green, body black, muted grey, rule whisper). In the
+   Result: in the color version, recipients see four tonal layers
+   (accent green, body black, muted gray, rule whisper). In the
    B&W variant, three (headings folded into body, no halftone risk,
    photocopy-resilient). The two variants aim for the best version
    of themselves on their respective output medium, not visual
    equivalence between media.
 
    This block applies ONLY when the printer reports as monochrome,
-   so colour printers see the original lighter aesthetic.          */
+   so color printers see the original lighter aesthetic.          */
 @media print and (monochrome) {
   :root {
     @include grayscale-tokens;
@@ -119,7 +119,7 @@
 }
 
 /* Force-grayscale variant: applied via `<html class="force-grayscale">`
-   by render.js when producing the dedicated grayscale PDF. Browsers
+   by resume.js when producing the dedicated grayscale PDF. Browsers
    can't activate the (monochrome) media query through Playwright's
    emulateMedia API, so we replicate its rule cascade unconditionally
    under a class selector.
@@ -127,14 +127,14 @@
    CRUCIALLY does NOT use filter: grayscale(1). CSS filters require
    pixel-level compositing, so Chromium rasterizes the entire page
    into a bitmap and embeds the rasterized result in the PDF — the
-   grayscale.pdf ends up ~6× the size of the colour version (e.g.
+   grayscale.pdf ends up ~6× the size of the color version (e.g.
    1.2 MB vs 204 KB) and sub-pixel text positions get snapped to
    integer pixel coordinates with anti-aliasing, producing small
-   layout differences relative to the vector colour PDF.
+   layout differences relative to the vector color PDF.
 
    Token-only overrides keep the PDF as pure vector text and
    strokes, with byte-identical layout geometry between the two
-   variants. Pixel values differ only for the four colour tokens
+   variants. Pixel values differ only for the four color tokens
    above; everything else (page dimensions, glyph positions, line
    widths, separator positions) is mathematically identical.        */
 html.force-grayscale {
