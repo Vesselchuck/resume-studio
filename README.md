@@ -1,5 +1,9 @@
 # Resume Studio
 
+[![Tests](https://github.com/Vesselchuck/resume-studio/actions/workflows/tests.yml/badge.svg)](https://github.com/Vesselchuck/resume-studio/actions/workflows/tests.yml)
+[![Latest release](https://img.shields.io/github/v/release/Vesselchuck/resume-studio)](https://github.com/Vesselchuck/resume-studio/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/Vesselchuck/resume-studio)](LICENSE)
+
 Single-source-of-truth resume and cover letter pipeline. Edit YAML, get a pixel-faithful
 US Letter PDF in two variants (full-color and grayscale). Page
 placement is computed automatically — no manual page-break management.
@@ -15,7 +19,10 @@ There is a desktop app too, the Studio, which shows the real
 printed PDF as you type. See "The Studio app" below, or just run
 `npm run studio`.
 
-![The resume (two pages) and the cover letter, built from the shipped placeholder data](docs/screenshots/documents.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/documents-dark.png">
+  <img alt="The resume (two pages) and the cover letter, built from the shipped placeholder data" src="docs/screenshots/documents.png">
+</picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/studio-dark.png">
@@ -427,7 +434,10 @@ From the command line, both variants are built unless
 `RESUME_VARIANTS` says otherwise (`RESUME_VARIANTS=color` for color
 only). The app builds only the color variant until you tick Grayscale.
 
-![Page 1 in color and in grayscale](docs/screenshots/color-and-grayscale.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/color-and-grayscale-dark.png">
+  <img alt="Page 1 in color and in grayscale" src="docs/screenshots/color-and-grayscale.png">
+</picture>
 
 All of `dist/` is gitignored.
 
@@ -435,6 +445,10 @@ All of `dist/` is gitignored.
 
 ```
 .
+├── .github/workflows/
+│   └── tests.yml             Builds both documents from the templates and
+│                             runs npm test on GitHub for every push.
+├── .gitattributes            Line endings: LF, CRLF for .bat, binaries untouched.
 ├── .gitignore                Ignores dist/, node_modules/, __pycache__/,
 │                             tests/fixtures/diff_*.png, and the local
 │                             data file + its private fixtures.
@@ -777,7 +791,10 @@ A three-pane window: your documents on the left, the **real printed
 PDF** in the middle, an inspector on the right. Edit the YAML in
 whatever editor you like and the pane follows.
 
-![The Studio with the cover letter selected](docs/screenshots/studio-letter.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/studio-letter-dark.png">
+  <img alt="The Studio with the cover letter selected" src="docs/screenshots/studio-letter.png">
+</picture>
 
 The preview is not a screenshot of the HTML. It prints a real PDF,
 crops it through `crop_pdf.py`, and rasterizes the cropped file with
