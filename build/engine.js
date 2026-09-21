@@ -73,7 +73,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const { createPipeline } = require('./pipeline');
+const { createPipeline, disposeSass } = require('./pipeline');
 const { detectPython } = require('./detect_python');
 const c = require('./_console');
 
@@ -256,8 +256,8 @@ async function createEngine({ root, python } = {}) {
   // the only thing that differs is which paths and which build phase
   // apply, which is exactly what `variant` selects.
   const pipelines = {
-    resume: createPipeline({ root, python: worker, navWait: 'fonts', variant: 'resume' }),
-    letter: createPipeline({ root, python: worker, navWait: 'fonts', variant: 'letter' }),
+    resume: createPipeline({ root, python: worker, navWait: 'fonts', variant: 'resume', warmSass: true }),
+    letter: createPipeline({ root, python: worker, navWait: 'fonts', variant: 'letter', warmSass: true }),
   };
   const pipeline = pipelines.resume;
 
@@ -497,6 +497,7 @@ async function createEngine({ root, python } = {}) {
   }
 
   async function dispose() {
+    disposeSass();
     if (browser) {
       try { await browser.close(); } catch { /* already gone */ }
       browser = null;

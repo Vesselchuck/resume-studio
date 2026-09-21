@@ -41,6 +41,17 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+- **Changed.** Styles are compiled with `sass-embedded`, the native build
+  of the Dart Sass compiler, instead of the pure-JavaScript `sass`
+  package. The CSS is identical. A build spends about half as long on
+  Sass, and in Studio a style change recompiles in about 10 ms instead of
+  about 55 ms, because the compiler stays running between changes.
+  Run `npm install` after pulling this change.
+
+---
+
 ## [0.6.1] — 2026-09-21
 
 *Security updates for two Python packages, tests that run on GitHub,
@@ -620,6 +631,7 @@ the old names can still be followed.
 | 0.6.0 | — | breaking: `render.js` removed, files renamed |
 | 0.6.1 | — | security updates, tests on GitHub |
 
+[Unreleased]: #unreleased
 [0.6.1]: #061--2026-09-21
 [0.6.0]: #060--2026-09-20
 [0.5.1]: #051--2026-05-16

@@ -100,8 +100,12 @@ function reported(err) {
  *   settled: 'networkidle' (default, what the CLI has always used) or
  *   'fonts'. See openDocument for why the faster option exists and what
  *   had to be true before it was allowed to.
+ * @param {boolean}  opts.warmSass — keep one Sass compiler process running
+ *   between compiles (the engine) instead of starting one per compile
+ *   (the CLI, which compiles once). See compileSass. A driver that sets
+ *   it must call disposeSass() when it is done.
  */
-function createPipeline({ root, python, navWait = 'networkidle', variant = 'resume' }) {
+function createPipeline({ root, python, navWait = 'networkidle', variant = 'resume', warmSass = false }) {
   if (variant !== 'resume' && variant !== 'letter') {
     throw new Error(`unknown variant ${variant}; expected 'resume' or 'letter'`);
   }
@@ -270,18 +274,32 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
   /**
    * Phase 1: Compile styles/styles.scss → dist/styles.css.
    *
-   * Uses sass's programmatic API rather than spawning the `sass.cmd` /
-   * `sass` binary. The binary approach is brittle on Windows: Node 20+
-   * refuses to execFile .cmd/.bat files without `shell: true`
-   * (CVE-2024-27980), and `shell: true` reintroduces quoting issues for
-   * paths containing spaces. Programmatic API sidesteps both problems
-   * and is identical on every platform.
+   * Uses sass-embedded: the reference Dart Sass compiler as a native
+   * program, driven through its programmatic API. It produces the same
+   * CSS as the pure-JavaScript `sass` package, several times faster.
+   *
+   * Programmatic rather than spawning the `sass.cmd` / `sass` binary,
+   * because the binary approach is brittle on Windows: Node 20+ refuses
+   * to execFile .cmd/.bat files without `shell: true` (CVE-2024-27980),
+   * and `shell: true` reintroduces quoting issues for paths containing
+   * spaces. The API sidesteps both and is identical on every platform.
+   *
+   * Two ways to reach the compiler:
+   *   • one-shot (CLI): sass.compile() starts the compiler, compiles and
+   *     stops it. A CLI build compiles once, so there is nothing to keep.
+   *   • warm (engine, `warmSass: true`): one compiler process is started
+   *     on first use and reused, so each later recompile costs ~10 ms.
+   *     A live compiler keeps Node from exiting, which is why the warm
+   *     path is opt-in and paired with disposeSass().
    */
   function compileSass() {
     try {
-      const sass = require('sass');
+      const sass = require('sass-embedded');
       fs.mkdirSync(paths.dist, { recursive: true });
-      const result = sass.compile(paths.stylesEntry, { sourceMap: false, style: 'expanded' });
+      const options = { sourceMap: false, style: 'expanded' };
+      const result = warmSass
+        ? warmSassCompiler(sass).compile(paths.stylesEntry, options)
+        : sass.compile(paths.stylesEntry, options);
       fs.writeFileSync(paths.css, result.css, 'utf-8');
       const cssKb = (Buffer.byteLength(result.css, 'utf-8') / 1024).toFixed(1);
       c.ok_pair('Compiled SCSS', `${path.join('dist', 'styles.css')} (${cssKb} KB)`);
@@ -289,7 +307,7 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
       c.err('Sass compilation failed');
       err.toString().split('\n').forEach(line => c.detail(line));
       c.detail('');
-      c.detail('Is sass installed? Run:  npm install');
+      c.detail('Is sass-embedded installed? Run:  npm install');
       throw reported(err);
     }
   }
@@ -650,4 +668,22 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
 }
 
 
-module.exports = { createPipeline, reported };
+// The warm Sass compiler, shared by every pipeline in the process: the
+// engine's resume and letter pipelines compile the same stylesheet, so
+// one compiler serves both.
+let sassCompiler = null;
+
+function warmSassCompiler(sass) {
+  if (!sassCompiler) sassCompiler = sass.initCompiler();
+  return sassCompiler;
+}
+
+/** Stop the warm Sass compiler, if one was started. Safe to call twice. */
+function disposeSass() {
+  if (!sassCompiler) return;
+  try { sassCompiler.dispose(); } catch { /* already gone */ }
+  sassCompiler = null;
+}
+
+
+module.exports = { createPipeline, disposeSass, reported };

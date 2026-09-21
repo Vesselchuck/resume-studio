@@ -28,7 +28,7 @@
  * Python is auto-detected (or set the PYTHON env var) the same way as
  * resume.js — both use build/detect_python.js.
  *
- * Requires: playwright + sass (`npm install`) and the Python deps in
+ * Requires: playwright + sass-embedded (`npm install`) and the Python deps in
  * requirements.txt. Shares all of those with the resume build; no new
  * dependencies are introduced.
  *

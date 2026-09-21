@@ -5,7 +5,8 @@
  *   0. Run unit tests (Python + JS via build/run_tests.js).
  *      Fail-fast on any logic regression before producing artifacts.
  *   1. Compile Sass: styles/styles.scss → dist/styles.css
- *      via the `sass` npm package. Source maps are disabled.
+ *      via the `sass-embedded` npm package (native Dart Sass).
+ *      Source maps are disabled.
  *   2. Measurement-mode build (build.py --mode=measurement):
  *      writes dist/index.html with all content in a single flowing
  *      column for the solver to measure.
@@ -41,7 +42,7 @@
  *   PowerShell:  $env:PYTHON="py"; npm run resume
  *
  * Requires:
- *   • Node:    playwright, sass   (`npm install`)
+ *   • Node:    playwright, sass-embedded   (`npm install`)
  *   • Python:  see requirements.txt
  *              (`pip install -r requirements.txt`,
  *               or `py -m pip install -r requirements.txt` on Windows)
