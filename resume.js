@@ -33,13 +33,13 @@
  * the profile — dist/Gaius_Iulius_Resume.pdf and
  * dist/Gaius_Iulius_Resume_Grayscale.pdf. See build/_output_name.py.
  *
- * Run with: npm run resume
+ * Run with: node resume.js
  *
  * The script auto-detects Python by trying platform-appropriate
  * candidates. To override, set the PYTHON env var:
- *   bash/zsh:    PYTHON=python3.12 npm run resume
- *   cmd.exe:     set PYTHON=py && npm run resume
- *   PowerShell:  $env:PYTHON="py"; npm run resume
+ *   bash/zsh:    PYTHON=python3.12 node resume.js
+ *   cmd.exe:     set PYTHON=py && node resume.js
+ *   PowerShell:  $env:PYTHON="py"; node resume.js
  *
  * Requires:
  *   • Node:    playwright, sass-embedded   (`npm install`)
@@ -266,7 +266,7 @@ function runTests() {
   // skipping this cannot produce a wrong document — only an unchecked
   // pipeline, which is the right thing to leave to the terminal.
   //
-  // Hence the default: unset means 'on', so `npm run resume` keeps
+  // Hence the default: unset means 'on', so `node resume.js` keeps
   // running them. Studio passes 'off' unless you tick the box.
   const mode = (process.env[ENV_RESUME_TESTS] || 'on').trim().toLowerCase();
   if (mode === 'off') {

@@ -678,6 +678,17 @@ function warmSassCompiler(sass) {
   return sassCompiler;
 }
 
+/**
+ * Start the warm Sass compiler now instead of on the first compile.
+ *
+ * The compiler process only really starts on its first compile, so this
+ * compiles an empty stylesheet: afterwards a real compile costs ~10 ms
+ * instead of ~100 ms. Used by the engine's warm start.
+ */
+function warmUpSass() {
+  warmSassCompiler(require('sass-embedded')).compileString('');
+}
+
 /** Stop the warm Sass compiler, if one was started. Safe to call twice. */
 function disposeSass() {
   if (!sassCompiler) return;
@@ -686,4 +697,4 @@ function disposeSass() {
 }
 
 
-module.exports = { createPipeline, disposeSass, reported };
+module.exports = { createPipeline, disposeSass, warmUpSass, reported };

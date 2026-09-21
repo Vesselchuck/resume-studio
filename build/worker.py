@@ -3,7 +3,7 @@ worker.py — Long-lived build worker for the Studio GUI.
 
 WHY THIS EXISTS
 ---------------
-A cold `npm run resume` spends most of its wall-clock on *startup*, not
+A cold `node resume.js` spends most of its wall-clock on *startup*, not
 on work: one Chromium launch plus four separate `python -B` interpreter
 starts (build.py x2, crop_pdf.py x2). The rendering, solving and
 cropping in between are milliseconds. A GUI that re-renders on every
@@ -30,8 +30,8 @@ modules and both paths get it. tests/test_worker_equivalence.py asserts
 that the warm path and the cold CLI path produce byte-identical files;
 if this module ever drifts, that test fails.
 
-`npm run resume`, `npm run letter` and the .bat files are unaffected by
-this file's existence.
+`node resume.js` and `node letter.js` are unaffected by this file's
+existence.
 
 PROTOCOL
 --------

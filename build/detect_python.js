@@ -39,9 +39,9 @@ function detectPython() {
   c.detail(`Tried: ${candidates.join(', ')}`);
   c.detail('');
   c.detail('Install Python 3 or set the PYTHON env var explicitly:');
-  c.detail('  bash/zsh:    PYTHON=python3.12 npm run resume');
-  c.detail('  cmd.exe:     set PYTHON=py && npm run resume');
-  c.detail('  PowerShell:  $env:PYTHON="py"; npm run resume');
+  c.detail('  bash/zsh:    PYTHON=python3.12 node resume.js');
+  c.detail('  cmd.exe:     set PYTHON=py && node resume.js');
+  c.detail('  PowerShell:  $env:PYTHON="py"; node resume.js');
   process.exit(1);
 }
 

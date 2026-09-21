@@ -427,7 +427,9 @@ function pdfInfo(p) {
 async function start({ port = 0, host = '127.0.0.1' } = {}) {
   teeStdout();
 
-  const engine = await createEngine({ root: ROOT });
+  // Warm: Python, Chromium and Sass start together now, so the first
+  // preview does not wait for each of them in turn.
+  const engine = await createEngine({ root: ROOT, warm: true });
 
   // Which YAML the next render reads. Mirrors RESUME_DATA_SOURCE:
   // null means build.py's own rule (local if present, else default).

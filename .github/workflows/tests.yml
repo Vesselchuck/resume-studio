@@ -48,14 +48,38 @@ jobs:
       - name: Install Python packages
         run: pip install -r requirements.txt
 
+      # Chromium is ~150 MB and only changes when Playwright does, so it is
+      # cached under the Playwright version and downloaded again only when
+      # package-lock.json moves Playwright. The system libraries it needs
+      # come from apt and are installed every run either way.
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Chromium from the cache
+        id: chromium-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
       - name: Install Chromium for Playwright
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
+      - name: Install Chromium's system libraries
+        if: steps.chromium-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # The build would run the whole test suite first; the next step but
+      # one runs it anyway, so it is switched off here instead of run twice.
       - name: Build the resume
-        run: npm run resume
+        run: node resume.js
+        env:
+          RESUME_TESTS: "off"
 
       - name: Build the cover letter
-        run: npm run letter
+        run: node letter.js
 
       - name: Run the tests
         run: npm test

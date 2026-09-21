@@ -23,7 +23,7 @@
  *         (The intermediate HTML stays dist/letter.html — it is
  *         build_letter.py's to name, and it is not a deliverable.)
  *
- * Run with: npm run letter
+ * Run with: node letter.js
  *
  * Python is auto-detected (or set the PYTHON env var) the same way as
  * resume.js — both use build/detect_python.js.

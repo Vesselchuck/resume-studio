@@ -105,7 +105,7 @@
    FILE ORGANIZATION
    ─────────────────
    This file is the Sass entry point. Compiled to dist/styles.css
-   by `npm run resume` (via the `sass` npm package). Edit the
+   by Studio or `node resume.js` (via `sass-embedded`). Edit the
    underscore-prefixed partials, not the compiled output.
 
      _tokens.scss        CSS custom properties (page geometry,

@@ -4,144 +4,136 @@
 [![Latest release](https://img.shields.io/github/v/release/Vesselchuck/resume-studio)](https://github.com/Vesselchuck/resume-studio/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/Vesselchuck/resume-studio)](LICENSE)
 
-Single-source-of-truth resume and cover letter pipeline. Edit YAML, get a pixel-faithful
-US Letter PDF in two variants (full-color and grayscale). Page
-placement is computed automatically — no manual page-break management.
+A desktop app for your resume and cover letter. You write both in YAML,
+in whatever editor you like; the Studio shows the **real printed PDF**
+every time you save, and builds pixel-faithful US Letter PDFs in color
+and grayscale. Page breaks are worked out for you, and the cover letter
+reuses the resume's header so the two read as a set.
 
 What changed and when — including anything that makes an old data file
 stop working — is in [CHANGELOG.md](CHANGELOG.md).
-
-It also builds a matching **cover letter** from `data/letter.yml`
-that reuses the resume's header verbatim, so the two read as a set. See
-"Editing your cover letter" and the `npm run letter` command below.
-
-There is a desktop app too, the Studio, which shows the real
-printed PDF as you type. See "The Studio app" below, or just run
-`npm run studio`.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/documents-dark.png">
-  <img alt="The resume (two pages) and the cover letter, built from the shipped placeholder data" src="docs/screenshots/documents.png">
-</picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/studio-dark.png">
   <img alt="The Studio app: documents on the left, the printed PDF in the middle, build details on the right" src="docs/screenshots/studio.png">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/documents-dark.png">
+  <img alt="The resume (two pages) and the cover letter, built from the shipped placeholder data" src="docs/screenshots/documents.png">
+</picture>
+
 All screenshots show the placeholder data the project ships with
 (`data/*_default.yml`).
 
-## What it does
+## Getting started
 
-1. Reads resume content from `data/resume.yml`, falling back to the
-   shipped `data/resume_default.yml`, and merges `data/_profile.yml`
-   underneath it for the fields common to every document.
-2. Validates the schema — clear errors for missing fields, duplicate
-   ids, malformed bullets, etc.
-3. Renders a measurement-mode HTML page (everything in one flowing
-   column) so a layout solver can read actual rendered heights.
-4. Solves the layout: decides which sidebar blocks and which jobs go
-   on which page, including bridging (a job's bullets split across
-   pages, or a sidebar list split across pages).
-5. Renders the final paginated HTML against the solved placement.
-6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
-   (8.5×11 in), stamps PDF metadata and language for accessibility.
-7. Optionally pixel-diffs each variant against a committed snapshot to
-   catch accidental visual changes (`RESUME_SNAPSHOT=on`).
+### Requirements
 
-The outputs are named after you, from `name.first` and `name.last` in
-your profile: `dist/Gaius_Iulius_Resume.pdf` and
-`dist/Gaius_Iulius_Resume_Grayscale.pdf`. The color one takes the plain
-name because it is the file you attach to an application.
+- **Python** 3.10+ (tested on 3.10 and 3.12).
+- **Node** 18+ (for Playwright 1.60).
+- **Rust** (stable, installed with [rustup](https://rustup.rs/)) for the
+  desktop window. On Windows, Rust also needs the Microsoft C++ Build
+  Tools, which the rustup installer offers to set up. No Rust? The same
+  app runs in your browser — see below.
+- **Chromium** for Playwright, installed in the setup step.
 
-## Quickstart
+Every dependency is exact-pinned in `requirements.txt` and
+`package-lock.json`.
 
-### macOS / Linux
+### One-time setup
+
+In the project folder:
+
+```powershell
+# Windows (PowerShell or cmd.exe)
+py -m pip install -r requirements.txt
+npm ci
+npx playwright install chromium
+```
 
 ```bash
-# One-time setup
+# macOS / Linux
 pip install -r requirements.txt
 npm ci
 npx playwright install chromium
-
-# Build
-npm run resume
 ```
 
-### Windows (cmd.exe)
+Use `npm ci`, not `npm install`: it installs exactly what
+`package-lock.json` says and fails if `package.json` disagrees with it.
 
-```cmd
-:: One-time setup
-py -m pip install -r requirements.txt
-npm ci
-npx playwright install chromium
+### Open the Studio
 
-:: Build
-npm run resume
+On Windows, double-click **`studio.bat`** in the project folder. From a
+terminal, on any platform:
+
+```
+npm run studio
 ```
 
-### Windows (PowerShell)
+The first start compiles the desktop shell and takes a few minutes;
+later starts take seconds. The console window stays open while the app
+runs, and closing it stops the app.
 
-```powershell
-# One-time setup
-py -m pip install -r requirements.txt
-npm ci
-npx playwright install chromium
+Without a Rust toolchain, open the same app in your browser instead:
 
-# Build
-npm run resume
+```
+npm run ui
 ```
 
-That builds the PDFs from the command line. For the desktop app with a
-live preview, run `npm run studio` instead — or `npm run ui` to get the
-same app in your browser without needing a Rust toolchain. See "The
-Studio app".
+| Command                | Does                                               |
+|------------------------|----------------------------------------------------|
+| `npm run studio`       | The desktop app (also: double-click `studio.bat`)  |
+| `npm run ui`           | The same app in your browser — no Rust needed      |
+| `npm test`             | Run the full test suite                            |
+| `npm run studio:build` | Compile the desktop app to a standalone installer  |
 
-`npm ci` (not `npm install`) is the recommended installer — both
-`package.json` and `requirements.txt` exact-pin every dependency, and
-`npm ci` reproduces the lockfile exactly without drift.
+The Studio finds the right Python interpreter by itself. If that ever
+fails (the usual cause is the Microsoft Store `python` alias on
+Windows), set `PYTHON` before starting it — see the FAQ.
 
-The build script auto-detects the right Python interpreter on each
-platform. If detection fails (rare), override it explicitly:
+## Using the Studio
 
-| Shell           | How to override                            |
-|-----------------|--------------------------------------------|
-| bash / zsh      | `PYTHON=python3.12 npm run resume`         |
-| cmd.exe         | `set PYTHON=py && npm run resume`          |
-| PowerShell      | `$env:PYTHON="py"; npm run resume`         |
+A three-pane window: your documents on the left, the **real printed
+PDF** in the middle, an inspector on the right. Edit the YAML in
+whatever editor you like and the pane follows.
 
-## Commands
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/studio-letter-dark.png">
+  <img alt="The Studio with the cover letter selected" src="docs/screenshots/studio-letter.png">
+</picture>
 
-All entry points are npm scripts — the same command on macOS, Linux,
-and Windows:
+The preview is not a screenshot of the HTML. It prints a real PDF,
+crops it through `crop_pdf.py`, and rasterizes the cropped file with
+the same function the visual-regression test uses — so what you see is
+the output, post-crop, at true 612 × 792 pt.
 
-| Command             | Does                                          |
-|---------------------|-----------------------------------------------|
-| `npm run resume`    | Build the resume → PDFs in `dist/`            |
-| `npm run letter`    | Build the cover letter → PDFs                 |
-| `npm test`          | Run the full unit-test suite                  |
-| `npm run studio`    | The desktop app (Tauri; needs a Rust toolchain)|
-| `npm run ui`        | The same app in your browser — no Rust needed |
-| `npm run studio:build` | Compile the desktop app to a standalone .exe |
-| `npm run ui:serve`  | The server alone — no browser opened. For running it headless, or when you want to pick the browser yourself. |
+**Build** writes the finished PDFs to `dist/`. It runs the same build
+scripts (`resume.js`, `letter.js`) that the command line uses for
+debugging, so there is exactly one way to produce a PDF worth sending,
+and building the resume cannot touch the cover letter's files. Tick
+**Color** and **Grayscale** to choose which PDFs a build writes; color
+alone is the default.
 
-Alias: `npm run build` = `npm run resume`.
+Two checkboxes on the resume card:
 
-On Windows you can double-click these in the project root:
+| Checkbox | Default | Effect |
+|----------|---------|--------|
+| Compare against snapshot | off | Runs the pixel diff and reports differences. Never blocks. |
+| Run unit tests first     | off | Runs the full suite before building — about nine seconds. See "Why the tests can be skipped". |
 
-| File            | Runs                                              |
-|-----------------|---------------------------------------------------|
-| `build.bat`     | Asks which document, then builds it. Also takes an argument: `build.bat resume`, `letter`, or `both`. |
-| `studio.bat`    | The desktop app.                                  |
-| `ui.bat`        | The app in your browser.                          |
-
-Each keeps its console open so you can read the output.
-
+**Dropping a file** works out which document it is by reading it, not
+by its name: the two builders require disjoint top-level keys
+(`sidebar`/`mainColumn` versus `letter`), so a file that satisfies one
+cannot satisfy the other. If it matches both or neither, the app asks
+instead of guessing. Nothing in `data/` is ever overwritten — a
+dropped file is read in place if it is already there, saved under its
+own name if not, and a name collision offers you a choice rather than
+replacing anything.
 
 ## Editing your resume
 
-**`data/resume.yml` is yours.** It is gitignored, and the build prefers
+**`data/resume.yml` is yours.** It is gitignored, and the Studio prefers
 it over everything else. `data/resume_default.yml` is the placeholder
 the repo ships (Gaius Caesar) so a fresh clone still builds; it is the
 one that is committed.
@@ -150,19 +142,22 @@ The unsuffixed name belongs to the real document on purpose: the file
 you edit every week should have the obvious name, and the one you touch
 once should carry the qualifier.
 
-Starting from the template:
+Starting from the template, copy it to your own file:
+
+```powershell
+# Windows (PowerShell)
+Copy-Item data\resume_default.yml data\resume.yml
+```
 
 ```bash
 # macOS / Linux
 cp data/resume_default.yml data/resume.yml
-npm run resume
 ```
 
-```cmd
-:: Windows (cmd.exe)
-copy data\resume_default.yml data\resume.yml
-npm run resume
-```
+Then open `data/resume.yml` in your editor. The Studio switches to it by
+itself and re-renders the preview on every save. (**Data files…** in the
+Studio lists everything in `data/`, and you can also drop a `.yml` file
+onto the window.)
 
 The PDF metadata manifest records which data source was used (`mine` or
 `default`), so the snapshot test picks the matching fixtures.
@@ -214,13 +209,13 @@ its file name ends in `_default`.
 
 ## Editing your cover letter
 
-The cover letter works exactly like the resume: edit YAML, run a build.
-Yours is `data/letter.yml` (gitignored); `data/letter_default.yml` is
-the shipped placeholder.
+The cover letter works exactly like the resume: copy the template to
+your own file, select **Cover Letter** in the Studio, and edit. Yours is
+`data/letter.yml` (gitignored); `data/letter_default.yml` is the shipped
+placeholder.
 
-```bash
-cp data/letter_default.yml data/letter.yml
-npm run letter
+```powershell
+Copy-Item data\letter_default.yml data\letter.yml
 ```
 
 It reproduces the resume's header verbatim so the pair matches, and
@@ -386,9 +381,34 @@ letter dated differently to the file that made it.
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
 
+## Editing in VS Code
+
+`.vscode/settings.json` maps the schemas in `schemas/` onto the data
+files, which gives you key completion, type checking as you type, and
+hover documentation for every field. It needs the **YAML** extension by
+Red Hat (`redhat.vscode-yaml`); VS Code offers to install it the first
+time it sees the file.
+
+The schemas are advisory. `validate_data()` in `build/build.py` is the
+authority, and `test_yaml_typing.py` asserts the two agree — an
+advisory schema that disagrees with the authority is worse than none.
+
+They are mapped in settings rather than by a `# yaml-language-server:`
+comment at the top of each file, so nothing in `data/` is modified and
+a new file you drop in picks up its schema automatically.
+
+**`yaml.schemaStore.enable` is `false`, and that matters.**
+`resume.yml` is the canonical filename of [JSON
+Resume](https://jsonresume.org/), a different and widely-used spec, and
+SchemaStore's public catalog maps that exact name to it. Leave the
+catalog on and your resume draws three errors — `role`, `sidebar` and
+`mainColumn` "not allowed" — from a schema you never asked for. The
+cost of turning it off is that other YAML in the project (a future
+`.github/workflows/`, say) loses catalog autocomplete.
+
 ## What gets generated
 
-Running `npm run resume` writes everything to `dist/`:
+A resume build writes everything to `dist/`:
 
 - `dist/index.html` — the rendered HTML (final mode by default)
 - `dist/styles.css` — compiled from `styles/styles.scss` via Sass
@@ -397,7 +417,7 @@ Running `npm run resume` writes everything to `dist/`:
 - `dist/Gaius_Iulius_Resume.pdf` — final color PDF (US Letter)
 - `dist/Gaius_Iulius_Resume_Grayscale.pdf` — final grayscale PDF
 
-`npm run letter` similarly writes `dist/letter.html`,
+A cover letter build similarly writes `dist/letter.html`,
 `dist/letter_meta.json`, `dist/Gaius_Iulius_Cover_Letter.pdf` and
 `dist/Gaius_Iulius_Cover_Letter_Grayscale.pdf`.
 
@@ -430,9 +450,9 @@ naming them after whoever last built would churn `tests/fixtures/` on
 every edit and put a real name into the repository that the placeholder
 data exists to keep it out of.
 
-From the command line, both variants are built unless
-`RESUME_VARIANTS` says otherwise (`RESUME_VARIANTS=color` for color
-only). The app builds only the color variant until you tick Grayscale.
+The Studio builds only the color variant until you tick Grayscale.
+(From the command line, both are built unless `RESUME_VARIANTS` says
+otherwise — see "Debugging from the command line".)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/color-and-grayscale-dark.png">
@@ -440,6 +460,399 @@ only). The app builds only the color variant until you tick Grayscale.
 </picture>
 
 All of `dist/` is gitignored.
+
+## How a build works
+
+A Build runs these steps. A live preview runs the same ones, but
+prints only the color PDF, to a scratch file, and never runs the tests
+or the snapshot check.
+
+1. Reads resume content from `data/resume.yml`, falling back to the
+   shipped `data/resume_default.yml`, and merges `data/_profile.yml`
+   underneath it for the fields common to every document.
+2. Validates the schema — clear errors for missing fields, duplicate
+   ids, malformed bullets, etc.
+3. Renders a measurement-mode HTML page (everything in one flowing
+   column) so a layout solver can read actual rendered heights.
+4. Solves the layout: decides which sidebar blocks and which jobs go
+   on which page, including bridging (a job's bullets split across
+   pages, or a sidebar list split across pages).
+5. Renders the final paginated HTML against the solved placement.
+6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
+   (8.5×11 in), stamps PDF metadata and language for accessibility.
+7. Optionally pixel-diffs each variant against a committed snapshot to
+   catch accidental visual changes (`RESUME_SNAPSHOT=on`).
+
+The outputs are named after you, from `name.first` and `name.last` in
+your profile: `dist/Gaius_Iulius_Resume.pdf` and
+`dist/Gaius_Iulius_Resume_Grayscale.pdf`. The color one takes the plain
+name because it is the file you attach to an application.
+
+### Pipeline steps
+
+```
+0.  Run all unit tests (Python + JS)   — Studio: "Run unit tests first"
+1.  Compile Sass (styles/ → dist/styles.css)
+2.  Build measurement HTML
+3.  Open it in Playwright; extract DOM measurements
+4.  Solve the layout; write dist/placement.json
+5.  Build final HTML against the placement
+6.  Reload the final HTML
+7.  Check layout invariants (page count, divider, rhythm, overflow)
+8.  Print to color PDF
+9.  Crop to US Letter, stamp metadata + /Lang
+10. Repeat 8–9 for the grayscale variant
+11. Snapshot test                      — Studio: "Compare against snapshot"
+```
+
+Step 7 is a gate — the build stops if it fails. Step 0 is a gate when
+it runs. Step 11 reports and does not block: the PDFs are written
+before it runs, so a difference is news about the document rather than
+a reason to withhold it. `RESUME_SNAPSHOT=strict` restores blocking,
+for CI.
+
+Step 7 in particular catches the case where the solver produces a
+placement that doesn't actually fit (which would otherwise silently
+clip content under `overflow: hidden`).
+
+#### Why the tests can be skipped
+
+The unit suites test the *pipeline* — the solver, the loader, the warm
+engine's equivalence to the cold CLI. None of that changes when you
+edit a bullet, and they cost about nine seconds. What validates *your data* is not in them and always runs:
+`validate_data`, the layout invariants, the `maxPages` ceiling. So
+skipping them can leave the pipeline unchecked, but it cannot produce
+a wrong document. The Studio passes `off` unless you tick "Run unit
+tests first"; `node resume.js` from a terminal runs them unless you set
+`RESUME_TESTS=off`.
+
+### Why the Studio is built this way
+
+The obvious Tauri design puts the whole application in Rust. That
+works, and it means nobody can run, test or change the app without a
+Rust toolchain and the platform's webview development packages.
+
+Instead the app is a small HTTP server on loopback plus one HTML file,
+and the Rust layer has one job: start the server, show the window. So
+the entire thing is testable with `npm run ui` in an ordinary browser,
+the UI can be iterated on without recompiling anything, and the
+desktop build is a wrapper rather than a second implementation.
+
+Behind it sits a **warm engine**: one long-lived Chromium, one
+long-lived Python worker and one running Sass compiler, so a live
+preview does not pay Chromium startup and four Python interpreter
+starts on every keystroke. When the app opens, all three start at once
+rather than one after another, and the stylesheet is compiled before
+the first preview asks for it. Both
+`test_worker_equivalence.py` and `test_engine_equivalence.js` assert
+the warm path produces the same bytes and the same pixels as the cold
+CLI — that equivalence is the whole premise, so it is tested rather
+than assumed.
+
+### Why this architecture
+
+The naive approach to a YAML-driven resume — flow content into a fixed
+page, let the browser decide where to break — produces unpredictable
+output across browsers, font versions, and rendering quirks. Two
+builds on different machines wouldn't match.
+
+This pipeline takes a different path:
+
+1. **Each `<article class="page">` is a fixed 8.5×11 in box.** The
+   screen layout IS the print layout. There is no native pagination;
+   `@page` margins are zero, and Chromium prints what it sees.
+2. **A solver decides placement deterministically.** Given identical
+   measurements (which Playwright produces consistently for a given
+   font and CSS), the placement is identical.
+3. **Multiple invariants prevent silent breakage.** The column
+   divider must terminate at the page bottom margin; the section
+   rhythm must be equal across columns; page count must match the
+   solver's decision; no descendant can overflow its page's content
+   area. Any failure aborts the build with a specific error.
+4. **A pixel-diff snapshot test catches visual regressions.** Even
+   if every invariant passes, the snapshot test fires on any
+   intentional or accidental visual change.
+
+The result: editing the YAML and re-running produces the same PDFs on
+any machine, and any visible change is caught by a test.
+
+### YAML typing
+
+`build/_yaml_loader.py` is the project's only YAML entry point. It
+exists for two unrelated reasons.
+
+**Speed.** It uses libyaml where available: ~12.6 ms to parse the data
+file drops to ~0.8 ms, and a resume build parses twice. The
+pure-Python parser is the fallback and behaves identically, just
+slower; `test_yaml_typing.py` reports a skip when that happens rather
+than letting the machine quietly get slower.
+
+**Typing.** PyYAML implements YAML 1.1, which resolves untagged
+scalars by pattern — convenient for configuration and actively wrong
+for a résumé, where almost every value is text that happens to look
+like something else:
+
+| you write | YAML 1.1 gives you | this project gives you |
+|-----------|--------------------|------------------------|
+| `langs: [no, yes]` | `[False, True]` | `['no', 'yes']` |
+| `date: 2026-09-16` | a `datetime.date` | `'2026-09-16'` |
+| `shift: 22:30` | `1350` (sexagesimal) | `'22:30'` |
+| `gpa: 3.90` | `3.9` | `'3.90'` |
+| `gap: true` | `True` | `True` — unchanged |
+| `maxPages: 4` | `4` | `4` — unchanged |
+
+The first row is the famous one: `no` is the ISO code for Norwegian,
+so listing it as a language silently deletes it. The last two are why
+booleans and integers were re-registered in their YAML 1.2 core forms
+rather than dropped — `gap: true` still has to work.
+
+Explicit tags still mean what they say: `!!float 3.90` is a float,
+`!!timestamp 2024-01-05` is a date. Only the guessing is gone. The
+surgery is applied to a private loader subclass, so `yaml.safe_load`
+elsewhere in the process is untouched.
+
+### Why vendored fonts
+
+The project ships its own Manrope and Newsreader font files under
+`fonts/` instead of loading from Google Fonts CDN. This isn't
+decorative — it fixes a real reproducibility problem.
+
+When a project loads fonts from a CDN, three things can silently
+change the rendered output:
+
+1. **System-installed font overriding the web font.** If a contributor's
+   OS has Manrope or Newsreader installed locally, Chromium sometimes
+   prefers the system version over the CDN-served file. Different
+   system font versions render glyphs at slightly different widths —
+   enough to change line-wrap decisions and therefore the solver's
+   output.
+2. **Different npm or CDN mirrors of the same font.** Distributions
+   that bill themselves as "the same font" can ship subtly different
+   outline files, even when their metrics tables match.
+3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes change
+   when fonts are re-versioned. Pinning a specific URL would eventually
+   404; the stable CSS endpoint silently serves a different glyph file
+   when Google updates the version.
+
+The vendored woff2 files are the canonical Google Fonts release of
+each face. They're loaded directly from disk via
+`@font-face url('../fonts/...')` with no `local()` source, so a
+system-installed font of the same name can't take over. Each is a
+variable WOFF2 covering its full weight range; total weight on disk
+is well under 1 MB.
+
+The OFL license texts (`Manrope-OFL.txt`, `Newsreader-OFL.txt`) sit
+alongside the woff2 binaries. Keep them. Removing them while keeping
+the woff2 files would put the project in violation of the SIL Open
+Font License, which requires the license travel with the font.
+
+## Testing
+
+Two kinds of verification: unit tests for the project's logic, and a
+slow visual-regression snapshot test for the rendered PDFs.
+
+### Unit tests
+
+Python and JavaScript test files live in `tests/`. Most are fast
+pure-logic tests; two launch Chromium.
+
+| Test                          | What it covers                              |
+|-------------------------------|---------------------------------------------|
+| `test_validate_data.py`       | YAML schema validation in `build.py`        |
+| `test_load_data.py`           | Data loader + `RESUME_DATA_SOURCE` env var  |
+| `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
+| `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
+| `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
+| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`         |
+| `test_letter_data.py`   | The cover letter's data layer               |
+| `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
+| `test_profile_merge.py`       | The shared profile's merge and precedence   |
+| `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte |
+| `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
+| `test_check_layout.js`        | Layout invariants in a real browser         |
+| `test_detect_doc.js`          | Which document a dropped file is; path containment |
+| `test_engine_equivalence.js`  | Warm engine == cold CLI, pixel for pixel    |
+
+Suites that need Chromium skip automatically if it isn't available, so
+a fresh checkout without `npx playwright install` still gets coverage
+from the rest. A skip prints its reason, so "1 skipped" is never a
+mystery.
+
+`test_yaml_typing.py` skips its schema-agreement checks unless
+`jsonschema` is installed — it is in `requirements.txt`, marked
+test-only, and nothing in the build imports it.
+
+Run all of them with:
+
+```
+npm test
+```
+
+(the same as `node build/run_tests.js`).
+
+The runner invokes Python's `unittest discover` for `tests/test_*.py`
+and runs each `tests/test_*.js` directly with Node. It picks the right
+Python interpreter for the platform automatically (override with the
+`PYTHON` env var if needed).
+
+#### Running a single test
+
+```
+node build/run_tests.js test_validate_data            # Python module
+node build/run_tests.js test_solve_layout             # JavaScript file
+node build/run_tests.js test_validate_data.TestValidateData.test_good_data_passes
+```
+
+The runner picks the right runtime by file existence — if
+`tests/test_<name>.js` exists, it runs that as Node; otherwise it
+treats the argument as a Python `unittest` dotted path.
+
+### Snapshot test
+
+`build/snapshot_pdf.py` lives outside `tests/` so unittest discovery
+doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
+It is **off by default**; tick "Compare against snapshot" in the
+Studio, or set `RESUME_SNAPSHOT=on` on the command line. It rasterizes the freshly-built
+`dist/resume-*.pdf`, compares each page-by-page to a committed
+fixture, and reports any variant whose visible pixels changed beyond
+the configured tolerance.
+
+It reports rather than fails, because the PDFs are already written by
+the time it runs — a difference is news about the document, not a
+reason to withhold it. `RESUME_SNAPSHOT=strict` makes it fail the
+build instead, which is what you want in CI.
+
+#### Four fixtures: two variants × two data sources
+
+Render produces up to two PDFs per build (color and grayscale). The
+build can use either of two data files (`resume.yml` or
+`resume_default.yml`). The snapshot tool reads `dist/pdf_meta.json`
+(written by `build.py`) to learn which file backed the most recent
+build, and picks the matching fixture for each variant:
+
+| Data source | Variant   | Fixture                                             | In git? |
+|-------------|-----------|-----------------------------------------------------|---------|
+| `default`   | color    | `tests/fixtures/expected_resume-color.pdf`          | yes     |
+| `default`   | grayscale | `tests/fixtures/expected_resume-grayscale.pdf`      | yes     |
+| `mine`      | color    | `tests/fixtures/expected_resume-color.mine.pdf`     | no      |
+| `mine`      | grayscale | `tests/fixtures/expected_resume-grayscale.mine.pdf` | no      |
+
+Each fixture matches the data file that produced it. There is no
+"shared" fixture — that would mean comparing one data set's render
+against another's pixels, which is meaningless.
+
+If `pdf_meta.json` carries a `data_source` the tool does not recognize,
+it refuses and tells you to rebuild rather than guessing. It used to
+fall back to the committed fixture, which meant an unrecognized value
+silently compared your resume against the template.
+
+#### First build (no fixtures yet)
+
+Build with "Compare against snapshot" ticked. The snapshot step
+auto-bootstraps any missing fixture from the current
+`dist/resume-*.pdf` and prints a notice. Subsequent builds diff against
+the fixtures. Inspect the PDFs visually before committing them.
+
+#### Refreshing after an intentional change
+
+After tweaking CSS, content, or layout in a way that visibly changes
+the output:
+
+```bash
+# macOS / Linux
+python build/snapshot_pdf.py --update          # current data source only
+python build/snapshot_pdf.py --update-all      # both template and yours
+```
+
+```cmd
+:: Windows
+py build\snapshot_pdf.py --update              :: current data source only
+py build\snapshot_pdf.py --update-all          :: both template and yours
+```
+
+`--update` refreshes BOTH variants (color + grayscale) of the fixture
+matching the current data source. `--update-all` runs the full build
+pipeline twice (once with the template, once with your data if
+`data/resume.yml` exists), refreshing all four fixtures. The
+intermediate snapshot checks are skipped via `SKIP_SNAPSHOT=1` so the
+existing about-to-be-replaced fixtures don't fail the build.
+
+Commit the refreshed `expected_resume-color.pdf` and
+`expected_resume-grayscale.pdf` alongside whatever change caused them.
+The `.mine.pdf` fixtures stay gitignored — they live only on your
+machine.
+
+#### Running snapshot test on its own
+
+```
+py build/snapshot_pdf.py
+```
+
+Useful when iterating on tolerances or inspecting a regression without
+rebuilding. Requires both built PDFs to already exist; it finds them
+through `dist/pdf_meta.json` rather than by name.
+
+## Debugging from the command line
+
+The Studio is the way to build. When something goes wrong and you want
+to see every step's output in a terminal, run the same build scripts it
+uses directly:
+
+```
+node resume.js     # build the resume, with every step printed
+node letter.js     # build the cover letter
+npm run ui:serve   # the Studio's server alone, without opening a window
+```
+
+A terminal build differs from a Studio build in two defaults: it runs
+the full test suite first (`RESUME_TESTS=off` skips it), and it writes
+both the color and the grayscale PDF (`RESUME_VARIANTS=color` for color
+only).
+
+To force a particular Python interpreter:
+
+| Shell           | How to override                            |
+|-----------------|--------------------------------------------|
+| bash / zsh      | `PYTHON=python3.12 node resume.js`         |
+| cmd.exe         | `set PYTHON=py && node resume.js`          |
+| PowerShell      | `$env:PYTHON="py"; node resume.js`         |
+
+### Environment variables
+
+These affect `node resume.js` and `node letter.js`. The Studio sets the
+ones it needs itself, from its checkboxes and data-source menu.
+
+| Variable                   | Purpose                                                |
+|----------------------------|--------------------------------------------------------|
+| `PYTHON`                   | Explicit Python interpreter (overrides auto-detect).   |
+| `RESUME_DATA_SOURCE`       | `default` or `mine` — force which data file to use,    |
+|                            | ignoring the yours-preferred-over-template logic. Used |
+|                            | internally by `--update-all`.                          |
+| `RESUME_DATA_FILE`         | An explicit data file to read, overriding everything   |
+|                            | above. Absolute, or relative to the project root.      |
+|                            | Exists so a tool can preview an arbitrary file without |
+|                            | copying it over yours. `LETTER_DATA_FILE` is the |
+|                            | same for the letter.                                   |
+| `RESUME_TESTS`             | `on` (default) or `off` — whether the build runs the   |
+|                            | unit suites first. The app passes `off`.               |
+| `RESUME_SNAPSHOT`          | `off` (default), `on` (check and report), or `strict`  |
+|                            | (check and fail). See "Snapshot test".                 |
+| `RESUME_VARIANTS`          | Comma-separated: `color`, `grayscale`, or both.        |
+|                            | Defaults to both from the command line; the Studio     |
+|                            | states its choice explicitly.                          |
+| `STRICT_TESTS=1`           | Convert SKIP'd test suites into hard failures. Without |
+|                            | it, a skipped suite (e.g. `test_check_layout` when the |
+|                            | Playwright browser binary is missing) prints a yellow  |
+|                            | warning and the runner exits 0. With `STRICT_TESTS=1`  |
+|                            | the runner exits 1. Use in CI to catch silently-       |
+|                            | bypassed suites.                                       |
+| `DEBUG_MEASUREMENTS=1`     | Dump the solver's input measurements and the final     |
+|                            | rendered column heights (developer diagnostic).        |
+| `SKIP_SNAPSHOT=1`          | Skip the visual regression step (used internally by    |
+|                            | `--update-all`).                                       |
+| `RESUME_PIPELINE_SUFFIX`   | Label appended to phase headings during `--update-all` |
+|                            | so you can see which data source is being processed.   |
+| `NO_COLOR` / `FORCE_COLOR` | Control ANSI output (default: auto-detect from TTY).   |
 
 ## Project layout
 
@@ -458,11 +871,10 @@ All of `dist/` is gitignored.
 ├── docs/screenshots/         The images in this README (placeholder data).
 ├── package.json              Node deps (playwright, sass-embedded) + npm scripts.
 ├── package-lock.json         Exact-pinned lockfile for npm ci.
-├── resume.js                 Resume build orchestrator (thin CLI over build/pipeline.js).
-├── letter.js                 Letter build orchestrator (single page).
-├── build.bat                 Windows double-click → build resume, letter or both.
-├── studio.bat                Windows double-click → the desktop app.
-├── ui.bat                    Windows double-click → the app in a browser.
+├── studio.bat                Windows double-click → the Studio.
+├── resume.js                 Resume build script (thin CLI over build/pipeline.js);
+│                             the Studio's Build runs it.
+├── letter.js                 Cover letter build script (single page).
 ├── ui/index.html             The Studio app's entire front end.
 ├── src-tauri/                The desktop shell (Rust). Starts the server,
 │                             shows the window — nothing else.
@@ -551,442 +963,26 @@ All of `dist/` is gitignored.
         └── diff_*_pageN.png                     Generated on failure (gitignored).
 ```
 
-## Pipeline steps (`npm run resume`)
-
-```
-0.  Run all unit tests (Python + JS)   — skip with RESUME_TESTS=off
-1.  Compile Sass (styles/ → dist/styles.css)
-2.  Build measurement HTML
-3.  Open it in Playwright; extract DOM measurements
-4.  Solve the layout; write dist/placement.json
-5.  Build final HTML against the placement
-6.  Reload the final HTML
-7.  Check layout invariants (page count, divider, rhythm, overflow)
-8.  Print to color PDF
-9.  Crop to US Letter, stamp metadata + /Lang
-10. Repeat 8–9 for the grayscale variant
-11. Snapshot test                      — run with RESUME_SNAPSHOT=on
-```
-
-Step 7 is a gate — the build stops if it fails. Step 0 is a gate when
-it runs. Step 11 reports and does not block: the PDFs are written
-before it runs, so a difference is news about the document rather than
-a reason to withhold it. `RESUME_SNAPSHOT=strict` restores blocking,
-for CI.
-Step 7 in particular catches the case where the solver produces a
-placement that doesn't actually fit (which would otherwise silently
-clip content under `overflow: hidden`).
-
-**Why step 0 is skippable.** The unit suites test the *pipeline* — the
-solver, the loader, the warm engine's equivalence to the cold CLI.
-None of that changes when you edit a bullet, and they cost about nine
-seconds. What validates *your data* is not in them and always runs:
-`validate_data`, the layout invariants, the `maxPages` ceiling. So
-skipping them can leave the pipeline unchecked, but it cannot produce
-a wrong document. Hence the default: unset means `on`, so
-`npm run resume` from a terminal keeps running them, and only the app
-passes `off`.
-
-## Testing
-
-Two kinds of verification: unit tests for the project's logic, and a
-slow visual-regression snapshot test for the rendered PDFs.
-
-### Unit tests
-
-Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; two launch Chromium.
-
-| Test                          | What it covers                              |
-|-------------------------------|---------------------------------------------|
-| `test_validate_data.py`       | YAML schema validation in `build.py`        |
-| `test_load_data.py`           | Data loader + `RESUME_DATA_SOURCE` env var  |
-| `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
-| `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
-| `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
-| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`         |
-| `test_letter_data.py`   | The cover letter's data layer               |
-| `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
-| `test_profile_merge.py`       | The shared profile's merge and precedence   |
-| `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte |
-| `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
-| `test_check_layout.js`        | Layout invariants in a real browser         |
-| `test_detect_doc.js`          | Which document a dropped file is; path containment |
-| `test_engine_equivalence.js`  | Warm engine == cold CLI, pixel for pixel    |
-
-Suites that need Chromium skip automatically if it isn't available, so
-a fresh checkout without `npx playwright install` still gets coverage
-from the rest. A skip prints its reason, so "1 skipped" is never a
-mystery.
-
-`test_yaml_typing.py` skips its schema-agreement checks unless
-`jsonschema` is installed — it is in `requirements.txt`, marked
-test-only, and nothing in the build imports it.
-
-Run all of them via the cross-platform runner:
-
-```
-node build/run_tests.js
-```
-
-The runner invokes Python's `unittest discover` for `tests/test_*.py`
-and runs each `tests/test_*.js` directly with Node. It picks the right
-Python interpreter for the platform automatically (override with the
-`PYTHON` env var if needed).
-
-#### Running a single test
-
-```
-node build/run_tests.js test_validate_data            # Python module
-node build/run_tests.js test_solve_layout             # JavaScript file
-node build/run_tests.js test_validate_data.TestValidateData.test_good_data_passes
-```
-
-The runner picks the right runtime by file existence — if
-`tests/test_<name>.js` exists, it runs that as Node; otherwise it
-treats the argument as a Python `unittest` dotted path.
-
-#### Running tests without going through the full build
-
-The build pipeline (`npm run resume`) runs all unit tests as step 0,
-so any failure aborts the build. During TDD or quick iteration, skip
-the build and run the tests directly:
-
-```
-node build/run_tests.js
-```
-
-### Snapshot test
-
-`build/snapshot_pdf.py` lives outside `tests/` so unittest discovery
-doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
-It is **off by default**; set `RESUME_SNAPSHOT=on` to run it, or tick
-"Compare against snapshot" in the app. It rasterizes the freshly-built
-`dist/resume-*.pdf`, compares each page-by-page to a committed
-fixture, and reports any variant whose visible pixels changed beyond
-the configured tolerance.
-
-It reports rather than fails, because the PDFs are already written by
-the time it runs — a difference is news about the document, not a
-reason to withhold it. `RESUME_SNAPSHOT=strict` makes it fail the
-build instead, which is what you want in CI.
-
-#### Four fixtures: two variants × two data sources
-
-Render produces up to two PDFs per build (color and grayscale). The
-build can use either of two data files (`resume.yml` or
-`resume_default.yml`). The snapshot tool reads `dist/pdf_meta.json`
-(written by `build.py`) to learn which file backed the most recent
-build, and picks the matching fixture for each variant:
-
-| Data source | Variant   | Fixture                                             | In git? |
-|-------------|-----------|-----------------------------------------------------|---------|
-| `default`   | color    | `tests/fixtures/expected_resume-color.pdf`          | yes     |
-| `default`   | grayscale | `tests/fixtures/expected_resume-grayscale.pdf`      | yes     |
-| `mine`      | color    | `tests/fixtures/expected_resume-color.mine.pdf`     | no      |
-| `mine`      | grayscale | `tests/fixtures/expected_resume-grayscale.mine.pdf` | no      |
-
-Each fixture matches the data file that produced it. There is no
-"shared" fixture — that would mean comparing one data set's render
-against another's pixels, which is meaningless.
-
-If `pdf_meta.json` carries a `data_source` the tool does not recognize,
-it refuses and tells you to rebuild rather than guessing. It used to
-fall back to the committed fixture, which meant an unrecognized value
-silently compared your resume against the template.
-
-#### First build (no fixtures yet)
-
-```
-npm run resume
-```
-
-The snapshot step auto-bootstraps any missing fixture from the current
-`dist/resume-*.pdf` and prints a notice. Subsequent builds diff against
-the fixtures. Inspect the PDFs visually before committing them.
-
-#### Refreshing after an intentional change
-
-After tweaking CSS, content, or layout in a way that visibly changes
-the output:
-
-```bash
-# macOS / Linux
-python build/snapshot_pdf.py --update          # current data source only
-python build/snapshot_pdf.py --update-all      # both template and yours
-```
-
-```cmd
-:: Windows
-py build\snapshot_pdf.py --update              :: current data source only
-py build\snapshot_pdf.py --update-all          :: both template and yours
-```
-
-`--update` refreshes BOTH variants (color + grayscale) of the fixture
-matching the current data source. `--update-all` runs the full build
-pipeline twice (once with the template, once with your data if
-`data/resume.yml` exists), refreshing all four fixtures. The
-intermediate snapshot checks are skipped via `SKIP_SNAPSHOT=1` so the
-existing about-to-be-replaced fixtures don't fail the build.
-
-Commit the refreshed `expected_resume-color.pdf` and
-`expected_resume-grayscale.pdf` alongside whatever change caused them.
-The `.mine.pdf` fixtures stay gitignored — they live only on your
-machine.
-
-#### Running snapshot test on its own
-
-```
-py build/snapshot_pdf.py
-```
-
-Useful when iterating on tolerances or inspecting a regression without
-rebuilding. Requires both built PDFs to already exist; it finds them
-through `dist/pdf_meta.json` rather than by name.
-
-## Configuration
-
-Environment variables that affect the build:
-
-| Variable                   | Purpose                                                |
-|----------------------------|--------------------------------------------------------|
-| `PYTHON`                   | Explicit Python interpreter (overrides auto-detect).   |
-| `RESUME_DATA_SOURCE`       | `default` or `mine` — force which data file to use,    |
-|                            | ignoring the yours-preferred-over-template logic. Used |
-|                            | internally by `--update-all`.                          |
-| `RESUME_DATA_FILE`         | An explicit data file to read, overriding everything   |
-|                            | above. Absolute, or relative to the project root.      |
-|                            | Exists so a tool can preview an arbitrary file without |
-|                            | copying it over yours. `LETTER_DATA_FILE` is the |
-|                            | same for the letter.                                   |
-| `RESUME_TESTS`             | `on` (default) or `off` — whether the build runs the   |
-|                            | unit suites first. The app passes `off`.               |
-| `RESUME_SNAPSHOT`          | `off` (default), `on` (check and report), or `strict`  |
-|                            | (check and fail). See "Snapshot test".                 |
-| `RESUME_VARIANTS`          | Comma-separated: `color`, `grayscale`, or both.        |
-|                            | Defaults to both from the CLI; the app states its      |
-|                            | choice explicitly.                                     |
-| `STRICT_TESTS=1`           | Convert SKIP'd test suites into hard failures. Without |
-|                            | it, a skipped suite (e.g. `test_check_layout` when the |
-|                            | Playwright browser binary is missing) prints a yellow  |
-|                            | warning and the runner exits 0. With `STRICT_TESTS=1`  |
-|                            | the runner exits 1. Use in CI to catch silently-       |
-|                            | bypassed suites.                                       |
-| `DEBUG_MEASUREMENTS=1`     | Dump the solver's input measurements and the final     |
-|                            | rendered column heights (developer diagnostic).        |
-| `SKIP_SNAPSHOT=1`          | Skip the visual regression step (used internally by    |
-|                            | `--update-all`).                                       |
-| `RESUME_PIPELINE_SUFFIX`   | Label appended to phase headings during `--update-all` |
-|                            | so you can see which data source is being processed.   |
-| `NO_COLOR` / `FORCE_COLOR` | Control ANSI output (default: auto-detect from TTY).   |
-
-## The Studio app
-
-```
-npm run studio     # desktop window (needs a Rust toolchain)
-npm run ui         # the same app in your browser — no Rust needed
-```
-
-A three-pane window: your documents on the left, the **real printed
-PDF** in the middle, an inspector on the right. Edit the YAML in
-whatever editor you like and the pane follows.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/studio-letter-dark.png">
-  <img alt="The Studio with the cover letter selected" src="docs/screenshots/studio-letter.png">
-</picture>
-
-The preview is not a screenshot of the HTML. It prints a real PDF,
-crops it through `crop_pdf.py`, and rasterizes the cropped file with
-the same function the visual-regression test uses — so what you see is
-the output, post-crop, at true 612 × 792 pt.
-
-**Building never crosses documents.** The Build button shells out to
-the same CLI you would run by hand, so there is exactly one way to
-produce a PDF worth sending, and building a resume cannot touch the
-cover letter's files.
-
-Two checkboxes on the resume card:
-
-| Checkbox | Default | Effect |
-|----------|---------|--------|
-| Compare against snapshot | off | Runs the pixel diff and reports differences. Never blocks. |
-| Run unit tests first     | off | Runs the full suite before building — about nine seconds. See "Why step 0 is skippable". |
-
-**Dropping a file** works out which document it is by reading it, not
-by its name: the two builders require disjoint top-level keys
-(`sidebar`/`mainColumn` versus `letter`), so a file that satisfies one
-cannot satisfy the other. If it matches both or neither, the app asks
-instead of guessing. Nothing in `data/` is ever overwritten — a
-dropped file is read in place if it is already there, saved under its
-own name if not, and a name collision offers you a choice rather than
-replacing anything.
-
-### Why it is built this way
-
-The obvious Tauri design puts the whole application in Rust. That
-works, and it means nobody can run, test or change the app without a
-Rust toolchain and the platform's webview development packages.
-
-Instead the app is a small HTTP server on loopback plus one HTML file,
-and the Rust layer has one job: start the server, show the window. So
-the entire thing is testable with `npm run ui` in an ordinary browser,
-the UI can be iterated on without recompiling anything, and the
-desktop build is a wrapper rather than a second implementation.
-
-Behind it sits a **warm engine**: one long-lived Chromium and one
-long-lived Python worker, so a live preview does not pay Chromium
-startup and four Python interpreter starts on every keystroke. Both
-`test_worker_equivalence.py` and `test_engine_equivalence.js` assert
-the warm path produces the same bytes and the same pixels as the cold
-CLI — that equivalence is the whole premise, so it is tested rather
-than assumed.
-
-## Editing in VS Code
-
-`.vscode/settings.json` maps the schemas in `schemas/` onto the data
-files, which gives you key completion, type checking as you type, and
-hover documentation for every field. It needs the **YAML** extension by
-Red Hat (`redhat.vscode-yaml`); VS Code offers to install it the first
-time it sees the file.
-
-The schemas are advisory. `validate_data()` in `build/build.py` is the
-authority, and `test_yaml_typing.py` asserts the two agree — an
-advisory schema that disagrees with the authority is worse than none.
-
-They are mapped in settings rather than by a `# yaml-language-server:`
-comment at the top of each file, so nothing in `data/` is modified and
-a new file you drop in picks up its schema automatically.
-
-**`yaml.schemaStore.enable` is `false`, and that matters.**
-`resume.yml` is the canonical filename of [JSON
-Resume](https://jsonresume.org/), a different and widely-used spec, and
-SchemaStore's public catalog maps that exact name to it. Leave the
-catalog on and your resume draws three errors — `role`, `sidebar` and
-`mainColumn` "not allowed" — from a schema you never asked for. The
-cost of turning it off is that other YAML in the project (a future
-`.github/workflows/`, say) loses catalog autocomplete.
-
-## YAML typing
-
-`build/_yaml_loader.py` is the project's only YAML entry point. It
-exists for two unrelated reasons.
-
-**Speed.** It uses libyaml where available: ~12.6 ms to parse the data
-file drops to ~0.8 ms, and a resume build parses twice. The
-pure-Python parser is the fallback and behaves identically, just
-slower; `test_yaml_typing.py` reports a skip when that happens rather
-than letting the machine quietly get slower.
-
-**Typing.** PyYAML implements YAML 1.1, which resolves untagged
-scalars by pattern — convenient for configuration and actively wrong
-for a résumé, where almost every value is text that happens to look
-like something else:
-
-| you write | YAML 1.1 gives you | this project gives you |
-|-----------|--------------------|------------------------|
-| `langs: [no, yes]` | `[False, True]` | `['no', 'yes']` |
-| `date: 2026-09-16` | a `datetime.date` | `'2026-09-16'` |
-| `shift: 22:30` | `1350` (sexagesimal) | `'22:30'` |
-| `gpa: 3.90` | `3.9` | `'3.90'` |
-| `gap: true` | `True` | `True` — unchanged |
-| `maxPages: 4` | `4` | `4` — unchanged |
-
-The first row is the famous one: `no` is the ISO code for Norwegian,
-so listing it as a language silently deletes it. The last two are why
-booleans and integers were re-registered in their YAML 1.2 core forms
-rather than dropped — `gap: true` still has to work.
-
-Explicit tags still mean what they say: `!!float 3.90` is a float,
-`!!timestamp 2024-01-05` is a date. Only the guessing is gone. The
-surgery is applied to a private loader subclass, so `yaml.safe_load`
-elsewhere in the process is untouched.
-
-## Requirements
-
-- **Python** 3.10+ (tested on 3.10 and 3.12).
-- **Node** 18+ (for Playwright 1.60).
-- **Chromium** (installed via `npx playwright install chromium`).
-- Dependencies are exact-pinned in `requirements.txt` and
-  `package.json`. Use `npm ci` (not `npm install`) to reproduce the
-  lockfile exactly.
-
-## Why this architecture
-
-The naive approach to a YAML-driven resume — flow content into a fixed
-page, let the browser decide where to break — produces unpredictable
-output across browsers, font versions, and rendering quirks. Two
-builds on different machines wouldn't match.
-
-This pipeline takes a different path:
-
-1. **Each `<article class="page">` is a fixed 8.5×11 in box.** The
-   screen layout IS the print layout. There is no native pagination;
-   `@page` margins are zero, and Chromium prints what it sees.
-2. **A solver decides placement deterministically.** Given identical
-   measurements (which Playwright produces consistently for a given
-   font and CSS), the placement is identical.
-3. **Multiple invariants prevent silent breakage.** The column
-   divider must terminate at the page bottom margin; the section
-   rhythm must be equal across columns; page count must match the
-   solver's decision; no descendant can overflow its page's content
-   area. Any failure aborts the build with a specific error.
-4. **A pixel-diff snapshot test catches visual regressions.** Even
-   if every invariant passes, the snapshot test fires on any
-   intentional or accidental visual change.
-
-The result: editing the YAML and re-running produces the same PDFs on
-any machine, and any visible change is caught by a test.
-
-## Why vendored fonts
-
-The project ships its own Manrope and Newsreader font files under
-`fonts/` instead of loading from Google Fonts CDN. This isn't
-decorative — it fixes a real reproducibility problem.
-
-When a project loads fonts from a CDN, three things can silently
-change the rendered output:
-
-1. **System-installed font overriding the web font.** If a contributor's
-   OS has Manrope or Newsreader installed locally, Chromium sometimes
-   prefers the system version over the CDN-served file. Different
-   system font versions render glyphs at slightly different widths —
-   enough to change line-wrap decisions and therefore the solver's
-   output.
-2. **Different npm or CDN mirrors of the same font.** Distributions
-   that bill themselves as "the same font" can ship subtly different
-   outline files, even when their metrics tables match.
-3. **CDN URL drift.** Google's `fonts.gstatic.com` woff2 hashes change
-   when fonts are re-versioned. Pinning a specific URL would eventually
-   404; the stable CSS endpoint silently serves a different glyph file
-   when Google updates the version.
-
-The vendored woff2 files are the canonical Google Fonts release of
-each face. They're loaded directly from disk via
-`@font-face url('../fonts/...')` with no `local()` source, so a
-system-installed font of the same name can't take over. Each is a
-variable WOFF2 covering its full weight range; total weight on disk
-is well under 1 MB.
-
-The OFL license texts (`Manrope-OFL.txt`, `Newsreader-OFL.txt`) sit
-alongside the woff2 binaries. Keep them. Removing them while keeping
-the woff2 files would put the project in violation of the SIL Open
-Font License, which requires the license travel with the font.
-
 ## FAQ / common gotchas
 
-**The build hangs at "Chromium launch" or fails with an install message.**
+**The Studio says "Chromium launch failed", or a build fails with an install message.**
 You probably haven't installed Playwright's browser binary. Run
-`npx playwright install chromium` once. Subsequent builds reuse the
-cached binary in `~/.cache/ms-playwright/` (Linux) or the platform
-equivalent.
+`npx playwright install chromium` once. Later builds reuse the cached
+binary in `~/.cache/ms-playwright/` (Linux) or the platform equivalent.
+
+**The desktop app fails with "failed to read plugin permissions" and an old folder path.**
+The desktop shell's build cache (`src-tauri/target`) still points at a
+previous location of the project, typically after renaming or moving
+the folder. Delete it with `cargo clean --manifest-path
+src-tauri/Cargo.toml` and start the Studio again; the first start
+rebuilds it, which takes a few minutes.
 
 **The build complains about Python — "Microsoft Store alias" on Windows.**
 Stock Windows aliases `python` and `python3` to a Microsoft Store
 installer stub that exits non-zero. Either install real Python from
-python.org and run `py` (the launcher), or set `PYTHON=py` explicitly:
-`set PYTHON=py && npm run resume` in cmd, or
-`$env:PYTHON="py"; npm run resume` in PowerShell.
+python.org and run `py` (the launcher), or set `PYTHON=py` before
+starting the Studio: `set PYTHON=py && npm run studio` in cmd, or
+`$env:PYTHON="py"; npm run studio` in PowerShell.
 
 **The snapshot reports a difference after a CSS edit and the diff image looks correct.**
 That's it doing its job — any visible change, intentional or not, fires
@@ -1017,13 +1013,6 @@ Your content doesn't fit in the configured cap. Either raise
 itself to override it just there — or trim content. The error
 identifies which column ran out of pages.
 
-**`pip install -r requirements.txt` fails to install Pillow on a new Python version.**
-The pin is `Pillow==10.3.0`, which doesn't have prebuilt wheels for
-very new Python versions (3.13+). Bump the pin in `requirements.txt`
-to a newer version (12.x is fine), run `npm run resume`, and refresh
-fixtures if anything changed visually (it usually doesn't — Pillow
-upgrades rarely affect rasterization).
-
 **I edited the YAML and the build silently dropped a section / job.**
 Schema validation should catch every malformed entry with a clear
 error. If you're seeing silent drops, please report — `validate_data`
@@ -1045,7 +1034,7 @@ The build deliberately does NOT use Google Fonts CDN (see "Why
 vendored fonts" above).
 
 **Where do I put real resume data without committing it?**
-`data/resume.yml` — it is already gitignored and the build already
+`data/resume.yml` — it is already gitignored and the Studio already
 prefers it. `.gitignore` works as an **allowlist**: everything under
 `data/` is private except the three `*_default.yml` templates, named
 one by one. So a new file you drop in there is private by default

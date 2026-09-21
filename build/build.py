@@ -22,7 +22,7 @@ Custom Jinja filter:
 HTML escaping for special characters (& < >) is done via Jinja's
 built-in `e` (escape) filter at the template call sites.
 
-Run via `npm run resume`, which calls this first; or directly with
+Run via `node resume.js`, which calls this first; or directly with
 `python3 build/build.py` (run from project root).
 """
 
@@ -776,7 +776,7 @@ def check_stylesheet_freshness():
     than its SCSS sources.
 
     The build pipeline compiles SCSS in resume.js step 1, before this
-    script runs — so the canonical `npm run resume` path always passes
+    script runs — so the canonical `node resume.js` path always passes
     this check immediately. Direct invocations of build.py
     (`python build/build.py ...`) skip the Sass step entirely; without
     this check, they'd render an HTML that silently references a missing
@@ -810,8 +810,8 @@ def check_stylesheet_freshness():
     if not css_file.exists():
         fail(
             f"{css_file.relative_to(ROOT)} not found.\n"
-            f"build.py does not compile SCSS — `npm run resume` does that as step 1.\n"
-            f"Run `npm run resume` for the canonical flow, or compile manually:\n"
+            f"build.py does not compile SCSS — `node resume.js` does that as step 1.\n"
+            f"Run `node resume.js` for the canonical flow, or compile manually:\n"
             f"  {sass_cmd}"
         )
     css_mtime = css_file.stat().st_mtime
@@ -832,7 +832,7 @@ def check_stylesheet_freshness():
         fail(
             f"{css_file.relative_to(ROOT)} is older than its SCSS sources:\n"
             f"{listing}\n"
-            f"Recompile with `npm run resume`, or:\n"
+            f"Recompile with `node resume.js`, or:\n"
             f"  {sass_cmd}"
         )
 
@@ -934,7 +934,7 @@ def build(mode='final'):
             fail(
                 f"{placement_path.relative_to(ROOT)} not found.\n"
                 f"Final-mode build requires the layout solver's placement.\n"
-                f"Run `npm run resume` to produce it, or `python "
+                f"Run `node resume.js` to produce it, or `python "
                 f"{Path(__file__).relative_to(ROOT)} --mode=measurement` "
                 f"to generate the measurement HTML for inspection."
             )

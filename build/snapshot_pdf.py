@@ -19,12 +19,12 @@ It is also auto-invoked by resume.js as the final pipeline step.
 Workflow
 ────────
 1. First build (no fixtures yet):
-       npm run resume
+       node resume.js
    resume.js auto-bootstraps any missing fixture on its first
    snapshot call.
 
 2. Routine verification (subsequent builds):
-       npm run resume
+       node resume.js
    The snapshot test runs automatically. Exit 0 = both variants
    match within tolerance. Exit 1 = visible regression; side-by-
    side diff images written to tests/fixtures/diff_<variant>_pageN.png.
@@ -217,7 +217,7 @@ def resolve_fixture_path(default_fixture, mine_fixture):
     c.detail("Expected 'default' or 'mine'.")
     c.detail(
         "A value of 'local' means the file was written before the data "
-        "files were renamed — rebuild with `npm run resume` to refresh it."
+        "files were renamed — rebuild with `node resume.js` to refresh it."
     )
     c.detail("Refusing to guess which fixture to compare against.")
     sys.exit(1)
@@ -497,7 +497,7 @@ def main() -> int:
     # all is still an error.
     variants, missing = active_variants()
     if not variants:
-        c.err("No built PDFs in dist/. Run `npm run resume` first.")
+        c.err("No built PDFs in dist/. Run `node resume.js` first.")
         return 2
     for label in missing:
         c.info_pair("Skipped variant", f"{label.lower()} — not built by the last run")
@@ -514,7 +514,7 @@ def main() -> int:
             c.warn_pair(
                 "Fixture NOT refreshed",
                 f"{label.lower()} — build it first "
-                f"({ENV_RESUME_VARIANTS}=color,grayscale npm run resume) "
+                f"({ENV_RESUME_VARIANTS}=color,grayscale node resume.js) "
                 f"then re-run --update",
             )
         for label, pdf_path, default_fix, mine_fix in variants:

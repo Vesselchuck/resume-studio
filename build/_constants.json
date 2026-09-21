@@ -33,7 +33,7 @@
     "RESUME_VARIANTS": "RESUME_VARIANTS",
     "_comment_snapshot": "Whether a build checks its PDFs against the committed fixtures. 'off' (the default) skips the check entirely. 'on' runs it and REPORTS a difference without failing — the PDFs are written before the snapshot runs, so a difference is news about the document, not a reason to withhold it. 'strict' restores the original behavior of failing the build, for anyone wiring this into CI. SKIP_SNAPSHOT=1 still forces a skip regardless.",
     "RESUME_SNAPSHOT": "RESUME_SNAPSHOT",
-    "_comment_tests": "Whether a build runs the unit suites before producing anything. 'on' (the default) keeps `npm run resume` honest, because from a terminal you may have just changed code. 'off' skips straight to the build, which is what Studio asks for: editing a bullet does not change the layout solver, and ~9s of proving that it still works is a tax on every save. The checks that validate YOUR data — validate_data, the layout invariants, the maxPages ceiling — live in the build itself and always run.",
+    "_comment_tests": "Whether a build runs the unit suites before producing anything. 'on' (the default) keeps `node resume.js` honest, because from a terminal you may have just changed code. 'off' skips straight to the build, which is what Studio asks for: editing a bullet does not change the layout solver, and ~9s of proving that it still works is a tax on every save. The checks that validate YOUR data — validate_data, the layout invariants, the maxPages ceiling — live in the build itself and always run.",
     "RESUME_TESTS": "RESUME_TESTS"
   },
   "output_name": {
