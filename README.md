@@ -456,7 +456,7 @@ All of `dist/` is gitignored.
 │                             under fonts/ are OFL 1.1 — see License section).
 ├── README.md                 This file.
 ├── docs/screenshots/         The images in this README (placeholder data).
-├── package.json              Node deps (playwright, sass) + npm scripts.
+├── package.json              Node deps (playwright, sass-embedded) + npm scripts.
 ├── package-lock.json         Exact-pinned lockfile for npm ci.
 ├── resume.js                 Resume build orchestrator (thin CLI over build/pipeline.js).
 ├── letter.js                 Letter build orchestrator (single page).
