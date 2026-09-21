@@ -1,0 +1,10 @@
+# Keeps the GitHub Actions used by .github/workflows/ up to date.
+# Security alerts for npm, pip and Cargo packages work without this
+# file; this adds regular version-update PRs for the workflow's actions.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
