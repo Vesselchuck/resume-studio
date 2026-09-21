@@ -133,7 +133,7 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
          mapping, so they keep their copied-from-input values.
 
     The final `writer.add_metadata(info)` call respects explicitly-
-    passed /Producer / /Creator values (verified in pypdf 5.9.0, the
+    passed /Producer / /Creator values (verified in pypdf 6.16.1, the
     pinned version). Future pypdf versions could in principle change
     that — the regression gate is
     `test_does_not_override_creator_or_producer` in
@@ -201,7 +201,7 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
             # Manifest unreadable — keep the default rather than fail.
             pass
     # `writer.root_object` is pypdf's public accessor for the document
-    # catalog (verified in pypdf 5.9.0, the pinned version). The
+    # catalog (verified in pypdf 6.16.1, the pinned version). The
     # leading-underscore `_root_object` works too but is private and
     # subject to rename across versions; the public name is the
     # forward-compatible choice.

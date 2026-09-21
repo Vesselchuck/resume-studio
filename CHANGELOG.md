@@ -48,6 +48,9 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   letter from the shipped templates and runs `npm test`. The README
   shows the result as a badge, next to the latest release and the
   license.
+- **Changed.** pypdf, which crops the PDFs and writes their metadata, is
+  updated from 5.9.0 to 6.16.1 for its security fixes. The PDFs it
+  produces are unchanged.
 - **Changed.** The README's screenshots of the documents, of color and
   grayscale pages, and of the Studio with the cover letter selected now
   switch with GitHub's light and dark theme, as the main Studio
