@@ -41,7 +41,11 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
-## [Unreleased]
+## [0.6.1] — 2026-09-21
+
+*Security updates for two Python packages, tests that run on GitHub,
+and README screenshots for the dark theme. Nothing you rely on
+changed.*
 
 - **Added.** Tests run on GitHub (GitHub Actions) on every push to `main`
   and every pull request: the workflow builds the resume and the cover
@@ -614,8 +618,9 @@ the old names can still be followed.
 | 0.5.0 | `5.0` | breaking: the PDF and the scripts moved |
 | 0.5.1 | the May snapshot | the page-number footer |
 | 0.6.0 | — | breaking: `render.js` removed, files renamed |
+| 0.6.1 | — | security updates, tests on GitHub |
 
-[Unreleased]: #unreleased
+[0.6.1]: #061--2026-09-21
 [0.6.0]: #060--2026-09-20
 [0.5.1]: #051--2026-05-16
 [0.5.0]: #050--2026-05-16
