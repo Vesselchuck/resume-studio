@@ -41,7 +41,21 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
-## [Unreleased]
+## [0.7.0] — 2026-09-21
+
+*Breaking: the Studio is now the only way to build. `build.bat`,
+`ui.bat` and the `resume`, `build` and `letter` npm scripts are gone.
+Styles compile faster and the Studio opens sooner.*
+
+### Upgrading from 0.6.x
+
+1. Run `npm ci`. The Sass compiler changed package.
+2. Build in the Studio: double-click `studio.bat`, or run
+   `npm run studio` (`npm run ui` for the browser version).
+3. If you ran `npm run resume` or `npm run letter` in scripts of your
+   own, run `node resume.js` or `node letter.js` instead.
+
+### Changes
 
 - **Removed — Breaking.** Every way to build other than the Studio:
   `build.bat`, `ui.bat`, and the npm scripts `resume`, `build` and
@@ -643,8 +657,9 @@ the old names can still be followed.
 | 0.5.1 | the May snapshot | the page-number footer |
 | 0.6.0 | — | breaking: `render.js` removed, files renamed |
 | 0.6.1 | — | security updates, tests on GitHub |
+| 0.7.0 | — | breaking: the Studio is the only way to build |
 
-[Unreleased]: #unreleased
+[0.7.0]: #070--2026-09-21
 [0.6.1]: #061--2026-09-21
 [0.6.0]: #060--2026-09-20
 [0.5.1]: #051--2026-05-16
