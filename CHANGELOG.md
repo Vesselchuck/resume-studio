@@ -43,12 +43,25 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
+- **Removed — Breaking.** Every way to build other than the Studio:
+  `build.bat`, `ui.bat`, and the npm scripts `resume`, `build` and
+  `letter`. Open the Studio with `studio.bat` or `npm run studio`
+  (`npm run ui` still opens it in a browser). For debugging, the build
+  scripts the Studio runs can still be run directly:
+  `node resume.js` and `node letter.js`.
+- **Changed.** The README is reorganized around the Studio: setup, then
+  opening and using the app, with the command line moved to a
+  "Debugging from the command line" section.
 - **Changed.** Styles are compiled with `sass-embedded`, the native build
   of the Dart Sass compiler, instead of the pure-JavaScript `sass`
   package. The CSS is identical. A build spends about half as long on
   Sass, and in Studio a style change recompiles in about 10 ms instead of
   about 55 ms, because the compiler stays running between changes.
-  Run `npm install` after pulling this change.
+  Run `npm ci` after pulling this change.
+- **Changed.** Studio starts its Python worker, Chromium and the Sass
+  compiler at the same time when it opens, and compiles the stylesheet
+  before the first preview needs it. The first preview appears about
+  0.4 s sooner.
 
 ---
 

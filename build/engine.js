@@ -11,7 +11,7 @@
  *   • one build/worker.py process (Python, imports done once)
  *   • the compiled dist/styles.css, recompiled only when a .scss changes
  *
- * A cold `npm run resume` spends most of its wall-clock on startup:
+ * A cold `node resume.js` spends most of its wall-clock on startup:
  * launching Chromium and starting four separate Python interpreters.
  * Measured on the reference machine, the Python half alone drops from
  * ~468 ms to ~179 ms per cycle once the interpreter stops restarting.
@@ -73,7 +73,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const { createPipeline, disposeSass } = require('./pipeline');
+const { createPipeline, disposeSass, warmUpSass } = require('./pipeline');
 const { detectPython } = require('./detect_python');
 const c = require('./_console');
 
@@ -241,12 +241,21 @@ class PythonWorker {
 
 /* ─── The engine ──────────────────────────────────────────────── */
 
-async function createEngine({ root, python } = {}) {
+/**
+ * @param {object}  opts
+ * @param {string}  opts.root   — project root
+ * @param {string}  opts.python — interpreter; detected when omitted
+ * @param {boolean} opts.warm   — start everything a first preview needs
+ *   right away and in parallel, instead of on first use: the Python
+ *   worker, Chromium and the Sass compiler all boot at once. Studio sets
+ *   it; a caller that only wants build() should not.
+ */
+async function createEngine({ root, python, warm = false } = {}) {
   root = root || path.join(__dirname, '..');
   const interpreter = python || process.env.PYTHON || detectPython();
 
   const worker = new PythonWorker({ root, python: interpreter });
-  const hello = await worker.start();
+  const workerReady = worker.start();
 
   // 'fonts' instead of the CLI's 'networkidle': the fonts are vendored,
   // so waiting 500 ms for network silence on a file:// document with no
@@ -262,12 +271,26 @@ async function createEngine({ root, python } = {}) {
   const pipeline = pipelines.resume;
 
   // Lazy so that a caller who only ever wants `build()` (which shells
-  // out to the CLI) never pays for a browser it will not use.
+  // out to the CLI) never pays for a browser it will not use — unless
+  // `warm` asks for it up front.
   let browser = null;
   let page = null;
+  let pagePromise = null;
 
-  async function browserPage() {
-    if (page) return page;
+  // One launch, however many callers ask at once: a warm start may still
+  // be launching Chromium when the first preview arrives, and that
+  // preview must wait for the same launch rather than start a second.
+  function browserPage() {
+    if (!pagePromise) {
+      pagePromise = launchBrowser().catch((err) => {
+        pagePromise = null;
+        throw err;
+      });
+    }
+    return pagePromise;
+  }
+
+  async function launchBrowser() {
     const { chromium } = require('playwright');
     try {
       browser = await chromium.launch();
@@ -282,6 +305,30 @@ async function createEngine({ root, python } = {}) {
     const ctx = await browser.newContext();
     page = await ctx.newPage();
     return page;
+  }
+
+  // Warm start. The three are independent processes, so booting them
+  // side by side costs about as long as the slowest of them rather than
+  // their sum. Chromium's launch runs in the background; a failure is
+  // left for the first preview to report, where it has somewhere to go.
+  if (warm) {
+    browserPage().catch(() => { /* reported again by the first preview */ });
+  }
+
+  const hello = await workerReady;
+
+  // Sass last: its API is synchronous and holds this thread while it
+  // starts, so it waits until Python is up and Chromium's launch is
+  // under way — both keep starting in their own processes meanwhile.
+  // It compiles the stylesheet too, when it is stale, so the first
+  // preview does not have to.
+  if (warm) {
+    try {
+      warmUpSass();
+      if (pipeline.stylesAreStale()) pipeline.compileSass();
+    } catch {
+      // Already reported by compileSass; the first preview will try again.
+    }
   }
 
   // One page, one placement file: overlapping renders would interleave
@@ -498,10 +545,16 @@ async function createEngine({ root, python } = {}) {
 
   async function dispose() {
     disposeSass();
+    // A warm start may still be launching Chromium; wait for it so the
+    // browser it produces is closed rather than orphaned.
+    if (pagePromise) {
+      try { await pagePromise; } catch { /* never launched */ }
+    }
     if (browser) {
       try { await browser.close(); } catch { /* already gone */ }
       browser = null;
       page = null;
+      pagePromise = null;
     }
     await worker.stop();
   }

@@ -40,7 +40,9 @@ Not covered here
 
 Skips cleanly when dist/ has not been built yet — build.py requires a
 compiled dist/styles.css, and final mode requires dist/placement.json.
-Run `npm run resume` once first.
+Build once in the Studio (or run `node resume.js`) first. A stylesheet
+that is merely older than an edited .scss file is recompiled here, the
+same way the Studio does, rather than failing every build test.
 
 Final-mode tests also skip when dist/placement.json was solved for a
 different data source than the one currently resolving, since nothing
@@ -88,6 +90,37 @@ TIMEOUT = 120  # generous: a cold import of pypdfium2 on a slow CI box
 
 def _have_dist():
     return STYLES_CSS.exists()
+
+
+def _stylesheet_is_stale():
+    """True when a .scss source is newer than dist/styles.css.
+
+    build.py refuses to build against a stale stylesheet, so after any
+    edit under styles/ every build test here would fail until something
+    recompiled it. Mirrors build.py's check, tolerance included.
+    """
+    css_mtime = STYLES_CSS.stat().st_mtime
+    return any(p.stat().st_mtime - css_mtime > 2.0
+               for p in (ROOT / "styles").glob("*.scss"))
+
+
+def _recompile_stylesheet():
+    """Compile styles/ → dist/styles.css with the pipeline's own compileSass.
+
+    Returns an explanation when it could not, None when it did.
+    """
+    node = shutil.which("node")
+    if not node:
+        return "node not found"
+    script = ("require('./build/pipeline')"
+              ".createPipeline({ root: process.cwd(), python: null })"
+              ".compileSass()")
+    result = subprocess.run([node, "-e", script], cwd=str(ROOT),
+                            capture_output=True, text=True, encoding="utf-8",
+                            timeout=TIMEOUT)
+    if result.returncode != 0:
+        return (result.stderr or result.stdout).strip().splitlines()[-1:] or ["failed"]
+    return None
 
 
 class Worker:
@@ -147,12 +180,18 @@ def snapshot(paths):
     return {p: (p.read_bytes() if p.exists() else None) for p in paths}
 
 
-@unittest.skipUnless(_have_dist(), "dist/ not built — run `npm run resume` first")
+@unittest.skipUnless(_have_dist(), "dist/ not built — run `node resume.js` first")
 class WorkerEquivalenceTest(unittest.TestCase):
     """Warm worker output vs cold CLI output, byte for byte."""
 
     @classmethod
     def setUpClass(cls):
+        if _stylesheet_is_stale():
+            problem = _recompile_stylesheet()
+            if problem:
+                raise unittest.SkipTest(
+                    "dist/styles.css is older than styles/ and could not be "
+                    f"recompiled ({problem}) — build once in the Studio first")
         # Both paths write into the real dist/. Preserve whatever was
         # there so a test run never costs the developer their build.
         cls._restore = snapshot(BUILD_ARTIFACTS)
@@ -202,7 +241,7 @@ class WorkerEquivalenceTest(unittest.TestCase):
             if mode == "final" and any(m in combined for m in self._STALE_PLACEMENT_MARKERS):
                 self.skipTest(
                     "dist/placement.json was solved for different data — "
-                    "run `npm run resume` to re-solve, then re-run the tests"
+                    "run `node resume.js` to re-solve, then re-run the tests"
                 )
             self.fail(f"cold build failed:\n{cold.stdout}\n{cold.stderr}")
         expected = snapshot(BUILD_ARTIFACTS)

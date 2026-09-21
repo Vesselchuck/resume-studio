@@ -25,7 +25,7 @@ selector):
   • RESUME_DATA_SOURCE=mine    → require data/letter.yml
   • unset (default)            → yours if present, else the template
 
-Run via `npm run letter`, which compiles the SCSS first; or
+Run via `node letter.js`, which compiles the SCSS first; or
 directly with `python3 build/build_letter.py` (run from project
 root) once dist/styles.css exists.
 """
@@ -67,7 +67,7 @@ PDF_META_FILE = ROOT / "dist" / "letter_meta.json"
 # Mirrors build.py: the unsuffixed name is your real letter and is
 # gitignored; the *_default.yml placeholder is what the repo ships.
 # Everything you type or run says "letter": letter.yml,
-# letter_default.yml, letter.js, `npm run letter`. Only the OUTPUTS
+# letter_default.yml, letter.js, `node letter.js`. Only the OUTPUTS
 # spell it out in full (<Your_Name>_Cover_Letter.pdf), because a
 # recruiter reads them.
 DATA_FILE_MINE = DATA_DIR / "letter.yml"

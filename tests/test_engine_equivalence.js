@@ -122,7 +122,7 @@ async function renderTo(pipeline, page, outPath, variant) {
 
 (async () => {
   if (!fs.existsSync(path.join(DIST, 'styles.css'))) {
-    return skip('dist/ not built — run `npm run resume` first');
+    return skip('dist/ not built — run `node resume.js` first');
   }
 
   let createEngine, createPipeline, chromium;

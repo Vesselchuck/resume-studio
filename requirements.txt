@@ -3,9 +3,9 @@
 # Install with:  pip install -r requirements.txt
 # Windows:       py -m pip install -r requirements.txt
 #
-# Versions are pinned exactly to keep `npm run resume` reproducible
+# Versions are pinned exactly to keep `node resume.js` reproducible
 # across environments. To upgrade a package: bump the version here,
-# verify `npm run resume` still produces an identical PDF (snapshot
+# verify `node resume.js` still produces an identical PDF (snapshot
 # test will fail and tell you if not), then commit both the bump
 # and any refreshed fixtures.
 #
@@ -27,5 +27,5 @@ Pillow==12.3.0
 # validate_data() accepts — an advisory schema that disagrees with
 # the authority is worse than no schema at all. Nothing in the build
 # imports it, and the test skips itself if it is missing, so you can
-# drop this line without breaking `npm run resume`.
+# drop this line without breaking `node resume.js`.
 jsonschema==4.26.0

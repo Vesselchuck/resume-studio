@@ -1,5 +1,5 @@
 # ─── Build outputs ──────────────────────────────────────────────
-# Regenerated on every `npm run resume`. Each user produces their
+# Regenerated on every build. Each user produces their
 # own; never check these in. The PDFs are named after whoever built
 # them (Gaius_Caesar_Resume.pdf) and are written into dist/ alongside
 # the HTML and other build artifacts — one more reason the whole
