@@ -41,6 +41,20 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+- **Added.** Tests run on GitHub (GitHub Actions) on every push to `main`
+  and every pull request: the workflow builds the resume and the cover
+  letter from the shipped templates and runs `npm test`. The README
+  shows the result as a badge, next to the latest release and the
+  license.
+- **Changed.** The README's screenshots of the documents, of color and
+  grayscale pages, and of the Studio with the cover letter selected now
+  switch with GitHub's light and dark theme, as the main Studio
+  screenshot already did.
+
+---
+
 ## [0.6.0] — 2026-09-20
 
 *Breaking: `node render.js` is gone, your data file and the
@@ -595,6 +609,7 @@ the old names can still be followed.
 | 0.5.1 | the May snapshot | the page-number footer |
 | 0.6.0 | — | breaking: `render.js` removed, files renamed |
 
+[Unreleased]: #unreleased
 [0.6.0]: #060--2026-09-20
 [0.5.1]: #051--2026-05-16
 [0.5.0]: #050--2026-05-16
