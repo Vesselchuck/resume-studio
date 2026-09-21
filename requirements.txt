@@ -20,7 +20,7 @@ pypdf==6.16.1
 
 # Snapshot test (scripts/snapshot_pdf.py)
 pypdfium2==5.7.1
-Pillow==10.3.0
+Pillow==12.3.0
 
 # Test only. tests/test_yaml_typing.py uses it to check that the
 # editor schemas in schemas/ accept exactly the files build.py's
