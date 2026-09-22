@@ -203,6 +203,15 @@ async function renderTo(pipeline, page, outPath, variant) {
         }
       }
     }
+
+    // An unchanged page is not re-encoded: a second preview of the same
+    // document reuses the first one's image, byte for byte.
+    const first = await engine.renderPreview({ doc: 'letter' });
+    const again = await engine.renderPreview({ doc: 'letter' });
+    assertTrue(again.timings.reusedPages === again.images.length,
+      'a preview of an unchanged document reuses every page image');
+    assertTrue(again.images.every((im, i) => im.png === first.images[i].png && im.hash === first.images[i].hash),
+      'reused page images are identical to the ones they replace');
   } catch (err) {
     fail('engine equivalence run', { error: err.stack || err.message });
   } finally {

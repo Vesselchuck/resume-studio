@@ -991,12 +991,19 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     return found;
   }
 
+  // How long a save has to be quiet before it triggers a render. Editors
+  // often report one save as two or three events (write, then rename or
+  // touch); 75 ms collects those while adding little to every save. A
+  // change that still lands while a render is running is not lost: the
+  // app queues one more render for it (see preview() in ui/index.html).
+  const WATCH_DEBOUNCE_MS = 75;
+
   function noteChange(file) {
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => {
       lastSeen = inputFiles();   // resync so the poll doesn't re-fire
       broadcast('changed', { file: file || null });
-    }, 250);
+    }, WATCH_DEBOUNCE_MS);
   }
 
   function watchInputs() {

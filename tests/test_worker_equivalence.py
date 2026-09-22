@@ -336,6 +336,48 @@ class WorkerEquivalenceTest(unittest.TestCase):
         alive = self.worker.call(op="ping")
         self.assertTrue(alive["ok"], "worker died on malformed input")
 
+    @unittest.skipUnless(COLOR_PDF.exists(), "no built resume PDF to rasterize")
+    def test_raster_skips_pages_the_caller_already_has(self):
+        """The preview only re-sends pages whose pixels changed.
+
+        A second raster of the same PDF, told the hashes of the first,
+        must mark every page unchanged and send no image data — and the
+        hashes must be stable, or nothing would ever be skipped.
+        """
+        first = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1)
+        self.assertTrue(first["ok"], first.get("error"))
+        pages = first["result"]["images"]
+        self.assertTrue(pages)
+        for im in pages:
+            self.assertIn("png", im)
+            self.assertRegex(im["hash"], r"^[0-9a-f]{32}$")
+
+        known = {str(im["page"]): im["hash"] for im in pages}
+        second = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1, known=known)
+        self.assertTrue(second["ok"], second.get("error"))
+        for before, after in zip(pages, second["result"]["images"]):
+            self.assertEqual(after["hash"], before["hash"])
+            self.assertTrue(after.get("unchanged"))
+            self.assertNotIn("png", after)
+
+        # A stale hash is not trusted: that page comes back with an image.
+        known["1"] = "0" * 32
+        third = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1, known=known)
+        page1 = third["result"]["images"][0]
+        self.assertNotIn("unchanged", page1)
+        self.assertEqual(page1["png"], pages[0]["png"])
+
+    @unittest.skipUnless(COLOR_PDF.exists(), "no built resume PDF to rasterize")
+    def test_parallel_encoding_matches_one_page_at_a_time(self):
+        """Encoding pages side by side must give the bytes a single-page
+        request gives, page for page."""
+        both = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1)
+        images = both["result"]["images"]
+        for im in images:
+            alone = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1,
+                                     pages=[im["page"]])
+            self.assertEqual(alone["result"]["images"][0]["png"], im["png"])
+
     def test_missing_input_file_is_reported_not_raised(self):
         frame = self.worker.call(op="crop", input=str(DIST / "nope.pdf"),
                                  output=str(DIST / "nope-out.pdf"), meta=None)
