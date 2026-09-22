@@ -906,15 +906,16 @@ details[open]>summary::before{content:"▾"}
       return;
     }
 
+    var keep = new Map();
     r.images.forEach(function (im, i) {
       var wrap = el('div', 'sheet-wrap');
       wrap.style.width = 'min(' + Math.round(560 * state.zoom / 100) + 'px, 100%)';
 
       var sheet = el('div', 'sheet' + (state.error[id] ? ' held' : ''));
-      var img = new Image();
-      img.src = 'data:image/png;base64,' + im.png;
-      img.alt = 'Page ' + im.page;
-      img.decoding = 'async';
+      var key = im.hash || im.png;
+      // Two identical pages (two blank ones, say) need two elements.
+      var img = keep.has(key) ? pageImage(im, true) : pageImage(im);
+      keep.set(key, img);
       sheet.appendChild(img);
       wrap.appendChild(sheet);
 
@@ -924,6 +925,25 @@ details[open]>summary::before{content:"▾"}
         '<span>' + esc(label) + '</span><span class="budget">' + esc(right) + '</span>'));
       s.appendChild(wrap);
     });
+    pageImages = keep;
+  }
+
+  // Decoded page images, by the pixel hash the engine sends. The canvas is
+  // redrawn on every state change (a busy flag, a zoom step, a new
+  // render), and building a fresh <img> each time made the browser decode
+  // every page's PNG again. An unchanged page — the same hash — reuses its
+  // element instead, so it is neither decoded again nor repainted.
+  var pageImages = new Map();
+
+  function pageImage(im, fresh) {
+    var img = fresh ? null : pageImages.get(im.hash || im.png);
+    if (!img) {
+      img = new Image();
+      img.src = 'data:image/png;base64,' + im.png;
+      img.decoding = 'async';
+    }
+    img.alt = 'Page ' + im.page;
+    return img;
   }
 
   /* ─── inspector ────────────────────────────────────────────── */
@@ -1088,11 +1108,21 @@ details[open]>summary::before{content:"▾"}
     if (!state.render[id]) preview(id);
   }
 
-  async function preview(id) {
+  // A file changed while the engine was busy. Rendering right then would
+  // be refused (one render at a time), and dropping the change would
+  // leave the preview showing an older save until the next one, so it is
+  // remembered here and rendered as soon as the engine is free.
+  var changedWhileBusy = false;
+
+  async function preview(id, opts) {
     id = id || state.active;
+    opts = opts || {};
     var m = docMeta(id);
     if (!m) return;
-    if (state.busy.resume || state.busy.letter) return;
+    if (state.busy.resume || state.busy.letter) {
+      if (opts.fromChange) changedWhileBusy = true;
+      return;
+    }
     state.busy[id] = 'render';
     renderAll();
     try {
@@ -1106,6 +1136,17 @@ details[open]>summary::before{content:"▾"}
       await refreshStatus();
       renderAll();
     }
+    renderQueuedChange();
+  }
+
+  function renderQueuedChange() {
+    if (!changedWhileBusy) return;
+    if (state.busy.resume || state.busy.letter) return;
+    changedWhileBusy = false;
+    if (state.paused) return;
+    var m = docMeta(state.active);
+    if (!m || !m.live) return;
+    preview(null, { fromChange: true });
   }
 
   async function doBuild(id) {
@@ -1179,6 +1220,7 @@ details[open]>summary::before{content:"▾"}
       await refreshStatus();
       renderAll();
     }
+    renderQueuedChange();
   }
 
   /**
@@ -1534,7 +1576,7 @@ details[open]>summary::before{content:"▾"}
       if (state.paused) return;
       var m = docMeta(state.active);
       if (!m || !m.live) return;
-      preview();
+      preview(null, { fromChange: true });
     });
 
     es.addEventListener('render', function (ev) {

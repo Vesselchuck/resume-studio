@@ -71,12 +71,14 @@ run interactively; the GUI drives it.
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
@@ -287,6 +289,20 @@ def op_crop(req):
     }
 
 
+def _pixel_hash(img):
+    """A fingerprint of a rendered page: its size, mode and every pixel."""
+    h = hashlib.blake2b(digest_size=16)
+    h.update(f"{img.mode}:{img.width}x{img.height}:".encode("ascii"))
+    h.update(img.tobytes())
+    return h.hexdigest()
+
+
+def _encode_png(img):
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=False, compress_level=1)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def op_raster(req):
     """Rasterize a PDF to PNGs for the preview pane.
 
@@ -318,18 +334,39 @@ def op_raster(req):
         snapshot_pdf.SCALE = saved_scale
 
     wanted = req.get("pages")
+    # Pages the caller already holds, as {"<page>": "<hash>"}. A page whose
+    # pixels hash the same is returned without a PNG, marked unchanged,
+    # so an edit on page 1 does not re-encode page 2 or send it back.
+    known = req.get("known") or {}
+
     out = []
+    to_encode = []
     for idx, img in enumerate(images):
         if wanted and (idx + 1) not in wanted:
             continue
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=False, compress_level=1)
-        out.append({
+        entry = {
             "page": idx + 1,
             "width": img.width,
             "height": img.height,
-            "png": base64.b64encode(buf.getvalue()).decode("ascii"),
-        })
+            "hash": _pixel_hash(img),
+        }
+        if known.get(str(idx + 1)) == entry["hash"]:
+            entry["unchanged"] = True
+        else:
+            to_encode.append((entry, img))
+        out.append(entry)
+
+    # PNG encoding is most of the rasterize step, and Pillow's encoder
+    # releases the GIL, so the pages are encoded side by side. The bytes
+    # are the same as encoding them one after another.
+    if len(to_encode) > 1:
+        workers = min(len(to_encode), os.cpu_count() or 1)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            encoded = list(pool.map(_encode_png, (img for _, img in to_encode)))
+    else:
+        encoded = [_encode_png(img) for _, img in to_encode]
+    for (entry, _), png in zip(to_encode, encoded):
+        entry["png"] = png
 
     return {"scale": scale, "pageCount": len(images), "images": out}
 

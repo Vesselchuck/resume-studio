@@ -41,6 +41,21 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+- **Fixed.** A file saved while the Studio was still rendering the
+  previous save was ignored, so the preview could show an older version
+  until the next save. The Studio now renders once more as soon as the
+  current render finishes.
+- **Changed.** The Studio shows a saved change sooner. It waits 75 ms
+  after a save instead of 250 ms before rendering, encodes the page
+  images side by side, and does not re-encode or re-send a page whose
+  pixels did not change — editing page 1 of the resume leaves page 2's
+  image as it is. In testing, the time from saving the resume to seeing
+  the updated page went from about 1.0 s to about 0.8 s.
+
+---
+
 ## [0.7.0] — 2026-09-21
 
 *Breaking: the Studio is now the only way to build. `build.bat`,
@@ -659,6 +674,7 @@ the old names can still be followed.
 | 0.6.1 | — | security updates, tests on GitHub |
 | 0.7.0 | — | breaking: the Studio is the only way to build |
 
+[Unreleased]: #unreleased
 [0.7.0]: #070--2026-09-21
 [0.6.1]: #061--2026-09-21
 [0.6.0]: #060--2026-09-20

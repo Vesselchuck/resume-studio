@@ -222,8 +222,10 @@ class PythonWorker {
     return frame.result;
   }
 
-  async raster({ pdfPath, scale, pages }) {
-    const frame = await this.run({ op: 'raster', path: pdfPath, scale, pages: pages || null });
+  async raster({ pdfPath, scale, pages, known }) {
+    const frame = await this.run({
+      op: 'raster', path: pdfPath, scale, pages: pages || null, known: known || null,
+    });
     return frame.result;
   }
 
@@ -331,6 +333,10 @@ async function createEngine({ root, python, warm = false } = {}) {
     }
   }
 
+  // The page images of each document's last preview, for skipping pages
+  // that did not change. See renderPreview.
+  const lastImages = { resume: null, letter: null };
+
   // One page, one placement file: overlapping renders would interleave
   // on both. Serialize every operation through this chain so a burst of
   // keystrokes queues instead of corrupting a render in flight.
@@ -430,10 +436,29 @@ async function createEngine({ root, python, warm = false } = {}) {
       await pl.printPdfs(pg, { color: tmpPdf, grayscale: null, quiet: true });
       mark('print', t);
 
+      // Pages whose pixels did not change since this document's last
+      // preview come back from the worker without a PNG; their image is
+      // filled in from the previous render, so every returned page still
+      // carries one.
+      const scale = opts.scale || 2.0;
+      const previous = lastImages[doc] && lastImages[doc].scale === scale
+        ? lastImages[doc].pages : {};
+      const known = {};
+      for (const [page, im] of Object.entries(previous)) known[page] = im.hash;
+
       t = Date.now();
-      const raster = await worker.raster({
-        pdfPath: tmpPdf, scale: opts.scale || 2.0, pages: opts.pages,
-      });
+      const raster = await worker.raster({ pdfPath: tmpPdf, scale, pages: opts.pages, known });
+      for (const im of raster.images) {
+        if (im.unchanged) {
+          im.png = previous[im.page].png;
+          delete im.unchanged;
+          timings.reusedPages = (timings.reusedPages || 0) + 1;
+        }
+      }
+      lastImages[doc] = {
+        scale,
+        pages: Object.fromEntries(raster.images.map(im => [im.page, im])),
+      };
       mark('raster', t);
 
       // Best-effort. On Windows a rasterizer that still holds the file
