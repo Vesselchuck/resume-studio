@@ -41,7 +41,11 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
-## [Unreleased]
+## [0.7.1] — 2026-09-21
+
+*The Studio no longer loses a save made during a render, shows each
+save sooner, and escapes dropped file names. Nothing you rely on
+changed.*
 
 - **Added.** `SECURITY.md`: how to report a vulnerability privately,
   through GitHub's private vulnerability reporting.
@@ -679,8 +683,9 @@ the old names can still be followed.
 | 0.6.0 | — | breaking: `render.js` removed, files renamed |
 | 0.6.1 | — | security updates, tests on GitHub |
 | 0.7.0 | — | breaking: the Studio is the only way to build |
+| 0.7.1 | — | a lost-save fix, faster previews, a security fix |
 
-[Unreleased]: #unreleased
+[0.7.1]: #071--2026-09-21
 [0.7.0]: #070--2026-09-21
 [0.6.1]: #061--2026-09-21
 [0.6.0]: #060--2026-09-20
