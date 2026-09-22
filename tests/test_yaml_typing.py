@@ -109,6 +109,40 @@ class TestImplicitTyping(unittest.TestCase):
         self.assertEqual(got["neg"], -7)
         self.assertEqual(got["hexv"], 31)
 
+    def test_leading_zeros_stay_strings(self):
+        """A leading-zero number is an identifier (a ZIP, a room number).
+
+        YAML 1.1 read `010` as octal 8 and `0451` as 297 — silently —
+        and `09` / `02139` as a ValueError traceback, because PyYAML's
+        int constructor hands anything starting with 0 to int(x, 8).
+        """
+        got = self.load("a: 0451\nb: 09\nc: 010\nzip: 02139\nneg: -07\n")
+        self.assertEqual(got, {"a": "0451", "b": "09", "c": "010",
+                               "zip": "02139", "neg": "-07"})
+        for value in got.values():
+            self.assertIsInstance(value, str)
+
+    def test_plain_decimals_are_base_ten(self):
+        got = self.load("zero: 0\nn: 42\nneg: -5\nplus: +3\nmz: -0\n")
+        self.assertEqual(got, {"zero": 0, "n": 42, "neg": -5, "plus": 3, "mz": 0})
+        for value in got.values():
+            self.assertIs(type(value), int)
+
+    def test_hex_and_octal_prefixes(self):
+        """The YAML 1.2 core forms, unsigned, as in the spec."""
+        got = self.load("h: 0x1f\no: 0o17\nsigned: -0x1f\n")
+        self.assertEqual(got["h"], 31)
+        self.assertEqual(got["o"], 15)
+        self.assertEqual(got["signed"], "-0x1f")
+
+    def test_explicit_int_tag_is_decimal(self):
+        """`!!int 010` asks for an int, and gets the YAML 1.2 one: ten."""
+        self.assertEqual(self.load("a: !!int 010\n")["a"], 10)
+
+    def test_explicit_int_tag_on_text_is_an_error(self):
+        with self.assertRaises(yaml.YAMLError):
+            self.load("a: !!int abc\n")
+
     def test_nulls_still_parse(self):
         """Optional fields are commonly left empty; that must stay None."""
         got = self.load("a: null\nb: ~\nc:\nd: NULL\n")
@@ -138,6 +172,48 @@ class TestImplicitTyping(unittest.TestCase):
         stray = yaml.safe_load("langs: [no]\ngpa: 3.90\n")
         self.assertEqual(stray["langs"], [False])
         self.assertEqual(stray["gpa"], 3.9)
+
+
+class TestDuplicateKeys(unittest.TestCase):
+    """PyYAML keeps the last of two identical keys; this loader refuses."""
+
+    def test_duplicate_key_is_an_error_naming_key_and_lines(self):
+        text = ("jobs:\n"
+                "  - id: a\n"
+                "    bullets: [one]\n"
+                "    title: T\n"
+                "    bullets: [two]\n")
+        with self.assertRaises(yaml.YAMLError) as ctx:
+            _yaml_loader.load(text)
+        msg = str(ctx.exception)
+        self.assertIn("duplicate key 'bullets'", msg)
+        self.assertIn("first set on line 3", msg)
+        self.assertIn("line 5", msg)
+
+    def test_duplicate_top_level_key(self):
+        with self.assertRaises(yaml.YAMLError) as ctx:
+            _yaml_loader.load("meta: {lang: en}\nname: x\nmeta: {lang: fr}\n")
+        self.assertIn("'meta'", str(ctx.exception))
+
+    def test_duplicate_in_flow_mapping(self):
+        with self.assertRaises(yaml.YAMLError):
+            _yaml_loader.load("a: {x: 1, x: 2}\n")
+
+    def test_same_key_in_different_mappings_is_fine(self):
+        got = _yaml_loader.load("- {id: a}\n- {id: b}\n")
+        self.assertEqual(got, [{"id": "a"}, {"id": "b"}])
+
+    def test_overriding_a_merged_key_is_not_a_duplicate(self):
+        got = _yaml_loader.load("base: &b {x: 1, y: 2}\nd:\n  <<: *b\n  x: 3\n")
+        self.assertEqual(got["d"], {"x": 3, "y": 2})
+
+    def test_int_and_string_keys_are_distinct(self):
+        got = _yaml_loader.load('1: a\n"1": b\n')
+        self.assertEqual(got, {1: "a", "1": "b"})
+
+    def test_global_safe_load_still_merges_silently(self):
+        """The override lives on ResumeLoader only."""
+        self.assertEqual(yaml.safe_load("a: 1\na: 2\n"), {"a": 2})
 
 
 class TestLoaderWiring(unittest.TestCase):
@@ -317,6 +393,150 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
         for path in files:
             with self.subTest(file=path.name):
                 self._assert_agrees(path, schema, build.validate_data)
+
+    # ── Synthetic cases: one per validation rule ─────────────────
+    #
+    # The real files above only prove the schema accepts what the build
+    # accepts TODAY. These pin each rule in both directions, so a rule
+    # added to one side and not the other fails here rather than in an
+    # editor that underlines a file the build is happy with (or worse,
+    # stays quiet about one the build will reject).
+
+    @staticmethod
+    def _doc():
+        """A document that both the schema and the validator accept."""
+        return {
+            "name": {"first": "Gaius", "last": "Caesar"},
+            "meta": {"description": "D", "maxPages": 2, "lang": "en-US"},
+            "sidebar": {"blocks": [
+                {"id": "skills", "type": "list", "heading": "Skills",
+                 "items": [{"group": "G"}, "One", 2024]},
+                {"id": "online", "type": "details", "heading": "Online",
+                 "rows": [{"label": "Web", "value": "x.example",
+                           "href": "https://x.example"},
+                          {"label": "", "value": "y.example"}]},
+            ]},
+            "mainColumn": [
+                {"type": "summary", "heading": "Summary", "text": "Hi."},
+                {"type": "experience", "heading": "Work", "jobs": [
+                    {"id": "a-job", "title": "T", "date": "2020",
+                     "bullets": ["Did **one** thing"]},
+                    {"id": "b-job", "title": "T", "date": 2019,
+                     "datetime": 2019, "location": "Roma",
+                     "bullets": ["x"]},
+                    {"id": "gap", "title": "Gap", "date": "2018",
+                     "gap": True},
+                ]},
+                {"type": "education", "heading": "Education", "items": [
+                    {"title": "BA"},
+                    {"title": "MA", "subtitle": 2015, "institution": "U"},
+                ]},
+            ],
+        }
+
+    def _verdicts(self, doc):
+        schema = self.schema("resume.schema.json")
+        schema_ok = not list(self.Draft7Validator(schema).iter_errors(doc))
+        try:
+            build.validate_data(doc)
+            validator_ok = True
+        except build.SchemaError:
+            validator_ok = False
+        return schema_ok, validator_ok
+
+    def test_synthetic_valid_document_is_accepted_by_both(self):
+        self.assertEqual(self._verdicts(self._doc()), (True, True))
+        self.assertEqual(build.validate_data(self._doc()), [])
+
+    def test_synthetic_rejections_agree(self):
+        def job(d, i=0):
+            return d["mainColumn"][1]["jobs"][i]
+
+        def block(d, i):
+            return d["sidebar"]["blocks"][i]
+
+        cases = {
+            "job without title": lambda d: job(d).pop("title"),
+            "job without date": lambda d: job(d).pop("date"),
+            "job with unknown key": lambda d: job(d).update(locaton="x"),
+            "gap entry with bullets":
+                lambda d: job(d, 2).update(bullets=["x"]),
+            "bullet read as a mapping":
+                lambda d: job(d).update(bullets=[{"Led": "cut 30%"}]),
+            "empty bullet": lambda d: job(d).update(bullets=[None]),
+            "blank bullet": lambda d: job(d).update(bullets=["  "]),
+            "boolean bullet": lambda d: job(d).update(bullets=[True]),
+            "items as one string":
+                lambda d: block(d, 0).update(items="Latin, Greek"),
+            "empty items": lambda d: block(d, 0).update(items=[]),
+            "list without items": lambda d: block(d, 0).pop("items"),
+            "list item mapping without group":
+                lambda d: block(d, 0).update(items=[{"Latin": "native"}]),
+            "empty rows": lambda d: block(d, 1).update(rows=[]),
+            "row value not text":
+                lambda d: block(d, 1).update(rows=[{"label": "a",
+                                                    "value": ["b"]}]),
+            "row without label":
+                lambda d: block(d, 1).update(rows=[{"value": "b"}]),
+            "section without heading":
+                lambda d: d["mainColumn"][0].pop("heading"),
+            "summary without text": lambda d: d["mainColumn"][0].pop("text"),
+            "education without items":
+                lambda d: d["mainColumn"][2].pop("items"),
+            "education item without title":
+                lambda d: d["mainColumn"][2]["items"][0].pop("title"),
+            "maxPages true": lambda d: d["meta"].update(maxPages=True),
+            "maxPages zero": lambda d: d["meta"].update(maxPages=0),
+            "unknown name key": lambda d: d["name"].update(middle="J"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                doc = self._doc()
+                mutate(doc)
+                self.assertEqual(self._verdicts(doc), (False, False),
+                                 "(schema accepts?, validator accepts?)")
+
+    def test_synthetic_leniencies_agree(self):
+        """Things that built before and must keep building."""
+        def job(d, i=0):
+            return d["mainColumn"][1]["jobs"][i]
+
+        cases = {
+            "job without datetime": lambda d: job(d).pop("datetime", None),
+            "null datetime": lambda d: job(d).update(datetime=None),
+            "null location": lambda d: job(d, 1).update(location=None),
+            "education item without subtitle or institution":
+                lambda d: d["mainColumn"][2]["items"][1].pop("subtitle"),
+            "empty education list":
+                lambda d: d["mainColumn"][2].update(items=[]),
+            "null meta.lang": lambda d: d["meta"].update(lang=None),
+            "gap entry with an empty bullets list":
+                lambda d: job(d, 2).update(bullets=[]),
+            "contact with empty rows":
+                lambda d: d.update(contact={"address": "A", "rows": []}),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                doc = self._doc()
+                mutate(doc)
+                self.assertEqual(self._verdicts(doc), (True, True),
+                                 "(schema accepts?, validator accepts?)")
+
+    def test_document_contact_without_rows_is_schema_valid(self):
+        """The schema judges the file as written: a document may set only
+        `address` and inherit `rows` from the profile, so `rows` is not
+        required there. The build still requires it after the merge."""
+        doc = self._doc()
+        doc["contact"] = {"address": "Roma"}
+        schema = self.schema("resume.schema.json")
+        self.assertEqual(list(self.Draft7Validator(schema).iter_errors(doc)), [])
+        with self.assertRaises(build.SchemaError):
+            build.validate_data(doc)
+
+    def test_schema_does_not_promise_italics(self):
+        """markdown_filter only knows **bold**."""
+        text = json.dumps(self.schema("resume.schema.json"))
+        self.assertNotIn("*italic*", text)
 
     def test_letter_files_agree(self):
         schema = self.schema("letter.schema.json")

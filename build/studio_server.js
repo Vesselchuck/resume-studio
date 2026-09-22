@@ -16,7 +16,9 @@
  * rather than a rewrite.
  *
  * It listens on 127.0.0.1 only, on an ephemeral port by default, and
- * prints the chosen URL as a framed line the Rust side reads.
+ * prints the chosen URL as a framed line the Rust side reads. Every
+ * request must name this server in its Host header, an Origin must be
+ * its own, and POST bodies must be JSON — see checkRequest.
  *
  * ENDPOINTS
  *   GET  /                 the UI
@@ -24,9 +26,10 @@
  *   GET  /api/datafiles    what's in data/
  *   GET  /api/datafile     ?name= -> one file's contents
  *   GET  /api/events       SSE: log lines and render/build state
- *   POST /api/preview      {doc, scale, pages, from} -> rasterized PDF
- *                          pages; from:'built' reads dist/ instead of
- *                          re-rendering
+ *   POST /api/preview      {doc, scale, pages, from, known} -> rasterized
+ *                          PDF pages; from:'built' reads the last Build's
+ *                          PDF instead of re-rendering; known ({page:
+ *                          hash}) returns unchanged pages without a PNG
  *   POST /api/build        {doc, variants, snapshot, tests} -> shells out to the
  *                          CLI, and returns the built PDF rasterized
  *   POST /api/datasource   {source: 'default'|'mine'}
@@ -49,11 +52,14 @@ const path = require('path');
 const os = require('os');
 
 const { createEngine } = require('./engine');
-const { outputPaths } = require('./_output_name');
+const {
+  outputPaths, outputPattern, GRAYSCALE_SUFFIX, DOC_SUFFIX, SEPARATOR,
+} = require('./_output_name');
 const {
   ENV_RESUME_VARIANTS,
   ENV_RESUME_SNAPSHOT,
   ENV_RESUME_TESTS,
+  ENV_RESUME_DATA_SOURCE,
   ENV_RESUME_DATA_FILE,
   ENV_LETTER_DATA_FILE,
 } = require('./_env_contract');
@@ -98,25 +104,95 @@ const DOCS = {
 };
 
 /*
- * `pdf` and `grayscalePdf` are read, not stored.
+ * `pdf` and `grayscalePdf` are the paths the last real Build wrote.
  *
- * The built PDFs are named after you — Gaius_Iulius_Resume.pdf — so
+ * The built PDFs are named after you — Gaius_Caesar_Resume.pdf — so
  * their paths depend on data this server never parses. build.py writes
  * the stem into the document's metadata JSON, and _output_name.js
- * reads it back; defining them as getters means every existing
- * `doc.pdf` call site below picks up the current name without knowing
- * any of that, including across a rebuild that changed it.
+ * reads it back.
+ *
+ * They used to be read from that JSON on every access. But a live
+ * preview runs the same build.py and rewrites the same JSON, so
+ * previewing a different data file renamed the tray's idea of the
+ * built PDF to one that does not exist — "Not built", beside a PDF
+ * sitting in dist/. So the paths are remembered instead: captured from
+ * the metadata at the moment a Build completes (inside the engine's
+ * queue, before any preview can rewrite it), and discovered once from
+ * dist/ when the server starts. Nothing extra is written to disk.
  *
  * Deliberately non-enumerable so JSON.stringify(DOCS) stays a
  * description of configuration rather than a filesystem snapshot.
  */
+const builtOutputs = {};
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return null; }
+}
+
+/**
+ * What a document's built PDFs are called, as of now.
+ *
+ * The metadata's name wins when a PDF by that name exists. Otherwise
+ * dist/ is searched with the document's own output pattern — a Build
+ * deletes every other file matching it, so what is left is the last
+ * Build's — newest first. With nothing built, the metadata's name is
+ * still returned so the tray's tooltip has a path to show.
+ */
+function discoverBuilt(doc) {
+  const fromMeta = outputPaths(DIST, doc.meta, doc.variant);
+  const found = (p) => fs.existsSync(p.colorPdf) || fs.existsSync(p.grayscalePdf);
+  let chosen = fromMeta;
+  if (!found(fromMeta)) {
+    // A current output's stem is the bare document suffix or ends in
+    // "<separator><suffix>"; anything else the pattern admits (a
+    // retired grayscale spelling) is not something a Build writes now.
+    const suffix = DOC_SUFFIX[doc.variant];
+    const isStem = (stem) => stem === suffix || stem.endsWith(`${SEPARATOR}${suffix}`);
+    const graySuffix = `${GRAYSCALE_SUFFIX}.pdf`;
+    let newest = null;
+    let entries = [];
+    try { entries = fs.readdirSync(DIST); } catch { /* nothing built */ }
+    for (const name of entries) {
+      if (!outputPattern(doc.variant).test(name)) continue;
+      const stem = name.endsWith(graySuffix)
+        ? name.slice(0, -graySuffix.length)
+        : name.slice(0, -'.pdf'.length);
+      if (!isStem(stem)) continue;
+      let mtime;
+      try { mtime = fs.statSync(path.join(DIST, name)).mtimeMs; } catch { continue; }
+      if (!newest || mtime > newest.mtime) newest = { mtime, stem };
+    }
+    if (newest) {
+      chosen = {
+        stem: newest.stem,
+        colorPdf: path.join(DIST, `${newest.stem}.pdf`),
+        grayscalePdf: path.join(DIST, `${newest.stem}${GRAYSCALE_SUFFIX}.pdf`),
+      };
+    }
+  }
+  const meta = readJson(doc.meta);
+  return { ...chosen, meta: meta && meta.output_stem === chosen.stem ? meta : null };
+}
+
+function builtPaths(doc) {
+  if (!builtOutputs[doc.variant]) builtOutputs[doc.variant] = discoverBuilt(doc);
+  return builtOutputs[doc.variant];
+}
+
+/** Call only right after a Build, inside the engine's queue. */
+function rememberBuilt(doc) {
+  const paths = outputPaths(DIST, doc.meta, doc.variant);
+  builtOutputs[doc.variant] = { ...paths, meta: readJson(doc.meta) };
+  return builtOutputs[doc.variant];
+}
+
 for (const doc of Object.values(DOCS)) {
   Object.defineProperties(doc, {
     pdf: {
-      get() { return outputPaths(DIST, this.meta, this.variant).colorPdf; },
+      get() { return builtPaths(this).colorPdf; },
     },
     grayscalePdf: {
-      get() { return outputPaths(DIST, this.meta, this.variant).grayscalePdf; },
+      get() { return builtPaths(this).grayscalePdf; },
     },
   });
 }
@@ -217,16 +293,19 @@ function readBody(req, limitBytes = 8 * 1024 * 1024) {
  * still naming your resume while the build read the template.
  *
  * The rules, mirroring load_data():
+ *   picked    → that file, read in place (*_DATA_FILE)
  *   'default' → the shipped template, and it is an error if absent
  *   'mine'    → your own file, and it is an error if absent
  *   unset     → yours if present, else the template
  *
- * RESUME_DATA_SOURCE only governs the resume; build_letter.py has
- * its own yours-if-present rule and no override, so `source` is ignored
- * for the letter.
+ * Each document's selection is its own. `source` is the resume card's
+ * RESUME_DATA_SOURCE and is ignored for the letter: the letter reads
+ * the file picked on its own card, else letter.yml, else
+ * letter_default.yml. renderEnv below is what makes that true of the
+ * build — it never hands the resume's source to a letter render.
  */
 function dataFileInfo(doc, source, pickedPath) {
-  const effective = doc.script === 'letter.js' ? null : source;
+  const effective = doc.variant === 'letter' ? null : source;
 
   let target;
   if (pickedPath) target = pickedPath;
@@ -248,6 +327,86 @@ function dataFileInfo(doc, source, pickedPath) {
     info.bytes = st.size;
   }
   return info;
+}
+
+/**
+ * The data-selection variables for one document's render or build.
+ *
+ * Every variable is stated, including the ones that are off (null
+ * unsets it), so the choice on the card is the whole story: a
+ * RESUME_DATA_SOURCE or *_DATA_FILE inherited from the shell that
+ * started the server cannot change what a render reads behind the
+ * card's back, and the resume card's source never reaches the letter.
+ * build_letter.py does honor RESUME_DATA_SOURCE when it is set, which
+ * is exactly why the letter's renders clear it.
+ */
+function renderEnv(id, { dataSource = null, picked = {} } = {}) {
+  if (id === 'letter') {
+    return {
+      [ENV_RESUME_DATA_SOURCE]: null,
+      [ENV_LETTER_DATA_FILE]: picked.letter || null,
+    };
+  }
+  return {
+    [ENV_RESUME_DATA_SOURCE]: dataSource || null,
+    [ENV_RESUME_DATA_FILE]: picked.resume || null,
+  };
+}
+
+/**
+ * Is this request addressed to this server, from this server's page?
+ *
+ * Loopback binding keeps other machines out, but not other web pages
+ * in the user's own browser: a page on any site can send requests to
+ * 127.0.0.1, and a DNS-rebinding page can even make them look
+ * same-origin. So every request must carry a Host naming this server
+ * exactly (127.0.0.1 or localhost, on the port actually listened on),
+ * and an Origin, when a browser sends one, must be this server's own —
+ * same scheme, host and port, compared exactly rather than by prefix.
+ * The desktop window loads http://127.0.0.1:<port>/, so it passes.
+ *
+ * Returns null when allowed, or [status, message] when not.
+ */
+function checkRequest(req, port, extraHosts = []) {
+  const hosts = new Set(['127.0.0.1', 'localhost', ...extraHosts]
+    .map(h => `${h}:${port}`));
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!hosts.has(host)) {
+    return [403, 'requests must be addressed to this server (Host header)'];
+  }
+  const origin = req.headers.origin;
+  if (origin !== undefined) {
+    const origins = new Set([...hosts].map(h => `http://${h}`));
+    if (!origins.has(String(origin).toLowerCase())) {
+      return [403, 'cross-origin requests are not accepted'];
+    }
+  }
+  if (req.method === 'POST') {
+    const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (type !== 'application/json') {
+      return [415, 'POST bodies must be sent as application/json'];
+    }
+  }
+  return null;
+}
+
+/**
+ * Write a file that must not exist yet.
+ *
+ * `wx` makes the existence check and the write one operation, so a file
+ * that appears between a check and a write — another tab, another
+ * drop — is reported rather than replaced. Returns false when the name
+ * is taken.
+ */
+function writeNew(target, content) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.writeFileSync(target, content, { encoding: 'utf-8', flag: 'wx' });
+    return true;
+  } catch (err) {
+    if (err && err.code === 'EEXIST') return false;
+    throw err;
+  }
 }
 
 /**
@@ -445,26 +604,19 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   // operation than the one anyone asked for.
   const picked = {};
 
-  function dataFileEnv(id) {
-    if (!picked[id]) return {};
-    return id === 'letter'
-      ? { [ENV_LETTER_DATA_FILE]: picked[id] }
-      : { [ENV_RESUME_DATA_FILE]: picked[id] };
-  }
-
   /**
-   * RESUME_DATA_SOURCE, when the user has forced one.
+   * The data selection for one document's render or build — its own
+   * card's choice and nothing else. See renderEnv.
    *
-   * Only the resume's loader honors it — build_letter.py has its
-   * own local-if-present rule and no override — so passing it on a
-   * letter render is harmless but meaningless. The UI hides the control
-   * for the letter rather than offering a switch that does nothing.
+   * RESUME_DATA_SOURCE is the resume card's setting. build_letter.py
+   * would honor it too, so the letter's renders clear it: with it
+   * passed through, forcing the resume to its template built the
+   * letter from letter_default.yml and the build then deleted the PDF
+   * of your real letter as stale. The UI offers the modes only on the
+   * resume card.
    */
   function envForRender(id) {
-    return {
-      ...(dataSource ? { RESUME_DATA_SOURCE: dataSource } : {}),
-      ...dataFileEnv(id),
-    };
+    return renderEnv(id, { dataSource, picked });
   }
 
   /**
@@ -494,6 +646,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   async function renderFromBuilt(id, { scale, pages } = {}) {
     const doc = DOCS[id];
     const started = Date.now();
+    const built = builtPaths(doc);
 
     const color = fs.existsSync(doc.pdf);
     const pdfPath = color
@@ -513,12 +666,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     });
     const readBuilt = Date.now() - started;
 
-    // build.py writes this next to the PDF, so it describes the file on
-    // screen rather than whatever was rendered most recently.
-    let meta = null;
-    try {
-      meta = JSON.parse(fs.readFileSync(engine.pipelines[id].paths.pdfMeta, 'utf-8'));
-    } catch { /* an older build, or a variant that writes none */ }
+    // The metadata as the Build that wrote this PDF left it — not the
+    // file on disk, which a later preview may have rewritten for other
+    // data. Null for a PDF from before this server started whose
+    // metadata has since been replaced.
+    const meta = built.meta || null;
 
     return {
       doc: id,
@@ -613,14 +765,22 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // from:'built' asks for the file in dist/ rather than a fresh
       // render — what the app wants immediately after a Build, and the
       // only thing it can show for a document with no live pipeline.
+      //
+      // On the engine's queue, like every other use of the worker: it
+      // reads what a running build is still writing.
       if (!doc.live || body.from === 'built') {
-        return await renderFromBuilt(id, { scale: body.scale, pages: body.pages });
+        return await engine.exclusive(
+          () => renderFromBuilt(id, { scale: body.scale, pages: body.pages }));
       }
       busy = true;
       broadcast('render', { state: 'start', doc: id });
       try {
+        // `known`: page hashes the page already holds, so unchanged pages
+        // come back without their PNG. See renderPreview in engine.js.
+        const known = body.known && typeof body.known === 'object' && !Array.isArray(body.known)
+          ? body.known : undefined;
         const result = await engine.renderPreview({
-          doc: id, scale: body.scale, pages: body.pages, env: envForRender(id),
+          doc: id, scale: body.scale, pages: body.pages, env: envForRender(id), known,
         });
         broadcast('render', { state: 'done', doc: id, ms: result.totalMs });
         return { mode: 'live', ...result };
@@ -657,23 +817,45 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
           // that test your data run inside the build regardless.
           [ENV_RESUME_TESTS]: body.tests ? 'on' : 'off',
         };
-        const result = await engine.build({ script: doc.script, env: buildEnv });
-        broadcast('build', { state: 'done', doc: id, ms: result.ms });
-
-        // Hand the built PDF back rasterized, in the same round trip.
-        //
-        // The build has just produced exactly what the preview pane
-        // exists to show; rendering it again here would recompute a
-        // file already on disk. See renderFromBuilt.
-        //
-        // Best effort, deliberately: a build that succeeded must not be
-        // reported as failed because the pane could not be refreshed.
-        let render = null;
+        let result;
         try {
-          render = await renderFromBuilt(id, { scale: body.scale });
+          result = await engine.build({
+            script: doc.script,
+            env: buildEnv,
+            // Inside the build's own queue slot, so no preview can rewrite
+            // the metadata between the build finishing and this reading it.
+            after: async () => {
+              rememberBuilt(doc);
+
+              // Hand the built PDF back rasterized, in the same round trip.
+              //
+              // The build has just produced exactly what the preview pane
+              // exists to show; rendering it again here would recompute a
+              // file already on disk. See renderFromBuilt.
+              //
+              // Best effort, deliberately: a build that succeeded must not
+              // be reported as failed because the pane could not be
+              // refreshed.
+              try {
+                return await renderFromBuilt(id, { scale: body.scale });
+              } catch (err) {
+                console.log(`  (built, but could not rasterize it for the preview: ${err.message})`);
+                return null;
+              }
+            },
+          });
         } catch (err) {
-          console.log(`  (built, but could not rasterize it for the preview: ${err.message})`);
+          // A failed build may have written (or pruned) PDFs before it
+          // failed. Keep what was remembered while it still exists;
+          // otherwise look again.
+          const known = builtOutputs[doc.variant];
+          if (known && !fs.existsSync(known.colorPdf) && !fs.existsSync(known.grayscalePdf)) {
+            delete builtOutputs[doc.variant];
+          }
+          throw err;
         }
+        broadcast('build', { state: 'done', doc: id, ms: result.ms });
+        const render = result.after || null;
 
         return {
           doc: id,
@@ -790,13 +972,20 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
       const base = path.basename(body.filename || 'dropped.yml');
       if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      // The same rule /api/pick applies: an underscore name is a support
+      // file (_profile.yml), merged into every build, never a document.
+      if (!isDocumentFile(base)) {
+        throw new Error(`${base} starts with an underscore, which marks a shared `
+          + `profile rather than a document — rename it to open it here`);
+      }
 
       const target = path.resolve(DATA_DIR, base);
       if (path.dirname(target) !== path.resolve(DATA_DIR)) {
         throw new Error('that filename is not allowed');
       }
 
-      if (fs.existsSync(target)) {
+      // Write first, exclusively; a taken name is the "already here" case.
+      if (!writeNew(target, body.content)) {
         const onDisk = fs.readFileSync(target, 'utf-8');
         if (onDisk === body.content) {
           picked[id] = target;
@@ -811,8 +1000,6 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         };
       }
 
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(target, body.content, 'utf-8');
       picked[id] = target;
       return { doc: id, detectedBy: detected.reason, saved: `data/${base}`,
                existed: false, picked: `data/${base}` };
@@ -827,18 +1014,22 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const base = path.basename(body.name || '');
       if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      if (!isDocumentFile(base)) {
+        throw new Error(`${base} starts with an underscore, which marks a shared `
+          + `profile rather than a document — choose another name`);
+      }
 
       const target = path.resolve(DATA_DIR, base);
       if (path.dirname(target) !== path.resolve(DATA_DIR)) {
         throw new Error('that filename is not allowed');
       }
-      if (fs.existsSync(target)) throw new Error(`data/${base} already exists too`);
       if (typeof body.content !== 'string' || !body.content.trim()) {
         throw new Error('no YAML content received');
       }
 
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(target, body.content, 'utf-8');
+      if (!writeNew(target, body.content)) {
+        throw new Error(`data/${base} already exists too`);
+      }
       picked[id] = target;
       return { doc: id, saved: `data/${base}`, picked: `data/${base}` };
     },
@@ -1044,20 +1235,21 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   }
   watchInputs();
 
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const key = `${req.method} ${url.pathname}`;
+  // Set once listening; every request is checked against it.
+  let listeningPort = null;
 
-    // Same-origin only. The server is bound to loopback, but a page in
-    // the user's ordinary browser could still POST here; requiring a
-    // JSON content-type and rejecting cross-origin requests keeps a
-    // stray tab from driving builds.
-    if (req.method === 'POST') {
-      const origin = req.headers.origin;
-      if (origin && !origin.startsWith(`http://${host}:`) && !origin.startsWith('http://localhost:')) {
-        return json(res, 403, { error: 'cross-origin requests are not accepted' });
-      }
-    }
+  async function handle(req, res) {
+    // Same server, same page only — see checkRequest. The Host check
+    // comes first and applies to every request, the UI page included,
+    // so a rebinding page cannot even read it.
+    const refused = checkRequest(req, listeningPort,
+      host === '127.0.0.1' || host === 'localhost' ? [] : [host]);
+    if (refused) return json(res, refused[0], { error: refused[1] });
+
+    // A fixed base: the Host header is client input and parsing it as a
+    // URL throws on a malformed one. Only the path and query are used.
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const key = `${req.method} ${url.pathname}`;
 
     if (key === 'GET /api/events') {
       res.writeHead(200, {
@@ -1097,6 +1289,21 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         reason: err.reason || undefined,
       });
     }
+  }
+
+  const server = http.createServer((req, res) => {
+    // Whatever goes wrong with one request stays with that request. An
+    // exception escaping here would otherwise take the server — and the
+    // desktop app's whole backend — down with it.
+    Promise.resolve().then(() => handle(req, res)).catch((err) => {
+      try {
+        if (!res.headersSent) json(res, 500, { error: err && err.message ? err.message : 'internal error' });
+        else res.end();
+      } catch { /* the socket is already gone */ }
+    });
+  });
+  server.on('clientError', (err, socket) => {
+    try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch { /* gone */ }
   });
 
   /**
@@ -1130,6 +1337,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
   await new Promise((resolve) => server.listen(port, host, resolve));
   const actualPort = server.address().port;
+  listeningPort = actualPort;
   const url = `http://${host}:${actualPort}/`;
 
   // Framed so the Tauri shell can find it without parsing log text.
@@ -1181,4 +1389,5 @@ if (require.main === module) {
 }
 
 module.exports = { start, DOCS, READY_PREFIX, detectDoc, isDocumentFile,
-                   listDataFiles, resolveInsideRoot };
+                   listDataFiles, resolveInsideRoot, dataFileInfo, renderEnv,
+                   checkRequest, writeNew };

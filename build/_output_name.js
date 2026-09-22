@@ -111,7 +111,7 @@ function outputPaths(dist, metaFile, variant) {
  * Anchored on both ends and built from the same constants the writer
  * uses, so it matches the project's own output namespace and nothing
  * else: an optional name part, the document suffix, an optional
- * grayscale suffix, `.pdf`. `Gaius_Iulius_Resume_Grayscale.pdf` and
+ * grayscale suffix, `.pdf`. `Gaius_Caesar_Resume_Grayscale.pdf` and
  * `Resume.pdf` match; `letter_meta.json`, `styles.css` and a PDF
  * you dropped in dist/ yourself do not.
  *
@@ -167,16 +167,47 @@ function outputPattern(variant) {
  * @param {string[]} keep    — absolute paths this build wrote
  * @param {?function} onRemove — called with (relativeName) per deletion
  * @param {?function} onFailure — called with (relativeName, message)
+ * @param {object}   [deps]  — test seam: { fs, platform }
  * @returns {string[]} the names removed
+ *
+ * "Never a path in `keep`" is decided by FILE IDENTITY, not by the
+ * path string. On a case-insensitive filesystem (NTFS, APFS by
+ * default) writing Gaius_CAESAR_Resume.pdf over an existing
+ * Gaius_Caesar_Resume.pdf keeps the old spelling on disk, so readdir
+ * returns a name that string-compares unequal to the path the build
+ * just wrote — and the file this build produced would be deleted as
+ * "stale". Comparing dev+ino (as BigInt, so a 64-bit NTFS file index
+ * does not lose precision) sees they are the same file. For a
+ * filesystem that reports no inode (ino 0), win32/darwin also compare
+ * paths case-insensitively; elsewhere the exact resolved path, which
+ * was the whole comparison before. Both checks only ever KEEP a file:
+ * on a case-sensitive APFS volume the case-folded check can spare a
+ * genuinely stale differently-cased PDF, which errs the safe way.
  */
-function pruneStale(dist, variant, keep, onRemove = null, onFailure = null) {
+function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
+                    { fs: fsImpl = fs, platform = process.platform } = {}) {
   const pattern = outputPattern(variant);
-  const kept = new Set(keep.map(p => path.resolve(p)));
+  const caseInsensitive = platform === 'win32' || platform === 'darwin';
+  const fold = p => (caseInsensitive ? p.toLowerCase() : p);
+  const identity = (p) => {
+    try {
+      const st = fsImpl.statSync(p, { bigint: true });
+      // A zero or missing inode is "unknown", not an identity: two
+      // different files would otherwise collide on `dev:0`.
+      if (st.ino === undefined || st.ino === null || BigInt(st.ino) === 0n) return null;
+      return `${st.dev}:${st.ino}`;
+    } catch {
+      return null;                       // Missing: nothing to match by.
+    }
+  };
+
+  const keptPaths = new Set(keep.map(p => fold(path.resolve(p))));
+  const keptIds = new Set(keep.map(identity).filter(Boolean));
   const removed = [];
 
   let entries;
   try {
-    entries = fs.readdirSync(dist);
+    entries = fsImpl.readdirSync(dist);
   } catch {
     return removed;                      // No dist/ yet: nothing to prune.
   }
@@ -186,10 +217,12 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null) {
 
   for (const name of candidates) {
     const full = path.join(dist, name);
-    if (kept.has(path.resolve(full))) continue;
+    if (keptPaths.has(fold(path.resolve(full)))) continue;
+    const id = identity(full);
+    if (id && keptIds.has(id)) continue;
     try {
-      if (!fs.statSync(full).isFile()) continue;
-      fs.rmSync(full, { force: true });
+      if (!fsImpl.statSync(full).isFile()) continue;
+      fsImpl.rmSync(full, { force: true });
       removed.push(name);
       if (onRemove) onRemove(name);
     } catch (err) {

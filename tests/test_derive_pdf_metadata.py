@@ -26,6 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "build"))
 
+import build  # noqa: E402
 from build import derive_pdf_metadata  # noqa: E402
 
 
@@ -172,6 +173,12 @@ class TestDerivePDFMetadata(unittest.TestCase):
     def test_data_source_passed_through_verbatim(self):
         m = call(good_data(), data_source="mine")
         self.assertEqual(m["data_source"], "mine")
+
+    def test_explicit_data_source_passed_through(self):
+        """snapshot_pdf.py keys its refusal off this exact value."""
+        m = call(good_data(), data_source="explicit")
+        self.assertEqual(m["data_source"], "explicit")
+        self.assertIn("explicit", build.DATA_SOURCES)
 
     def test_data_source_is_not_read_from_data(self):
         # The function takes data_source as a parameter; any

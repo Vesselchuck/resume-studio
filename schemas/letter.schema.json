@@ -24,8 +24,7 @@
 
     "contact": {
       "type": "object",
-      "description": "Contact details in the letterhead. Normally omitted here and inherited from data/_profile.yml, which is the same file the resume inherits from — that is how the two documents stay in sync.",
-      "required": ["rows"],
+      "description": "Contact details in the letterhead. Normally omitted here and inherited from data/_profile.yml, which is the same file the resume inherits from — that is how the two documents stay in sync. Set here, it merges over the profile key by key: setting only `rows` keeps the profile's `address`. After the merge the build needs a `rows` list (use [] for an address only).",
       "additionalProperties": false,
       "properties": {
         "address": { "type": "string", "description": "Shown on its own line." },
@@ -55,8 +54,8 @@
       "properties": {
         "description": { "type": "string", "description": "One sentence, stamped into the PDF's metadata." },
         "lang": {
-          "type": "string",
-          "description": "BCP 47 language tag, e.g. 'en-US'.",
+          "type": ["string", "null"],
+          "description": "BCP 47 language tag, e.g. 'en-US'. It also decides how the date is written: en-US → September 20, 2026; day-first English (en-GB, en-AU, en-150, …) → 20 September 2026; any other language → 2026-09-20.",
           "examples": ["en-US", "en-GB"]
         }
       }

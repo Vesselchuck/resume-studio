@@ -21,17 +21,21 @@
 //! --------
 //! The server owns a Chromium instance and a Python worker. If this
 //! process dies without stopping it, those leak and the next launch
-//! finds a stale port. The child is therefore killed on window close
-//! and on drop, and the server is additionally started with
-//! `--exit-with-parent`: its stdin is a pipe held open by this process,
-//! so if this process is killed in a way that skips both handlers, the
-//! pipe closes and the server stops itself.
+//! finds a stale port. The server is started with `--exit-with-parent`:
+//! its stdin is a pipe held open by this process, and when that pipe
+//! closes the server runs its own graceful shutdown (closing Chromium,
+//! stopping the worker and any running build). On window close and on
+//! drop this process closes the pipe on purpose, gives the server a
+//! moment to finish, and only then kills it. If this process is killed
+//! in a way that skips both handlers, the pipe closes anyway and the
+//! server stops itself.
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -46,23 +50,72 @@ struct Server(Mutex<Option<Child>>);
 impl Drop for Server {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.0.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+            if let Some(child) = guard.take() {
+                stop_server(child);
             }
         }
     }
 }
 
+/// How long the server gets to shut down cleanly before it is killed.
+const GRACEFUL_SHUTDOWN: Duration = Duration::from_secs(2);
+
+/// Stop the server, gracefully if it will go.
+///
+/// `child.kill()` alone skips the server's shutdown routine, and that
+/// routine is what closes Chromium and stops the Python worker — a hard
+/// kill of the Node process leaves both running. So close its stdin
+/// first: the server was started with `--exit-with-parent` and treats
+/// the end of stdin as the signal to shut down. Wait for it, and kill
+/// it only if it has not exited in time.
+fn stop_server(mut child: Child) {
+    // Dropping the handle closes our end of the pipe.
+    drop(child.stdin.take());
+
+    let deadline = Instant::now() + GRACEFUL_SHUTDOWN;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// The project root: the directory holding package.json, build/ and ui/.
 ///
-/// In development the binary lives in src-tauri/target/…, so walk up
-/// until package.json appears. In a bundled app the project ships as a
-/// resource directory, which the caller passes in instead.
+/// A debug build (`npm run studio`, i.e. `tauri dev`) always runs from
+/// the source tree, fixed at compile time. `tauri dev` also copies
+/// `bundle.resources` next to the binary, into src-tauri/target/debug/,
+/// and that copy has package.json and build/ but no node_modules — so
+/// the resource directory must never win there, or the server starts
+/// from the copy and cannot load playwright or sass-embedded.
+///
+/// In a bundled app the project ships as a resource directory, which
+/// the caller passes in. tauri.conf.json maps each resource to its own
+/// relative path, so the files land directly in it; `_up_` is where
+/// Tauri 2 puts resources listed as `../x` in the list form of
+/// `bundle.resources`, and it is accepted too.
 fn project_root(resource_dir: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    if cfg!(debug_assertions) {
+        // CARGO_MANIFEST_DIR is src-tauri/; its parent is the project.
+        if let Some(src) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+            if src.join("package.json").exists() {
+                return src.to_path_buf();
+            }
+        }
+    }
     if let Some(dir) = resource_dir {
         if dir.join("package.json").exists() {
             return dir;
+        }
+        let up = dir.join("_up_");
+        if up.join("package.json").exists() {
+            return up;
         }
     }
     let mut dir = std::env::current_exe()
@@ -223,9 +276,8 @@ fn main() {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(server) = window.app_handle().try_state::<Server>() {
                     if let Ok(mut guard) = server.0.lock() {
-                        if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
-                            let _ = child.wait();
+                        if let Some(child) = guard.take() {
+                            stop_server(child);
                         }
                     }
                 }

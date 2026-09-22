@@ -100,43 +100,115 @@ class PythonWorker {
     this.pending = new Map();
     this.buffer = '';
     this.ready = null;
-    // Per-render env overrides (RESUME_DATA_SOURCE). Set by
+    // Per-render env overrides (RESUME_DATA_SOURCE, *_DATA_FILE). Set by
     // renderPreview around a call and cleared after, so a data-source
     // switch never leaks into the next render.
     this.buildEnv = null;
     this.proc = null;
+    this.hello = null;
     this.lastLog = [];
+    // Set by stop(): a worker being shut down on purpose is not restarted.
+    this.stopping = false;
+  }
+
+  /**
+   * Is the current process able to take a request?
+   *
+   * `exitCode`/`signalCode` go non-null once the process has exited, and
+   * a stdin that has errored (EPIPE) or been destroyed cannot carry a
+   * request even if the exit event has not arrived yet. Writing to either
+   * would never produce a reply — which is how one crashed worker used to
+   * hang every preview and build behind it on the shared queue.
+   */
+  alive() {
+    const p = this.proc;
+    return Boolean(p && !p._studioDead && p.exitCode === null && p.signalCode === null
+      && p.stdin && !p.stdin.destroyed && p.stdin.writable);
   }
 
   start() {
-    this.proc = spawn(this.python, ['-B', WORKER], {
+    const proc = spawn(this.python, ['-B', WORKER], {
       cwd: this.root,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
     });
-    this.proc.stdout.setEncoding('utf-8');
-    this.proc.stderr.setEncoding('utf-8');
+    this.proc = proc;
+    this.buffer = '';
+    proc.stdout.setEncoding('utf-8');
+    proc.stderr.setEncoding('utf-8');
+
+    // Everything a dead process was asked and will never answer.
+    const failPending = (err) => {
+      for (const [id, waiter] of this.pending) {
+        if (waiter.proc !== proc) continue;
+        this.pending.delete(id);
+        waiter.reject(err);
+      }
+    };
 
     this.ready = new Promise((resolve, reject) => {
       this._resolveReady = resolve;
-      this.proc.once('error', reject);
-      this.proc.once('exit', (code) => {
-        const err = new Error(`build/worker.py exited (code ${code})`);
-        for (const { reject: rj } of this.pending.values()) rj(err);
-        this.pending.clear();
-        if (this._resolveReady) reject(err);
+      proc.once('error', (err) => {
+        proc._studioDead = true;
+        failPending(err);
+        if (this._resolveReady && this.proc === proc) {
+          this._resolveReady = null;
+          reject(err);
+        }
+      });
+      proc.once('exit', (code, signal) => {
+        proc._studioDead = true;
+        const err = new Error(
+          `build/worker.py exited (${signal ? `signal ${signal}` : `code ${code}`})`);
+        failPending(err);
+        if (this._resolveReady && this.proc === proc) {
+          this._resolveReady = null;
+          reject(err);
+        }
+        if (!this.stopping && this.proc === proc) {
+          c.warn(`Python worker exited (${signal || code}); it restarts on the next request`);
+        }
       });
     });
+    // A caller that never awaits `ready` (a restart racing a crash) must
+    // not turn this into an unhandled rejection.
+    this.ready.catch(() => {});
 
-    this.proc.stdout.on('data', (chunk) => this._consume(chunk));
+    // Writing to a worker that has just died raises EPIPE on stdin. With
+    // no listener that is an uncaught 'error' and it takes the whole
+    // server down; with one, the request it carried fails instead.
+    proc.stdin.on('error', (err) => {
+      proc._studioDead = true;
+      failPending(new Error(`build/worker.py is not accepting requests (${err.code || err.message})`));
+    });
+
+    proc.stdout.on('data', (chunk) => { if (this.proc === proc) this._consume(chunk); });
     // The worker keeps its own stderr clean of protocol data; anything
     // arriving here is a hard crash (a traceback that escaped the
     // per-request handler), so surface it rather than swallowing it.
-    this.proc.stderr.on('data', (chunk) => {
+    proc.stderr.on('data', (chunk) => {
       String(chunk).split('\n').filter(Boolean).forEach(line => c.detail(`[worker] ${line}`));
     });
 
-    return this.ready;
+    return this.ready.then((hello) => { this.hello = hello; return hello; });
+  }
+
+  /**
+   * Start a fresh worker if the last one died. Lazy on purpose: a crash
+   * is reported by the request it broke, and the next request brings the
+   * worker back rather than a timer restarting something nobody needs.
+   */
+  async ensure() {
+    if (this.alive()) {
+      await this.ready;
+      return;
+    }
+    if (this.stopping) throw new Error('build/worker.py has been stopped');
+    if (!this._restarting) {
+      c.detail('(starting a new Python worker)');
+      this._restarting = this.start().finally(() => { this._restarting = null; });
+    }
+    await this._restarting;
   }
 
   _consume(chunk) {
@@ -171,8 +243,23 @@ class PythonWorker {
   call(req) {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.proc.stdin.write(JSON.stringify({ ...req, id }) + '\n');
+      if (!this.alive()) {
+        reject(new Error('build/worker.py is not running'));
+        return;
+      }
+      const proc = this.proc;
+      this.pending.set(id, { resolve, reject, proc });
+      try {
+        proc.stdin.write(JSON.stringify({ ...req, id }) + '\n', (err) => {
+          if (!err) return;
+          if (this.pending.delete(id)) {
+            reject(new Error(`build/worker.py is not accepting requests (${err.code || err.message})`));
+          }
+        });
+      } catch (err) {
+        this.pending.delete(id);
+        reject(err);
+      }
     });
   }
 
@@ -182,6 +269,7 @@ class PythonWorker {
    * app's log shows what the CLI would have shown.
    */
   async run(req) {
+    await this.ensure();
     const frame = await this.call(req);
     this.lastLog = frame.log || [];
     (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
@@ -203,7 +291,7 @@ class PythonWorker {
   }
 
   async buildLetter() {
-    await this.run({ op: 'build_letter' });
+    await this.run({ op: 'build_letter', env: this.buildEnv || undefined });
   }
 
   async cropPdf({ input, output, meta, quiet }) {
@@ -230,7 +318,8 @@ class PythonWorker {
   }
 
   async stop() {
-    if (!this.proc || this.proc.exitCode !== null) return;
+    this.stopping = true;
+    if (!this.alive()) return;
     try {
       await this.call({ op: 'shutdown' });
     } catch {
@@ -254,7 +343,7 @@ class PythonWorker {
  */
 async function createEngine({ root, python, warm = false } = {}) {
   root = root || path.join(__dirname, '..');
-  const interpreter = python || process.env.PYTHON || detectPython();
+  const interpreter = python || detectPython();
 
   const worker = new PythonWorker({ root, python: interpreter });
   const workerReady = worker.start();
@@ -356,7 +445,13 @@ async function createEngine({ root, python, warm = false } = {}) {
    * @param {?number[]} opts.pages    — 1-based page numbers, or null for all
    * @param {boolean} opts.recompileStyles — force a Sass rebuild
    * @param {?object} opts.env — env overrides for the Python build,
-   *   e.g. { RESUME_DATA_SOURCE: 'default' }
+   *   e.g. { RESUME_DATA_SOURCE: 'default' }; a null value unsets one
+   * @param {?object} opts.known — {page: hash} of page images the caller
+   *   already holds. When given, a page whose pixels hash the same comes
+   *   back as {hash, unchanged: true} with no PNG, and the caller reuses
+   *   its own copy — nothing is re-encoded or re-sent. When omitted, the
+   *   engine fills unchanged pages in from its own last render, so every
+   *   returned page carries a PNG.
    */
   function renderPreview(opts = {}) {
     return serial(async () => {
@@ -441,24 +536,42 @@ async function createEngine({ root, python, warm = false } = {}) {
       // filled in from the previous render, so every returned page still
       // carries one.
       const scale = opts.scale || 2.0;
+      const callerKnows = opts.known && typeof opts.known === 'object';
       const previous = lastImages[doc] && lastImages[doc].scale === scale
         ? lastImages[doc].pages : {};
       const known = {};
-      for (const [page, im] of Object.entries(previous)) known[page] = im.hash;
+      if (callerKnows) {
+        // Only what the caller says it holds: it is the one that has to
+        // put the image back on screen.
+        for (const [page, hash] of Object.entries(opts.known)) {
+          if (typeof hash === 'string') known[page] = hash;
+        }
+      } else {
+        for (const [page, im] of Object.entries(previous)) known[page] = im.hash;
+      }
 
       t = Date.now();
       const raster = await worker.raster({ pdfPath: tmpPdf, scale, pages: opts.pages, known });
       for (const im of raster.images) {
-        if (im.unchanged) {
-          im.png = previous[im.page].png;
-          delete im.unchanged;
-          timings.reusedPages = (timings.reusedPages || 0) + 1;
+        if (!im.unchanged) continue;
+        timings.reusedPages = (timings.reusedPages || 0) + 1;
+        if (callerKnows) {
+          // Sent as {hash, unchanged: true}; the caller has the PNG.
+          continue;
         }
+        im.png = previous[im.page].png;
+        delete im.unchanged;
       }
-      lastImages[doc] = {
-        scale,
-        pages: Object.fromEntries(raster.images.map(im => [im.page, im])),
-      };
+      // Kept only for callers that do not track their own images; a page
+      // the caller reused has no PNG here, so it is carried over from the
+      // previous entry when that one had the same pixels.
+      const cache = {};
+      for (const im of raster.images) {
+        const prev = previous[im.page];
+        const png = im.png || (prev && prev.hash === im.hash ? prev.png : null);
+        if (png) cache[im.page] = { page: im.page, width: im.width, height: im.height, hash: im.hash, png };
+      }
+      lastImages[doc] = { scale, pages: cache };
       mark('raster', t);
 
       // Best-effort. On Windows a rasterizer that still holds the file
@@ -502,10 +615,30 @@ async function createEngine({ root, python, warm = false } = {}) {
    * caller can say why rather than just that.
    *
    * @param {string} script — 'resume.js' or 'letter.js'
+   * @param {object} env — overrides for the child's environment; a null
+   *   or undefined value removes that variable
+   * @param {?function} after — run with the build's result inside the
+   *   same queue slot, before any queued preview can touch dist/'s
+   *   metadata; its return value is the result's `after` field
    */
-  function build({ script = 'resume.js', env = {} } = {}) {
-    return serial(() => new Promise((resolve, reject) => {
+  let buildChild = null;
+
+  function build({ script = 'resume.js', env = {}, after = null } = {}) {
+    return serial(async () => {
+      const result = await runBuild(script, env);
+      if (after) result.after = await after(result);
+      return result;
+    });
+  }
+
+  function runBuild(script, env) {
+    return new Promise((resolve, reject) => {
       const started = Date.now();
+      const childEnv = { ...process.env };
+      for (const [k, v] of Object.entries(env || {})) {
+        if (v === null || v === undefined) delete childEnv[k];
+        else childEnv[k] = String(v);
+      }
 
       // Piped, not inherited.
       //
@@ -520,8 +653,11 @@ async function createEngine({ root, python, warm = false } = {}) {
       const child = spawn(process.execPath, [path.join(root, script)], {
         cwd: root,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, ...env },
+        env: childEnv,
       });
+      // Tracked so dispose() can stop a build still running at shutdown
+      // instead of leaving it writing into dist/ with nobody watching.
+      buildChild = child;
 
       const failures = [];
       const forward = (stream, keep) => {
@@ -550,12 +686,14 @@ async function createEngine({ root, python, warm = false } = {}) {
       forward(child.stderr, true);
 
       child.once('error', (err) => {
+        if (buildChild === child) buildChild = null;
         const e = new Error(`could not run ${script}: ${err.message}`);
         e.alreadyReported = true;
         reject(e);
       });
 
       child.once('close', (code) => {
+        if (buildChild === child) buildChild = null;
         if (code === 0) {
           resolve({ script, ms: Date.now() - started });
           return;
@@ -565,10 +703,14 @@ async function createEngine({ root, python, warm = false } = {}) {
         e.failures = failures.slice(-12);
         reject(e);
       });
-    }));
+    });
   }
 
   async function dispose() {
+    if (buildChild) {
+      try { buildChild.kill(); } catch { /* already gone */ }
+      buildChild = null;
+    }
     disposeSass();
     // A warm start may still be launching Chromium; wait for it so the
     // browser it produces is closed rather than orphaned.
@@ -592,11 +734,15 @@ async function createEngine({ root, python, warm = false } = {}) {
     pipelines,
     renderPreview,
     build,
+    // Run fn on the same queue as previews and builds, for work that
+    // reads what they write (dist/'s metadata, the shared worker).
+    exclusive: serial,
     dispose,
     status: () => ({
       root,
       python: interpreter,
-      worker: hello,
+      // The live worker's handshake: its pid changes after a restart.
+      worker: worker.hello || hello,
       browserOpen: Boolean(page),
       stylesStale: pipeline.stylesAreStale(),
     }),

@@ -1,7 +1,7 @@
 /**
  * test_output_name.js — the Node half of the output-naming contract.
  *
- * The PDFs are named after you: Gaius_Iulius_Resume.pdf. That name is
+ * The PDFs are named after you: Gaius_Caesar_Resume.pdf. That name is
  * derived from YAML, which only Python in this project can read, so
  * Node never computes it — build.py writes `output_stem` into
  * dist/pdf_meta.json and this module reads it back. Everything here
@@ -61,12 +61,12 @@ const listing = dir => fs.readdirSync(dir).sort();
 
 test('the stem comes from the build metadata, not from a guess', () => {
   withTempDir((dir) => {
-    const meta = writeMeta(dir, { output_stem: 'Gaius_Iulius_Resume' });
+    const meta = writeMeta(dir, { output_stem: 'Gaius_Caesar_Resume' });
     const p = on.outputPaths(dir, meta, 'resume');
-    assertEq(p.stem, 'Gaius_Iulius_Resume', 'stem');
-    assertEq(path.basename(p.colorPdf), 'Gaius_Iulius_Resume.pdf', 'color');
+    assertEq(p.stem, 'Gaius_Caesar_Resume', 'stem');
+    assertEq(path.basename(p.colorPdf), 'Gaius_Caesar_Resume.pdf', 'color');
     assertEq(path.basename(p.grayscalePdf),
-             'Gaius_Iulius_Resume_Grayscale.pdf', 'grayscale');
+             'Gaius_Caesar_Resume_Grayscale.pdf', 'grayscale');
   });
 });
 
@@ -127,15 +127,15 @@ test('an unknown variant is refused rather than guessed at', () => {
 
 test('the pattern matches this document\'s outputs, named or not', () => {
   const re = on.outputPattern('resume');
-  assertTrue(re.test('Gaius_Iulius_Resume.pdf'), 'named color');
-  assertTrue(re.test('Gaius_Iulius_Resume_Grayscale.pdf'), 'named grayscale');
+  assertTrue(re.test('Gaius_Caesar_Resume.pdf'), 'named color');
+  assertTrue(re.test('Gaius_Caesar_Resume_Grayscale.pdf'), 'named grayscale');
   assertTrue(re.test('Resume.pdf'), 'the no-name fallback');
   assertTrue(re.test('Anne_Marie_Smith_Jones_Resume.pdf'), 'many parts');
 });
 
 test('the pattern does not reach past its own document', () => {
   const resume = on.outputPattern('resume');
-  assertTrue(!resume.test('Gaius_Iulius_Cover_Letter.pdf'), 'the other document');
+  assertTrue(!resume.test('Gaius_Caesar_Cover_Letter.pdf'), 'the other document');
   assertTrue(!resume.test('pdf_meta.json'), 'build metadata');
   assertTrue(!resume.test('index.html'), 'the rendered HTML');
   assertTrue(!resume.test('styles.css'), 'the stylesheet');
@@ -145,8 +145,8 @@ test('the pattern does not reach past its own document', () => {
   assertTrue(!resume.test('My_Resume_Draft.pdf'), 'suffix must be last');
 
   const letter = on.outputPattern('letter');
-  assertTrue(letter.test('Gaius_Iulius_Cover_Letter_Grayscale.pdf'), 'its own');
-  assertTrue(!letter.test('Gaius_Iulius_Resume.pdf'), 'the other document');
+  assertTrue(letter.test('Gaius_Caesar_Cover_Letter_Grayscale.pdf'), 'its own');
+  assertTrue(!letter.test('Gaius_Caesar_Resume.pdf'), 'the other document');
 });
 
 
@@ -155,19 +155,19 @@ test('the pattern does not reach past its own document', () => {
 test('pruneStale removes the previous name and keeps the current one', () => {
   withTempDir((dir) => {
     touch(dir,
-      'Gaius_Iulius_Resume.pdf',            // this build
-      'Gaius_Iulius_Resume_Grayscale.pdf',  // this build
+      'Gaius_Caesar_Resume.pdf',            // this build
+      'Gaius_Caesar_Resume_Grayscale.pdf',  // this build
       'Gaius_Julius_Resume.pdf');           // yesterday's spelling
 
     const keep = [
-      path.join(dir, 'Gaius_Iulius_Resume.pdf'),
-      path.join(dir, 'Gaius_Iulius_Resume_Grayscale.pdf'),
+      path.join(dir, 'Gaius_Caesar_Resume.pdf'),
+      path.join(dir, 'Gaius_Caesar_Resume_Grayscale.pdf'),
     ];
     const removed = on.pruneStale(dir, 'resume', keep);
 
     assertEq(removed.join(','), 'Gaius_Julius_Resume.pdf', 'removed the stale one');
     assertEq(listing(dir).join(','),
-             'Gaius_Iulius_Resume.pdf,Gaius_Iulius_Resume_Grayscale.pdf',
+             'Gaius_Caesar_Resume.pdf,Gaius_Caesar_Resume_Grayscale.pdf',
              'the current pair survives');
   });
 });
@@ -176,9 +176,9 @@ test('pruneStale removes the pre-rename legacy filenames', () => {
   // The migration case: everyone has a resume-color.pdf from before
   // outputs were named after people.
   withTempDir((dir) => {
-    touch(dir, 'resume-color.pdf', 'resume-grayscale.pdf', 'Gaius_Iulius_Resume.pdf');
-    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Iulius_Resume.pdf')]);
-    assertEq(listing(dir).join(','), 'Gaius_Iulius_Resume.pdf', 'only today\'s left');
+    touch(dir, 'resume-color.pdf', 'resume-grayscale.pdf', 'Gaius_Caesar_Resume.pdf');
+    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf', 'only today\'s left');
   });
 });
 
@@ -188,13 +188,13 @@ test('pruneStale removes a variant written under the retired suffix', () => {
   // is not overwritten by it, so if the pattern stopped matching it,
   // it would stay in dist/ looking current forever.
   withTempDir((dir) => {
-    touch(dir, 'Gaius_Iulius_Resume.pdf',
-               'Gaius_Iulius_Resume_Grayscale.pdf',
-               'Gaius_Iulius_Resume-grayscale.pdf');   // yesterday's spelling
-    const keep = ['Gaius_Iulius_Resume.pdf', 'Gaius_Iulius_Resume_Grayscale.pdf']
+    touch(dir, 'Gaius_Caesar_Resume.pdf',
+               'Gaius_Caesar_Resume_Grayscale.pdf',
+               'Gaius_Caesar_Resume-grayscale.pdf');   // yesterday's spelling
+    const keep = ['Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf']
       .map(n => path.join(dir, n));
     const removed = on.pruneStale(dir, 'resume', keep);
-    assertEq(removed.join(','), 'Gaius_Iulius_Resume-grayscale.pdf', 'the old one');
+    assertEq(removed.join(','), 'Gaius_Caesar_Resume-grayscale.pdf', 'the old one');
     assertEq(listing(dir).length, 2, 'the current pair survives');
   });
 });
@@ -219,11 +219,11 @@ test('pruneStale never touches the other document', () => {
   // hour ago. The two documents share dist/ and nothing else.
   withTempDir((dir) => {
     touch(dir,
-      'Gaius_Iulius_Resume.pdf',
-      'Gaius_Iulius_Cover_Letter.pdf',
-      'Gaius_Iulius_Cover_Letter_Grayscale.pdf',
+      'Gaius_Caesar_Resume.pdf',
+      'Gaius_Caesar_Cover_Letter.pdf',
+      'Gaius_Caesar_Cover_Letter_Grayscale.pdf',
       'letter-color.pdf');
-    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Iulius_Resume.pdf')]);
+    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
     assertEq(listing(dir).length, 4, 'nothing was removed');
   });
 });
@@ -231,12 +231,12 @@ test('pruneStale never touches the other document', () => {
 test('pruneStale never touches anything outside its own pattern', () => {
   withTempDir((dir) => {
     touch(dir,
-      'Gaius_Iulius_Resume.pdf',
+      'Gaius_Caesar_Resume.pdf',
       'pdf_meta.json', 'placement.json', 'index.html', 'styles.css',
       'favicon.svg',
       'Some_Other_Document.pdf',   // a PDF the user dropped in dist/
       'notes.txt');
-    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Iulius_Resume.pdf')]);
+    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
     assertEq(listing(dir).length, 8, 'everything survives');
   });
 });
@@ -247,29 +247,115 @@ test('a variant this build chose not to make is removed, not orphaned', () => {
   // exists" stops meaning "this build made it" — which the snapshot
   // test and the app both rely on.
   withTempDir((dir) => {
-    touch(dir, 'Gaius_Iulius_Resume.pdf', 'Gaius_Iulius_Resume_Grayscale.pdf');
-    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Iulius_Resume.pdf')]);
-    assertEq(listing(dir).join(','), 'Gaius_Iulius_Resume.pdf', 'grayscale gone');
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf');
+    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf', 'grayscale gone');
   });
 });
 
 test('pruneStale compares resolved paths, not the strings it was given', () => {
   withTempDir((dir) => {
-    touch(dir, 'Gaius_Iulius_Resume.pdf');
+    touch(dir, 'Gaius_Caesar_Resume.pdf');
     // The same file, spelled the long way round.
-    const awkward = path.join(dir, 'sub', '..', 'Gaius_Iulius_Resume.pdf');
+    const awkward = path.join(dir, 'sub', '..', 'Gaius_Caesar_Resume.pdf');
     fs.mkdirSync(path.join(dir, 'sub'));
     const removed = on.pruneStale(dir, 'resume', [awkward]);
     assertEq(removed.length, 0, 'recognized as the kept file');
-    assertTrue(fs.existsSync(path.join(dir, 'Gaius_Iulius_Resume.pdf')), 'survived');
+    assertTrue(fs.existsSync(path.join(dir, 'Gaius_Caesar_Resume.pdf')), 'survived');
+  });
+});
+
+/* ─── case-insensitive filesystems ─────────────────────────────
+ *
+ * On NTFS / APFS, writing Gaius_CAESAR_Resume.pdf over an existing
+ * Gaius_Caesar_Resume.pdf keeps the old spelling on disk. The keep-list
+ * then names a path that readdir never returns, and a string compare
+ * would delete the PDF the build just wrote. */
+
+test('pruneStale keeps a file that IS a kept path under another spelling', () => {
+  // Simulated on any OS with a hard link: dist/ holds the old-case name
+  // only; the keep-list names the new-case path, which (as on a
+  // case-insensitive volume) is the same file — same dev and inode.
+  withTempDir((dir) => {
+    const dist = path.join(dir, 'dist');
+    const elsewhere = path.join(dir, 'other');
+    fs.mkdirSync(dist);
+    fs.mkdirSync(elsewhere);
+    touch(dist, 'Gaius_Caesar_Resume.pdf');
+    const newCase = path.join(elsewhere, 'Gaius_CAESAR_Resume.pdf');
+    try {
+      fs.linkSync(path.join(dist, 'Gaius_Caesar_Resume.pdf'), newCase);
+    } catch (err) {
+      // No hard links on this filesystem: the stubbed test below still
+      // covers the logic.
+      assertTrue(true, `hard links unavailable (${err.code}) — covered by the stub test`);
+      return;
+    }
+    const removed = on.pruneStale(dist, 'resume', [newCase]);
+    assertEq(removed.length, 0, 'the same file is recognized by identity');
+    assertTrue(fs.existsSync(path.join(dist, 'Gaius_Caesar_Resume.pdf')),
+               'the PDF the build just wrote survives');
+  });
+});
+
+/** A one-file case-insensitive fs with no inodes (ino 0), like some network shares. */
+function caseInsensitiveFs(dist, onDiskName) {
+  const onDisk = path.join(dist, onDiskName).toLowerCase();
+  const deleted = [];
+  const exists = p => path.resolve(p).toLowerCase() === onDisk && !deleted.length;
+  const enoent = (p) => Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+  return {
+    deleted,
+    fs: {
+      readdirSync: d => (path.resolve(d) === path.resolve(dist) && !deleted.length
+        ? [onDiskName] : []),
+      statSync: (p, opts) => {
+        if (!exists(p)) throw enoent(p);
+        const zero = opts && opts.bigint ? 0n : 0;
+        return { dev: zero, ino: zero, isFile: () => true };
+      },
+      rmSync: (p) => { deleted.push(path.basename(p)); },
+    },
+  };
+}
+
+test('with no inode, win32/darwin fall back to a case-insensitive compare', () => {
+  const dist = path.resolve('/virtual/dist');
+  for (const platform of ['win32', 'darwin']) {
+    const stub = caseInsensitiveFs(dist, 'Gaius_Caesar_Resume.pdf');
+    const removed = on.pruneStale(dist, 'resume',
+      [path.join(dist, 'Gaius_CAESAR_Resume.pdf')], null, null,
+      { fs: stub.fs, platform });
+    assertEq(removed, [], `${platform}: nothing removed`);
+    assertEq(stub.deleted, [], `${platform}: the just-written PDF is not deleted`);
+  }
+});
+
+test('with no inode on a case-sensitive platform, a differently-cased name is stale', () => {
+  // Linux: Gaius_CAESAR_Resume.pdf and Gaius_Caesar_Resume.pdf are two
+  // files, and the old one really is stale. ino 0 must not make every
+  // file look identical (dev:0 / ino:0 is "unknown", not a match).
+  const dist = path.resolve('/virtual/dist');
+  const stub = caseInsensitiveFs(dist, 'Gaius_Caesar_Resume.pdf');
+  const removed = on.pruneStale(dist, 'resume',
+    [path.join(dist, 'Gaius_CAESAR_Resume.pdf')], null, null,
+    { fs: stub.fs, platform: 'linux' });
+  assertEq(removed, ['Gaius_Caesar_Resume.pdf'], 'the old spelling is pruned');
+});
+
+test('identity never spares an unrelated stale file', () => {
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Julius_Resume.pdf');
+    const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(removed, ['Gaius_Julius_Resume.pdf'], 'a different file is still removed');
   });
 });
 
 test('a directory sharing the naming pattern is not deleted', () => {
   withTempDir((dir) => {
-    fs.mkdirSync(path.join(dir, 'Gaius_Iulius_Resume.pdf'));
+    fs.mkdirSync(path.join(dir, 'Gaius_Caesar_Resume.pdf'));
     on.pruneStale(dir, 'resume', []);
-    assertTrue(fs.existsSync(path.join(dir, 'Gaius_Iulius_Resume.pdf')),
+    assertTrue(fs.existsSync(path.join(dir, 'Gaius_Caesar_Resume.pdf')),
                'directories are skipped');
   });
 });

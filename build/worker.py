@@ -50,8 +50,10 @@ See "STDOUT DISCIPLINE" below.
 Operations
   ping        -> {} .............. liveness + version handshake
   build       -> {mode}  ......... mode: "final" | "measurement"
-                 {env}  ......... optional {"RESUME_DATA_SOURCE": "mine"}
-  build_letter-> {} .............. the single-page cover letter
+                 {env}  ......... optional {"RESUME_DATA_SOURCE": "mine"};
+                                  a null value unsets the variable
+  build_letter-> {env} ........... the single-page cover letter; env as
+                                   for build, e.g. {"LETTER_DATA_FILE": ...}
   crop        -> {input, output, meta}
   raster      -> {path, scale, pages} -> base64 PNGs
   compare     -> {a, b, scale} -> per-page pixel-diff verdicts
@@ -79,7 +81,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from pathlib import Path
 
 # build/ on sys.path so sibling modules import the same way they do when
@@ -150,6 +152,33 @@ def op_ping(_req):
     }
 
 
+@contextmanager
+def _env_overrides(overrides):
+    """Apply per-request env overrides for one call, then restore them.
+
+    build.py's and build_letter.py's load_data() read os.environ at call
+    time, so this is the same switch the CLI gets from the shell. A value
+    of None removes the variable for the duration of the call — which is
+    how the Studio says "this document has no such selection", so a
+    variable inherited from the shell cannot leak into a render.
+    """
+    overrides = overrides or {}
+    saved = {k: os.environ.get(k) for k in overrides}
+    for k, v in overrides.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = str(v)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def op_build(req):
     """Render dist/index.html + dist/pdf_meta.json.
 
@@ -183,30 +212,12 @@ def op_build(req):
     if mode not in ("final", "measurement"):
         raise ValueError(f"unknown mode {mode!r}; expected 'final' or 'measurement'")
 
-    # Per-request env overrides (RESUME_DATA_SOURCE), restored after.
-    # build.py's load_data() reads os.environ at call time, so this is
-    # the same switch the CLI gets from the shell.
-    overrides = req.get("env") or {}
-    saved = {k: os.environ.get(k) for k in overrides}
-    for k, v in overrides.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = str(v)
-
     # _console prefixes the first banner of a process with a newline.
     # Reset it per request so a warm build's captured log is formatted
     # identically to a cold run's.
-    c._first_banner = True
-
-    try:
+    with _env_overrides(req.get("env")):
+        c._first_banner = True
         build_mod.build(mode=mode)
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
     meta_path = ROOT / "dist" / "pdf_meta.json"
     meta = {}
@@ -221,7 +232,7 @@ def op_build(req):
     }
 
 
-def op_build_letter(_req):
+def op_build_letter(req):
     """Render dist/letter.html + dist/letter_meta.json.
 
     Calls build_letter.build_letter() — the same function
@@ -235,8 +246,13 @@ def op_build_letter(_req):
     """
     import build_letter
 
-    c._first_banner = True
-    build_letter.build_letter()
+    # Per-request env overrides (LETTER_DATA_FILE), applied and restored
+    # exactly as op_build does. The letter's data selection is its own:
+    # the caller sends LETTER_DATA_FILE when a file is picked and clears
+    # RESUME_DATA_SOURCE, which belongs to the resume.
+    with _env_overrides(req.get("env")):
+        c._first_banner = True
+        build_letter.build_letter()
 
     meta_path = ROOT / "dist" / "letter_meta.json"
     meta = {}

@@ -140,6 +140,40 @@ test('sidebarBlockHeight: partial slice with fewer gaps', () => {
   assertEq(sidebarBlockHeight(b, 2, 2, true), 45, '2-item continuation');
 });
 
+test('sidebarBlockHeight: an empty block still costs its heading', () => {
+  // The heading renders even with no items; costing it 0 let the solver
+  // place it on a page with no room, clipping under overflow: hidden.
+  const list = listBlock('empty', 30, [], { itemGap: 5, headingToItemsGap: 10 });
+  assertEq(list.totalHeight, 30, 'synthesized totalHeight is the heading alone');
+  assertEq(sidebarBlockHeight(list, 0, 0, false), 30, 'empty list = heading, no gap');
+  const details = detailsBlock('empty-d', 24, [], { headingToItemsGap: 10 });
+  assertEq(sidebarBlockHeight(details, 0, 0, false), 24, 'empty details = heading');
+  // A continuation carries no heading, so an empty slice of one is zero.
+  assertEq(sidebarBlockHeight(list, 0, 0, true), 0, 'empty continuation = 0');
+});
+
+test('sidebar: an empty block that does not fit goes to the next page', () => {
+  // Page 1 holds exactly block a (90). Costed at 0, the empty block b
+  // used to be placed on page 1 regardless; costed at its 30px heading,
+  // it has to move to page 2.
+  const a = listBlock('a', 30, [20, 20, 20]);
+  const b = listBlock('b', 30, []);
+  const result = solveSidebar([a, b], geometry({ page1: 100, pageN: 200 }), 10);
+  assertEq(result.length, 2, 'two pages');
+  assertEq(result[0].entries.map(e => e.block_id), ['a'], 'page 1: a only');
+  assertEq(result[1].entries.map(e => e.block_id), ['b'], 'page 2: the empty block');
+});
+
+test('sidebar: an empty block that fits is placed whole', () => {
+  const a = listBlock('a', 30, [20, 20, 20]);
+  const b = listBlock('b', 30, []);
+  const result = solveSidebar([a, b], geometry({ page1: 120 }), 10);
+  assertEq(result.length, 1, 'one page');
+  assertEq(result[0].entries[1],
+    { block_id: 'b', continuation: false, items_offset: 0, items_limit: null },
+    'empty block placed whole, not split');
+});
+
 test('jobHeight: regular job whole', () => {
   const j = job('j', 30, [20, 20, 20], false, { bulletGap: 5, headerToBulletsGap: 8 });
   // Expected: 30 + 8 + 60 + 2*5 = 108

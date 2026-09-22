@@ -65,6 +65,7 @@ Two-stream design
   stream — the helper picks the right one.
 """
 
+import io
 import json
 import os
 import sys
@@ -98,20 +99,57 @@ _LABEL_PAD_WIDTH = _console_constants["LABEL_PAD_WIDTH"]
 del _console_constants, _f
 
 
+def _force_utf8(stream) -> None:
+    """
+    Make `stream` write UTF-8, replacing what it still cannot encode.
+
+    The status symbols are emoji. On Windows a PIPED stdout (a build run
+    from resume.js, a CI log, `python build/build.py | more`) is opened
+    in the ANSI code page — cp1252 on most Western machines — which has
+    no ✅, so the very first ok() raised UnicodeEncodeError and turned a
+    working build into a traceback. A console window is UTF-16 and was
+    never affected, which is why this only ever showed up piped.
+
+    `errors='replace'` is the backstop: if reconfiguring is refused, a
+    symbol degrades to '?' rather than killing the build.
+
+    Guarded, because the stream is not always a real text file: the warm
+    worker and the unit tests swap in io.StringIO, which has no
+    reconfigure(), and a detached or closed stream refuses it.
+    """
+    reconfigure = getattr(stream, 'reconfigure', None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding='utf-8', errors='replace')
+    except (ValueError, OSError, io.UnsupportedOperation):
+        pass
+
+
+_force_utf8(sys.stdout)
+_force_utf8(sys.stderr)
+
+
 def _color_enabled(stream) -> bool:
     """
     True if we should emit ANSI codes on `stream`.
 
     Honors NO_COLOR (https://no-color.org) — if NO_COLOR is set to
-    any value, all output is monochrome regardless of TTY status.
-    Honors FORCE_COLOR for the inverse case (e.g. CI tools that
-    capture output but want color preserved). Default is "color
-    iff TTY".
+    a non-empty value, all output is monochrome regardless of TTY
+    status. FORCE_COLOR set to 0 or false turns color off; empty, 1,
+    2, 3 or true turns it on (e.g. CI tools that capture output but
+    want color preserved). Any other value, or none, means "color
+    iff TTY". Same rules as colorEnabled() in _console.js.
     """
     if os.environ.get('NO_COLOR'):
         return False
-    if os.environ.get('FORCE_COLOR'):
-        return True
+    force = os.environ.get('FORCE_COLOR')
+    if force is not None:
+        v = force.strip().lower()
+        if v in ('0', 'false'):
+            return False
+        if v in ('', '1', '2', '3', 'true'):
+            return True
     return hasattr(stream, 'isatty') and stream.isatty()
 
 

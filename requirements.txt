@@ -10,15 +10,14 @@
 # and any refreshed fixtures.
 #
 # Only packages we directly import are listed; pip resolves their
-# transitive dependencies (MarkupSafe for Jinja2, NumPy for
-# pypdfium2's PIL output paths, etc.) automatically.
+# transitive dependencies (MarkupSafe for Jinja2, etc.) automatically.
 
 # Build pipeline (build.py + crop_pdf.py)
 PyYAML==6.0.3
 Jinja2==3.1.6
 pypdf==6.16.1
 
-# Snapshot test (scripts/snapshot_pdf.py)
+# Snapshot test and Studio preview (build/snapshot_pdf.py, build/worker.py)
 pypdfium2==5.7.1
 Pillow==12.3.0
 

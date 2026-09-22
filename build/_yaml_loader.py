@@ -39,7 +39,8 @@ with two deliberate deviations. Concretely:
     yes / no / on / off / y / n                  → str   (was bool)
     2024-01-05, 2024-01-05T09:00:00Z             → str   (was date)
     22:30                                        → str   (was int)
-    42, -7, 0x1f, 0o17                           → int   (unchanged)
+    42, -7, 0, 0x1f, 0o17                        → int   (unchanged)
+    0451, 09, 010, 02139                         → str   (was octal / a crash)
     3.90, 1e5, .inf, .nan                        → str   (was float)
     null / Null / NULL / ~ / (empty)             → None  (unchanged)
 
@@ -64,6 +65,24 @@ Explicit tags still work and still mean what they say: `!!float 3.90`
 is a float, `!!timestamp 2024-01-05` is a date. Nothing is taken away
 from anyone who asks for it by name; only the guessing is gone.
 
+Leading zeros deserve their own line. YAML 1.1 reads `010` as octal 8
+and `0451` as 297, and a leading-zero number with an 8 or 9 in it
+(`09`, `02139`) as a ValueError traceback, because PyYAML's int
+constructor hands anything starting with `0` to int(value, 8). In a
+résumé a number with a leading zero is an identifier — a ZIP code, a
+room number, a course code — never a quantity, so it stays text, the
+same way `3.90` does. YAML 1.2 core would read `0451` as decimal 451;
+that loses the zero just as surely, so this project does not.
+
+DUPLICATE KEYS
+──────────────
+PyYAML silently keeps the LAST of two identical keys in one mapping.
+In a résumé that means a job with two `bullets:` blocks prints only the
+second, and nothing says the first ever existed. ResumeLoader refuses
+the file instead and names the key and both line numbers. Keys brought
+in through a `<<:` merge are not duplicates — overriding a merged key
+is what merging is for.
+
 CONSEQUENCES ELSEWHERE
 ──────────────────────
 `gap: true` in a job entry is still a real boolean, which is why the
@@ -78,6 +97,11 @@ from __future__ import annotations
 import re
 
 import yaml
+
+#: What load() raises for a file it cannot read as YAML: a syntax error,
+#: a duplicate key, a bad explicit tag. Re-exported so callers can catch
+#: it and print a clean message without importing yaml themselves.
+YAMLError = yaml.YAMLError
 
 # libyaml if it is there, pure Python if it is not. The only difference
 # is speed: both are the same SafeLoader semantics, and the resolver
@@ -101,14 +125,77 @@ DROPPED_TAGS = (
 )
 
 #: YAML 1.2 core schema, minus the sexagesimal and underscore-separated
-#: forms YAML 1.1 allowed. `0x`/`0o` are kept because they are
-#: unambiguous and cost nothing.
+#: forms YAML 1.1 allowed, and minus decimal numbers with a leading zero
+#: (see the module docstring: those are identifiers, so they stay text).
+#: `0x`/`0o` are kept because they are unambiguous and cost nothing;
+#: as in YAML 1.2 core they take no sign.
 CORE_BOOL = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
-CORE_INT = re.compile(r"^[-+]?(?:[0-9]+|0x[0-9a-fA-F]+|0o[0-7]+)$")
+CORE_INT = re.compile(
+    r"^(?:[-+]?(?:0|[1-9][0-9]*)|0x[0-9a-fA-F]+|0o[0-7]+)$")
 
 
 class ResumeLoader(_BaseLoader):
     """SafeLoader with YAML 1.2 core typing. See the module docstring."""
+
+    def construct_mapping(self, node, deep=False):
+        """Refuse a mapping that states the same key twice.
+
+        Checked before SafeConstructor flattens `<<:` merges, and only
+        over the keys written in this mapping, so a key that overrides
+        a merged-in one is not mistaken for a duplicate.
+        """
+        if isinstance(node, yaml.MappingNode):
+            seen = {}
+            for key_node, _value_node in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                if not isinstance(key_node, yaml.ScalarNode):
+                    continue
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    first = seen.get(key)
+                except TypeError:           # unhashable; let PyYAML report it
+                    continue
+                if first is not None:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping", node.start_mark,
+                        f"found duplicate key {key!r} (first set on line "
+                        f"{first.line + 1}). YAML would keep only the "
+                        f"second one and silently drop the first — "
+                        f"merge the two into one {key!r}, or delete one",
+                        key_node.start_mark,
+                    )
+                seen[key] = key_node.start_mark
+        return super().construct_mapping(node, deep=deep)
+
+
+def _construct_core_int(loader, node):
+    """Build an int the YAML 1.2 way: decimal is base 10, always.
+
+    PyYAML's own constructor is YAML 1.1's: it reads a leading `0` as
+    octal and splits on `:` as base 60. The implicit resolver above no
+    longer lets those shapes reach it, but an explicit `!!int 010` still
+    would, so the conversion is replaced too rather than trusted.
+    """
+    raw = loader.construct_scalar(node)
+    text = raw.strip().replace("_", "")
+    sign = 1
+    if text[:1] in ("-", "+"):
+        sign = -1 if text[0] == "-" else 1
+        text = text[1:]
+    try:
+        if text[:2] in ("0x", "0X"):
+            return sign * int(text[2:], 16)
+        if text[:2] in ("0o", "0O"):
+            return sign * int(text[2:], 8)
+        if text[:2] in ("0b", "0B"):
+            return sign * int(text[2:], 2)
+        return sign * int(text, 10)
+    except ValueError:
+        raise yaml.constructor.ConstructorError(
+            None, None,
+            f"{raw!r} is tagged !!int but is not an integer", node.start_mark,
+        ) from None
 
 
 def _rebuild_resolvers():
@@ -136,6 +223,10 @@ def _rebuild_resolvers():
         "tag:yaml.org,2002:bool", CORE_BOOL, list("tTfF"))
     ResumeLoader.add_implicit_resolver(
         "tag:yaml.org,2002:int", CORE_INT, list("-+0123456789"))
+
+    # add_constructor copies the inherited table before writing to it,
+    # so this, like the resolvers, stays private to ResumeLoader.
+    ResumeLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
 
 
 _rebuild_resolvers()

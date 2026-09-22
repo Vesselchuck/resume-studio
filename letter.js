@@ -65,10 +65,14 @@ const PYTHON = detectPython();
 
 /* ─── Helpers (mirrors resume.js's, trimmed) ──────────────────── */
 
-/** Forward TTY-ness to subprocesses so crop_pdf.py keeps its color. */
+/**
+ * Forward color to subprocesses so crop_pdf.py keeps it, and make
+ * Python write UTF-8 to its pipes so the emoji status symbols do not
+ * crash it on a Windows cp1252 console. Same contract as resume.js's.
+ */
 function subprocessEnv() {
-  const env = { ...process.env };
-  if (process.stdout.isTTY) env.FORCE_COLOR = '1';
+  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  if (c.colorEnabled(process.stdout)) env.FORCE_COLOR = '1';
   return env;
 }
 
@@ -87,7 +91,9 @@ function runPython(scriptArgs, fallbackLabel) {
     process.stdout.write(out);
   } catch (err) {
     if (err.stdout) process.stdout.write(err.stdout);
-    if (!err.stdout && !err.stderr) c.err(`${fallbackLabel}: ${err.message}`);
+    if ((!err.stdout && !err.stderr) || typeof err.status !== 'number') {
+      c.err(`${fallbackLabel}: ${err.message}`);
+    }
     throw reported(err);
   }
 }
@@ -106,6 +112,7 @@ function runPython(scriptArgs, fallbackLabel) {
  */
 const coldPython = {
   buildHtml() {
+    c.err('Internal error: the cover letter has no measurement/final modes');
     throw reported(new Error('the cover letter has no measurement/final modes'));
   },
 
@@ -196,8 +203,8 @@ function pruneStaleOutputs(variant, keep) {
     path.join(ROOT, 'dist'),
     variant,
     keep,
-    name => c.info_pair('Removed stale PDF', `dist/${name} (not this build's name)`),
-    (name, why) => c.warn_pair('Could not remove', `dist/${name} — ${why}`),
+    name => c.info_pair('Removed stale PDF', `${path.join('dist', name)} (not this build's name)`),
+    (name, why) => c.warn_pair('Could not remove', `${path.join('dist', name)} — ${why}`),
   );
 }
 
@@ -208,6 +215,11 @@ function pruneStaleOutputs(variant, keep) {
   let browser;
   let exitCode = 0;
   try {
+    // Validated first: a typo in RESUME_VARIANTS is known before any
+    // work starts, and used to surface only after the tests, the Sass
+    // compile, the measurement pass and the browser had all run.
+    const variants = selectedVariants();
+
     c.banner('Cover letter');
     c.ok_pair('Detected Python', PYTHON);
     pipeline.compileSass();
@@ -228,7 +240,6 @@ function pruneStaleOutputs(variant, keep) {
     await pipeline.verifyLetterFits(page);
 
     c.banner('PDF');
-    const variants = selectedVariants();
     if (!variants.grayscale) dropUnbuiltVariant(pipeline.paths.grayscalePdf, 'grayscale');
     if (!variants.color) dropUnbuiltVariant(pipeline.paths.colorPdf, 'color');
     await pipeline.printPdfs(page, {

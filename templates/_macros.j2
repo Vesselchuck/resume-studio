@@ -53,7 +53,9 @@
 
 {#- ─── Job entry ──────────────────────────────────────────────
     Renders a single job. Three visual shapes:
-      • Regular: title + meta + bullets
+      • Regular: title + meta + bullets. `datetime` and `location` are
+        optional: without `datetime` the <time> keeps its printed date
+        and loses only the machine-readable attribute.
       • Gap: italic title, no location, no bullets (j.gap is truthy)
       • Continuation: no header, just bullets, with data-continues-from
 
@@ -85,8 +87,8 @@
   <header class="entry-header"{% if measure %} data-measure="job-header"{% endif %}>
     <h3 class="entry-title">{{ j.title }}</h3>
     <p class="entry-meta">
-      <time class="job-date" datetime="{{ j.datetime }}">{{ j.date }}</time>
-{%- if j.location is defined %}
+      <time class="job-date"{% if j.datetime is defined and j.datetime is not none %} datetime="{{ j.datetime }}"{% endif %}>{{ j.date }}</time>
+{%- if j.location is defined and j.location is not none %}
       <span class="job-loc">{{ j.location }}</span>
 {%- endif %}
     </p>
@@ -189,7 +191,10 @@
 
 
 {#- ─── Education item ─────────────────────────────────────────
-    Single education item article.
+    Single education item article. `subtitle` and `institution` are
+    optional (the schema and the shipped template say so); an absent
+    or null one drops its line rather than printing "None" or failing
+    under StrictUndefined.
 
     Parameters
     ──────────
@@ -200,10 +205,14 @@
 <article class="edu-item"{% if measure %} data-measure="edu-item"{% endif %}>
   <header class="entry-header">
     <h3 class="entry-title">{{ item.title }}</h3>
+{%- if item.subtitle is defined and item.subtitle is not none %}
     <p class="edu-subtitle">{{ item.subtitle }}</p>
+{%- endif %}
+{%- if item.institution is defined and item.institution is not none %}
     <p class="entry-meta">
       <span class="job-loc">{{ item.institution }}</span>
     </p>
+{%- endif %}
   </header>
 </article>
 {% endmacro %}

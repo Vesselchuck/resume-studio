@@ -41,6 +41,176 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+*Breaking: the build now refuses data it used to print wrong or drop
+without a word, and numbers with a leading zero stay text. The next
+release is therefore 0.8.0. Also: a letter Build could delete your
+real letter PDF, a crashed worker froze the Studio, and the Studio
+server accepted requests from other local pages.*
+
+### Upgrading from 0.7.x
+
+1. Build your own `data/resume.yml` and `data/letter.yml` once. If the
+   build now stops, the message names the line and what to write
+   instead. The usual causes:
+   - a bullet containing `: ` — put it in quotes;
+   - an empty bullet or list entry — delete it;
+   - a misspelled key in a job, `name`, `contact`, `sidebar`, an
+     education entry or a details row — fix the spelling;
+   - bullets under a gap entry, or a sidebar block with no entries;
+   - the same key written twice in one place.
+2. If you set `STRICT_TESTS=0` to turn strict mode off, it now does.
+3. In cmd.exe, write `set "PYTHON=py" && node resume.js`, with the
+   quotes.
+
+### Data files
+
+- **Changed — Breaking.** `validate_data` checks every field the
+  templates read. These used to build and now stop with the path and
+  a fix:
+  - a bullet, list entry, summary `text`, section `heading`, job
+    `title` or details `value` that is empty, a boolean, or a mapping
+    (an unquoted `- Led migration: cut costs 30%` printed as
+    `{'Led migration': 'cut costs 30%'}`);
+  - `items:` written as one string (it printed one entry per
+    character) and an education entry written as a plain string;
+  - bullets under a gap entry, and a sidebar block with `items: []` or
+    `rows: []`;
+  - `maxPages: true`, which counted as 1;
+  - an unknown key where the schema lists every allowed key: a job,
+    `name`, `contact` and its rows, `sidebar`, an education entry, a
+    details row, a list group. Anywhere else an unknown key is a
+    warning, with a suggestion when it looks like a typo.
+- **Changed — Breaking.** A number with a leading zero stays text:
+  `0451` prints as `0451`, not as `297` (octal), and `02139` or `09`
+  no longer crash the build. `maxPages: 02` is now rejected.
+  `!!int 010` is ten.
+- **Changed — Breaking.** A key written twice in one mapping stops the
+  build with both line numbers. The second one used to replace the
+  first silently.
+- **Changed.** A job without `datetime`, or an education entry without
+  `subtitle` or `institution`, now builds with that line left out. It
+  used to crash with a template error, though the schema called them
+  optional.
+- **Changed.** A key left empty in a document (`meta:` or `contact:`
+  with nothing under it) counts as not set, so the profile's value is
+  used. It used to erase the profile's value, and an empty `meta:` in
+  a letter crashed the build.
+- **Fixed.** A whitespace-only `meta.lang` gave the HTML `lang=""`
+  while the PDF said en-US. It now means en-US in both.
+- **Fixed.** The letter date reads `en_GB` as `en-GB`, treats the
+  regions `150` and `001` as day-first, and no longer reads `en-x-gb`
+  as British.
+- **Fixed.** The schemas agree with the build: `contact` merges with
+  the profile key by key and doesn't need `rows`, and the claim that
+  `*italic*` works is gone (only `**bold**` does).
+
+### Studio
+
+- **Fixed.** A letter Build followed the resume card's data choice, and
+  the letter preview ignored the letter file you picked. With the
+  resume on the template, a letter Build wrote the template letter and
+  deleted your real letter PDF from `dist/`. Each card now uses only
+  its own choice, and data-file variables set in the shell are ignored.
+- **Fixed.** When the Python worker crashed, every later preview and
+  Build waited forever. The request in flight now fails with an error,
+  and the next one starts a new worker.
+- **Fixed.** A preview of another data file made the tray say "Not
+  built" for a PDF that existed. The tray now remembers what the last
+  Build wrote.
+- **Fixed.** Clicking the other card, or picking a data file, while a
+  render was running was ignored. The latest request now runs as soon
+  as the render finishes.
+- **Fixed.** Two files dropped under the same name at nearly the same
+  moment could overwrite each other. A dropped file named with a
+  leading `_`, such as `_profile.yml`, is refused, as it already was in
+  **Data files…**.
+- **Fixed.** Closing the desktop window killed the server outright, so
+  its shutdown never ran and a running build could be left behind. The
+  server is now asked to shut down and only killed after two seconds.
+- **Fixed.** A request with a malformed `Host` header crashed the
+  server.
+- **Changed.** A page that didn't change is no longer sent to the
+  window again: 0.7.1 skipped re-encoding it but still sent the image.
+- **Changed.** The desktop bundle puts its files at their own paths
+  instead of under `_up_/`, where the app couldn't find them. The same
+  files are bundled, and from `data/` still only the three templates.
+  The installer still needs Node, Python and the setup packages; the
+  README now says so instead of calling it standalone.
+- **Security.** The server answered any request that reached its port.
+  It now requires the `Host` to be `127.0.0.1` or `localhost` on its
+  own port, which stops a DNS-rebinding page from reading your data
+  files; requires an `Origin`, if sent, to be that same address, so a
+  page on another local port can't drive it; and requires JSON POST
+  bodies.
+
+### Build and snapshot test
+
+- **Security.** `snapshot_pdf.py --update-all` read `RESUME_DATA_FILE`
+  if it was still set in your shell, and could write your own resume
+  into the committed fixtures. It now clears the data-file variables
+  and refuses to copy a build that read the wrong data.
+- **Changed.** A build from any file other than the template or
+  `data/resume.yml` is recorded as `data_source: explicit`, not
+  `mine`. The snapshot step skips it, and `--update` and the
+  auto-bootstrap refuse to write a fixture from it. Picking the
+  template through `RESUME_DATA_FILE` is recorded as `default`.
+- **Fixed.** When the snapshot check could not run (a missing
+  dependency or fixture), the build said "Snapshot differs".
+- **Fixed.** On Windows, Python's log output through a pipe used the
+  ANSI code page, which has no ✅, so a build could stop with
+  `UnicodeEncodeError`. Python now writes UTF-8.
+- **Fixed.** `PYTHON` is trimmed, so `set PYTHON=py && …` in cmd.exe,
+  which leaves a trailing space, no longer fails to start Python. A
+  Python that can't be started now says why.
+- **Fixed.** `FORCE_COLOR=0` turned color on. `0` and `false` now turn
+  it off, in the Node and the Python output alike.
+- **Fixed.** An invalid `RESUME_VARIANTS` is rejected before the build
+  starts instead of after it.
+- **Fixed.** One cover-letter failure exited without printing anything.
+- **Fixed.** On Windows, the "Removed stale PDF" line printed `dist/`
+  while every other line printed `dist\`.
+- **Fixed.** On Windows and macOS, correcting the capitalization of
+  your name could make the build delete the PDF it had just written.
+- **Fixed.** A name part in a script with no ASCII form was dropped
+  from the file name: `Petrov-Смирнов` gave `Petrov`. It is now kept
+  in its own characters.
+- **Fixed.** The layout solver counted an empty sidebar block as zero
+  height, though its heading still printed.
+
+### Tests
+
+- **Fixed.** `test_engine_equivalence` showed "✅ 0 passed" when it
+  didn't run, even when the engine failed to start. Only a missing
+  Chromium is a skip now; an engine that won't start is a failure, and
+  the runner never shows a suite that ran no tests as passed.
+- **Fixed.** `STRICT_TESTS=0` turned strict mode on. Only `1`, `true`,
+  `on` and `yes` turn it on.
+- **Added.** `test_studio_server.js`, `test_pipeline_reports.js`,
+  `test_env_parsing.js`, `test_snapshot_guard.py` and
+  `test_console_encoding.py`. The full suite now takes about 25
+  seconds.
+
+### Documentation
+
+- **Fixed.** The README gave the template's PDFs as
+  `Gaius_Iulius_*.pdf`; a template build writes `Gaius_Caesar_*.pdf`.
+  Code comments and test examples use the same name.
+- **Fixed.** The README's test table and project layout list every
+  test file, including three from 0.6.0 that were never listed.
+- **Fixed.** The README said the snapshot test reads
+  `dist/resume-*.pdf`, the 0.5.x names.
+- **Fixed.** Smaller README errors: the pipeline step numbers, which
+  commands run the tests, when CI runs, what `.gitignore` covers, the
+  committed fixtures, which files get an editor schema, the Python
+  versions, and "every dependency is exact-pinned" (only direct ones
+  are). `requirements.txt` named `scripts/snapshot_pdf.py`, and
+  Manrope was declared as weights 100–900 while the font covers
+  200–800. The PDFs are unchanged.
+
+---
+
 ## [0.7.1] — 2026-09-21
 
 *The Studio no longer loses a save made during a render, shows each
@@ -685,6 +855,7 @@ the old names can still be followed.
 | 0.7.0 | — | breaking: the Studio is the only way to build |
 | 0.7.1 | — | a lost-save fix, faster previews, a security fix |
 
+[Unreleased]: #unreleased
 [0.7.1]: #071--2026-09-21
 [0.7.0]: #070--2026-09-21
 [0.6.1]: #061--2026-09-21

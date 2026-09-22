@@ -49,9 +49,21 @@
  *
  * REQUIREMENTS
  * ------------
- * Playwright's Chromium and a compiled dist/styles.css. Skips cleanly
- * without either, the same way test_check_layout.js does — a
- * contributor without browsers installed should not see a red suite.
+ * Playwright's Chromium. Without it the suite prints the runner's
+ * `SKIP <suite>: <reason>` marker and exits 0, the same way
+ * test_check_layout.js does — a contributor without browsers installed
+ * should not see a red suite, but does see a yellow one, and
+ * STRICT_TESTS=1 turns it red.
+ *
+ * That is the ONLY skip. The engine failing to load or to start (a
+ * broken require, a Python worker that will not boot) is exactly the
+ * regression this suite exists to catch, so it is a failure. An earlier
+ * version skipped on those too, printed "0 passed, 0 failed", and the
+ * runner showed a green tick for a suite that had tested nothing.
+ *
+ * No built dist/ is needed: renderTo() compiles the stylesheet when it
+ * is stale (pipeline.stylesAreStale() is true when dist/styles.css is
+ * missing), as does engine.renderPreview().
  */
 
 const path = require('path');
@@ -76,9 +88,12 @@ const SCRATCH = [
 ];
 
 
+const SUITE = 'test_engine_equivalence';
+
+/** The runner's skip marker (see build/run_tests.js). Chromium only. */
 function skip(reason) {
-  console.log(`\n  (skipped: ${reason})`);
-  report();
+  console.log(`SKIP ${SUITE}: ${reason}`);
+  process.exitCode = 0;
 }
 
 function snapshot(paths) {
@@ -121,33 +136,41 @@ async function renderTo(pipeline, page, outPath, variant) {
 
 
 (async () => {
-  if (!fs.existsSync(path.join(DIST, 'styles.css'))) {
-    return skip('dist/ not built — run `node resume.js` first');
-  }
-
-  let createEngine, createPipeline, chromium;
+  // Chromium first: its absence is the one condition that is a skip,
+  // and checking it before the engine means nothing is started only to
+  // be torn down again.
+  let chromium;
   try {
-    ({ createEngine } = require('../build/engine'));
-    ({ createPipeline } = require('../build/pipeline'));
     ({ chromium } = require('playwright'));
   } catch (err) {
-    return skip(`engine unavailable (${err.message})`);
-  }
-
-  let engine;
-  try {
-    engine = await createEngine({ root: ROOT });
-  } catch (err) {
-    return skip(`engine failed to start (${err.message})`);
+    return skip(`playwright not installed (${err.message.split('\n')[0]})`);
   }
 
   let browser;
   try {
     browser = await chromium.launch();
   } catch (err) {
-    // The condition test_check_layout.js skips on: no browser binary.
-    await engine.dispose();
-    return skip(`Chromium unavailable (${err.message.split('\n')[0]})`);
+    return skip(`chromium launch failed (${err.message.split('\n')[0]})`);
+  }
+
+  // From here on, anything that goes wrong is a failure.
+  let createEngine, createPipeline;
+  try {
+    ({ createEngine } = require('../build/engine'));
+    ({ createPipeline } = require('../build/pipeline'));
+  } catch (err) {
+    fail('the engine and pipeline modules load', { error: err.stack || err.message });
+    try { await browser.close(); } catch { /* already gone */ }
+    return report();
+  }
+
+  let engine;
+  try {
+    engine = await createEngine({ root: ROOT });
+  } catch (err) {
+    fail('the engine starts (Python worker boots)', { error: err.stack || err.message });
+    try { await browser.close(); } catch { /* already gone */ }
+    return report();
   }
 
   const saved = snapshot(SCRATCH);

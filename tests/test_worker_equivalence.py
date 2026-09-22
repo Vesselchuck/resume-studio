@@ -74,7 +74,7 @@ PLACEMENT = DIST / "placement.json"
 PDF_META = DIST / "pdf_meta.json"
 
 # The built color PDF, whatever the last build called it. Outputs are
-# named after you now (Gaius_Iulius_Resume.pdf), so this cannot be a
+# named after you now (Gaius_Caesar_Resume.pdf), so this cannot be a
 # literal — and a literal that no longer matches would not fail, it
 # would make test_crop_matches_cli skip forever while still printing a
 # reason that sounds like an ordinary "nothing built yet". Hence the
@@ -429,6 +429,57 @@ class WorkerEquivalenceTest(unittest.TestCase):
         # The worker's own environment is what matters; assert via the
         # data source it resolves to with no override in play.
         self.assertEqual(os.environ.get("RESUME_DATA_SOURCE"), before)
+
+    def test_letter_env_override_is_applied_and_restored(self):
+        """build_letter takes a per-request env exactly like build does.
+
+        The Studio sends LETTER_DATA_FILE when a letter file is picked, and
+        clears RESUME_DATA_SOURCE (a null value) so the resume card's
+        choice never reaches the letter. An earlier worker ignored the env
+        on this op entirely, so the preview read a different file than
+        the card named and the Build then used.
+        """
+        letter_artifacts = (DIST / "letter.html", DIST / "letter_meta.json",
+                            DIST / "favicon.svg")
+        saved = snapshot(letter_artifacts)
+
+        def restore():
+            for path, data in saved.items():
+                if data is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(data)
+        self.addCleanup(restore)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            picked = Path(tmp) / "picked_letter.yml"
+            text = (ROOT / "data" / "letter_default.yml").read_text(encoding="utf-8")
+            picked.write_text(text.replace("first: Gaius", "first: Pickedus"),
+                              encoding="utf-8")
+
+            frame = self.worker.call(op="build_letter", env={
+                "LETTER_DATA_FILE": str(picked),
+                # An invalid value: if the null did not unset it, the
+                # letter's loader would refuse the build.
+                "RESUME_DATA_SOURCE": None,
+            })
+            self.assertTrue(frame["ok"], frame.get("error"))
+            self.assertTrue(frame["result"]["meta"]["author"].startswith("Pickedus"),
+                            frame["result"]["meta"])
+
+            # Nothing leaks into the next request.
+            after = self.worker.call(op="build_letter")
+            self.assertTrue(after["ok"], after.get("error"))
+            self.assertFalse(after["result"]["meta"]["author"].startswith("Pickedus"),
+                             "LETTER_DATA_FILE leaked into the next letter build")
+
+            # A null really unsets a variable the worker inherited.
+            bad = self.worker.call(op="build_letter",
+                                   env={"RESUME_DATA_SOURCE": "not-a-source"})
+            self.assertFalse(bad["ok"], "an invalid RESUME_DATA_SOURCE was not applied")
+            cleared = self.worker.call(op="build_letter",
+                                       env={"RESUME_DATA_SOURCE": None})
+            self.assertTrue(cleared["ok"], cleared.get("error"))
 
 
 if __name__ == "__main__":

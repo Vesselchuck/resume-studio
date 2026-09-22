@@ -63,6 +63,10 @@ picks the matching fixture for each variant:
                             tests/fixtures/expected_resume-grayscale.pdf   (committed)
   data_source = 'mine'    → tests/fixtures/expected_resume-color.mine.pdf (gitignored)
                             tests/fixtures/expected_resume-grayscale.mine.pdf (gitignored)
+  data_source = 'explicit' → refused. The build read some other file,
+                            named through RESUME_DATA_FILE, and no
+                            fixture describes it. Compare, bootstrap and
+                            --update all stop with an explanation.
 
 Tolerances
 ──────────
@@ -99,6 +103,8 @@ import _console as c  # noqa: E402
 import _output_name  # noqa: E402  (where the built PDFs ended up)
 from _env_contract import (  # noqa: E402
     ENV_RESUME_DATA_SOURCE,
+    ENV_RESUME_DATA_FILE,
+    ENV_LETTER_DATA_FILE,
     ENV_SKIP_SNAPSHOT,
     ENV_RESUME_PIPELINE_SUFFIX,
     ENV_RESUME_VARIANTS,
@@ -110,8 +116,8 @@ FIXTURE_DIR = ROOT / "tests" / "fixtures"
 PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
 
 # Built PDFs — resume.js produces both color and grayscale variants
-# in dist/, named after you (Gaius_Iulius_Resume.pdf and
-# Gaius_Iulius_Resume_Grayscale.pdf). The stem comes from the build's
+# in dist/, named after you (Gaius_Caesar_Resume.pdf and
+# Gaius_Caesar_Resume_Grayscale.pdf). The stem comes from the build's
 # own metadata rather than from a constant here, because it follows
 # `name.first` / `name.last` and therefore changes when they do.
 
@@ -177,17 +183,59 @@ def active_variants():
     return present, missing
 
 
-def resolve_fixture_path(default_fixture, mine_fixture):
+#: The data_source values that have fixtures. build.py can also stamp
+#: 'explicit' — a file named through RESUME_DATA_FILE that is neither
+#: of these — and that one deliberately has none.
+FIXTURE_SOURCES = ('default', 'mine')
+
+
+def read_data_source():
+    """
+    The `data_source` the last build stamped into dist/pdf_meta.json,
+    or None if the file is missing, unreadable or has no such field.
+    """
+    try:
+        meta = json.loads(PDF_META_FILE.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    return meta.get('data_source')
+
+
+def refuse_explicit_source():
+    """Explain why a build of an arbitrary file has no fixture, and exit."""
+    c.err(
+        f"{PDF_META_FILE.relative_to(ROOT)} says the last build read an "
+        f"explicitly named data file (data_source='explicit')."
+    )
+    c.detail("Snapshot fixtures exist only for the default template")
+    c.detail("(data/resume_default.yml) and for data/resume.yml. A file picked")
+    c.detail(f"in the Studio or named through {ENV_RESUME_DATA_FILE} has none, and")
+    c.detail("comparing it against — or saving it over — one of those would")
+    c.detail("mean a fixture that no longer describes its own data file.")
+    c.detail(f"Unset {ENV_RESUME_DATA_FILE} (in the Studio: choose a data source")
+    c.detail("instead of a file) and rebuild with `node resume.js`.")
+    sys.exit(2)
+
+
+def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     """
     Choose the fixture file based on which data file backed the build.
 
     Reads dist/pdf_meta.json's `data_source` field:
-      • 'default' → committed fixture
-      • 'mine'    → gitignored fixture
+      • 'default'  → committed fixture
+      • 'mine'     → gitignored fixture
+      • 'explicit' → refused: an arbitrary file has no fixture, and
+                     writing its pixels into either one would leave that
+                     fixture describing a different document
 
-    A MISSING file falls back to the committed fixture. That is the
-    bootstrap case — no build has written the metadata yet — and it
-    also covers a partially-written file from an interrupted run.
+    A MISSING file falls back to the committed fixture for a compare.
+    That is the bootstrap case — no build has written the metadata yet
+    — and it also covers a partially-written file from an interrupted
+    run. With `require_meta` (every path that WRITES a fixture) it is
+    refused instead: a fixture is only ever overwritten by a build that
+    says which data file it came from.
 
     An UNRECOGNIZED value does not fall back. It used to: the line
     read `return mine if source == 'mine' else default`, so any token
@@ -200,16 +248,24 @@ def resolve_fixture_path(default_fixture, mine_fixture):
     exactly the kind of change that would have tripped it, so the
     failure is now loud.
     """
-    try:
-        meta = json.loads(PDF_META_FILE.read_text(encoding='utf-8'))
-    except (FileNotFoundError, json.JSONDecodeError):
+    source = read_data_source()
+    if source is None:
+        if require_meta:
+            c.err(
+                f"{PDF_META_FILE.relative_to(ROOT)} is missing or has no "
+                f"data_source, so there is no telling which data file the "
+                f"PDFs in dist/ came from."
+            )
+            c.detail("Refusing to overwrite a fixture with them. Rebuild with")
+            c.detail("`node resume.js` and re-run.")
+            sys.exit(2)
         return default_fixture
-
-    source = meta.get('data_source', 'default')
     if source == 'default':
         return default_fixture
     if source == 'mine':
         return mine_fixture
+    if source == 'explicit':
+        refuse_explicit_source()
     c.err(
         f"{PDF_META_FILE.relative_to(ROOT)} has data_source={source!r}, "
         f"which this script does not recognize."
@@ -384,6 +440,14 @@ def update_all_fixtures():
 
     def run_build(source, label):
         env = os.environ.copy()
+        # An explicit data file beats RESUME_DATA_SOURCE in build.py's
+        # load_data. Inherited from the caller — a Studio session with a
+        # file picked sets it — it would make the "default" pass render
+        # that file instead, and the copy below would commit whatever it
+        # contains (your real data) as the template's fixture. Removed,
+        # not blanked, so the child sees exactly what a fresh shell sees.
+        for name in (ENV_RESUME_DATA_FILE, ENV_LETTER_DATA_FILE):
+            env.pop(name, None)
         env[ENV_RESUME_DATA_SOURCE] = source
         env[ENV_SKIP_SNAPSHOT] = '1'
         # --update-all refreshes all four fixtures, so both variants have
@@ -413,7 +477,24 @@ def update_all_fixtures():
         from dist/ to the matching fixtures for `source_kind` ('default'
         or 'mine'). Returns the list of fixture paths copied, or None
         on error.
+
+        Checks first that the build it is copying from really read that
+        data source, by what the build itself stamped into
+        dist/pdf_meta.json. The environment above is the intent; the
+        manifest is the fact, and a fixture is committed on the fact.
         """
+        actual = read_data_source()
+        if actual != source_kind:
+            c.err(
+                f"the {source_kind!r} pass built from data_source="
+                f"{actual!r} (per {PDF_META_FILE.relative_to(ROOT)}), not "
+                f"{source_kind!r}."
+            )
+            c.detail("Refusing to copy its PDFs over the "
+                     f"{source_kind} fixtures. Nothing was changed.")
+            c.detail(f"Check that {ENV_RESUME_DATA_FILE} is not set by "
+                     "something outside this script, then re-run.")
+            return None
         copied = []
         for label, pdf_path, default_fixture, mine_fixture in pdf_variants():
             if not pdf_path.exists():
@@ -518,7 +599,8 @@ def main() -> int:
                 f"then re-run --update",
             )
         for label, pdf_path, default_fix, mine_fix in variants:
-            target = resolve_fixture_path(default_fix, mine_fix)
+            target = resolve_fixture_path(default_fix, mine_fix,
+                                          require_meta=True)
             if not safe_copy(pdf_path, target):
                 return 1
             c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
@@ -530,7 +612,8 @@ def main() -> int:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
         bootstrapped = False
         for label, pdf_path, default_fix, mine_fix in variants:
-            target = resolve_fixture_path(default_fix, mine_fix)
+            target = resolve_fixture_path(default_fix, mine_fix,
+                                          require_meta=True)
             if not target.exists():
                 if not safe_copy(pdf_path, target):
                     return 1

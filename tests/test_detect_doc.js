@@ -169,7 +169,7 @@ test('listDataFiles labels each file so the picker can divide them', () => {
 
 test('resolveInsideRoot accepts paths within the project', () => {
   assertTrue(resolveInsideRoot('dist') !== null, 'a subdirectory');
-  assertTrue(resolveInsideRoot('dist/Gaius_Iulius_Resume.pdf') !== null, 'a file in one');
+  assertTrue(resolveInsideRoot('dist/Gaius_Caesar_Resume.pdf') !== null, 'a file in one');
   assertTrue(resolveInsideRoot('.') !== null, 'the root itself');
   assertTrue(resolveInsideRoot(path.join(ROOT, 'data')) !== null, 'an absolute path inside');
 });

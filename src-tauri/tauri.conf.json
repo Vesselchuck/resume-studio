@@ -22,19 +22,19 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../build/**/*",
-      "../data/resume_default.yml",
-      "../data/letter_default.yml",
-      "../data/_profile_default.yml",
-      "../fonts/**/*",
-      "../styles/**/*",
-      "../templates/**/*",
-      "../ui/**/*",
-      "../package.json",
-      "../resume.js",
-      "../letter.js",
-      "../requirements.txt"
-    ]
+    "resources": {
+      "../build/": "build/",
+      "../data/resume_default.yml": "data/resume_default.yml",
+      "../data/letter_default.yml": "data/letter_default.yml",
+      "../data/_profile_default.yml": "data/_profile_default.yml",
+      "../fonts/": "fonts/",
+      "../styles/": "styles/",
+      "../templates/": "templates/",
+      "../ui/": "ui/",
+      "../package.json": "package.json",
+      "../resume.js": "resume.js",
+      "../letter.js": "letter.js",
+      "../requirements.txt": "requirements.txt"
+    }
   }
 }

@@ -13,8 +13,26 @@
 const { spawnSync } = require('child_process');
 const c = require('./_console');
 
+/**
+ * The PYTHON override, trimmed; null when unset or blank.
+ *
+ * Trimmed because cmd.exe keeps everything up to the `&&`:
+ * `set PYTHON=py && node resume.js` sets PYTHON to "py " (trailing
+ * space), and spawning "py " fails with ENOENT — an error that names a
+ * program which looks exactly like the one that exists. A value that is
+ * blank after trimming is treated as unset, so auto-detection runs
+ * instead of spawning "".
+ */
+function pythonOverride() {
+  const raw = process.env.PYTHON;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed || null;
+}
+
 function detectPython() {
-  if (process.env.PYTHON) return process.env.PYTHON;
+  const override = pythonOverride();
+  if (override) return override;
   const candidates = process.platform === 'win32'
     ? ['python', 'py', 'python3']
     : ['python3', 'python'];
@@ -40,9 +58,9 @@ function detectPython() {
   c.detail('');
   c.detail('Install Python 3 or set the PYTHON env var explicitly:');
   c.detail('  bash/zsh:    PYTHON=python3.12 node resume.js');
-  c.detail('  cmd.exe:     set PYTHON=py && node resume.js');
+  c.detail('  cmd.exe:     set "PYTHON=py" && node resume.js');
   c.detail('  PowerShell:  $env:PYTHON="py"; node resume.js');
   process.exit(1);
 }
 
-module.exports = { detectPython };
+module.exports = { detectPython, pythonOverride };
