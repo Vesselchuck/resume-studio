@@ -22,7 +22,8 @@ call:
     build        -> build.build(mode=...)         (build.py's own main() calls this)
     build_letter -> build_letter.build_letter()
     crop    -> crop_pdf.crop_pages / apply_metadata / apply_language
-    raster  -> snapshot_pdf.render_pdf_pages      (the snapshot test's own rasterizer)
+    raster  -> snapshot_pdf.render_pdf_pages      (the snapshot test's own rasterizer,
+               with crop_pdf's crop applied in memory for a live preview)
 
 Nothing here reimplements layout, metadata derivation, cropping or
 rasterization. If a behavior needs to change, it changes in those
@@ -55,7 +56,8 @@ Operations
   build_letter-> {env} ........... the single-page cover letter; env as
                                    for build, e.g. {"LETTER_DATA_FILE": ...}
   crop        -> {input, output, meta}
-  raster      -> {path, scale, pages} -> base64 PNGs
+  raster      -> {path, scale, pages, known, crop, slot} -> base64 PNGs;
+                 see op_raster
   compare     -> {a, b, scale} -> per-page pixel-diff verdicts
   shutdown    -> {} .............. exits 0
 
@@ -92,6 +94,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import build as build_mod            # noqa: E402
 import crop_pdf as crop_mod          # noqa: E402
 import _console as c                 # noqa: E402
+import _pdf_page_keys as _page_keys  # noqa: E402
+import _png                          # noqa: E402
 
 PROTOCOL_VERSION = 1
 
@@ -306,17 +310,111 @@ def op_crop(req):
 
 
 def _pixel_hash(img):
-    """A fingerprint of a rendered page: its size, mode and every pixel."""
-    h = hashlib.blake2b(digest_size=16)
+    """A fingerprint of a rendered page: its size, mode and every pixel.
+
+    SHA-256 from the standard library: of the hashes hashlib always has,
+    the fastest over a page's ~6 MB of pixels on current CPUs (it has
+    hardware support where blake2b has none). Cut to 128 bits, the
+    length the blake2b digest it replaces had; the UI treats the value
+    as an opaque string.
+    """
+    h = hashlib.sha256()
     h.update(f"{img.mode}:{img.width}x{img.height}:".encode("ascii"))
     h.update(img.tobytes())
-    return h.hexdigest()
+    return h.hexdigest()[:32]
 
 
 def _encode_png(img):
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=False, compress_level=1)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    """Base64 PNG for the preview pane. See build/_png.py for the writer."""
+    return base64.b64encode(_png.encode(img)).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# Skipping pages that did not change
+#
+# A preview renders a fresh print of the whole document on every edit,
+# and most edits touch one page. _pdf_page_keys reads, from the PDF's
+# bytes, a key per page that changes whenever anything that page draws
+# changes. A caller that names a `slot` (the engine uses the document:
+# "resume", "letter") gets the pages whose key, scale, crop and pdfium
+# version all match that slot's previous render back without rendering
+# them again: same key, same pixels, so the same hash and the same PNG.
+#
+# The keys are coarse on purpose (a new glyph in a shared font changes
+# every page's key), and when the file is not the simple shape the key
+# reader understands it returns None and every page is rendered — a
+# page is only ever skipped on positive proof that its inputs are
+# byte-for-byte those of a page already rendered.
+#
+# Only the last render of each slot is remembered, so this holds at
+# most one document's page images per slot.
+# ---------------------------------------------------------------------------
+_RENDERED = {}
+
+#: What the render of a page depends on besides its key. A change to
+#: any of these must never let an old image through.
+def _render_signature(scale, crop):
+    import pypdfium2 as pdfium
+    return (
+        f"scale={scale!r}|crop={crop or 'none'}|"
+        f"pdfium={pdfium.PDFIUM_INFO}|pypdfium2={pdfium.PYPDFIUM_INFO}|"
+        f"raster=rgb/1"
+    ).encode("utf-8")
+
+
+def _slot_keys(data, scale, crop):
+    """Per-page cache keys for one render, or None to render every page."""
+    keys = _page_keys.page_keys(data)
+    if keys is None:
+        return None
+    signature = _render_signature(scale, crop)
+    return [hashlib.sha256(signature + b"|" + k.encode("ascii")).hexdigest() for k in keys]
+
+
+def _rasterize(path, scale, crop, only):
+    """snapshot_pdf.render_pdf_pages at `scale`, with the crop applied.
+
+    crop='letter' is the live preview: Chromium's raw print, cropped to
+    US Letter in memory by crop_pdf's own geometry. Everything else
+    renders the file as it is. If a page cannot be cropped in memory
+    (its MediaBox is inherited, which Chromium never does), the file is
+    cropped the CLI's way into a temp copy and that is rendered instead.
+    """
+    import pypdfium2 as pdfium
+    import snapshot_pdf
+
+    prepare = crop_mod.crop_pdfium_page_to_letter if crop == "letter" else None
+
+    # render_pdf_pages applies snapshot_pdf.SCALE. Swap it for the
+    # requested preview scale and put it back, so the snapshot test's
+    # own constant is never left modified.
+    saved_scale = snapshot_pdf.SCALE
+    snapshot_pdf.SCALE = scale
+    try:
+        try:
+            return snapshot_pdf.render_pdf_pages(pdfium, path, prepare, only)
+        except crop_mod.NoOwnMediaBox:
+            return _rasterize_file_cropped(pdfium, snapshot_pdf, path, only)
+    finally:
+        snapshot_pdf.SCALE = saved_scale
+
+
+def _rasterize_file_cropped(pdfium, snapshot_pdf, path, only):
+    import tempfile
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    crop_mod.crop_pages(PdfReader(str(path)), writer)
+    fd, tmp = tempfile.mkstemp(suffix=".pdf", prefix="studio-crop-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            writer.write(f)
+        return snapshot_pdf.render_pdf_pages(pdfium, Path(tmp), None, only)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def op_raster(req):
@@ -326,65 +424,129 @@ def op_raster(req):
     regression test uses, so what the preview shows and what the test
     compares come from one code path.
 
+    Request fields besides `path` and `scale`:
+      pages  — 1-based page numbers to return, or null for all
+      known  — {"<page>": "<hash>"} of images the caller already holds;
+               a page whose pixels hash the same comes back without a
+               PNG, marked unchanged
+      crop   — "letter" to crop to US Letter in memory before rendering
+               (the live preview renders Chromium's raw print this way);
+               omitted, the file is rendered as it is
+      slot   — a name for this stream of renders (the engine sends the
+               document). With it, pages whose PDF-level key matches the
+               slot's last render are not rendered again. See above.
+
     Imported lazily: pypdfium2 and Pillow are only needed for preview
     and snapshot work, and a worker used purely for building should not
     fail to start because they are missing.
     """
-    import pypdfium2 as pdfium
-    import snapshot_pdf
-
     path = Path(req["path"])
     if not path.exists():
         raise FileNotFoundError(f"no PDF at {path}")
 
     scale = float(req.get("scale") or 2.0)
-
-    # render_pdf_pages applies snapshot_pdf.SCALE. Swap it for the
-    # requested preview scale and put it back, so the snapshot test's
-    # own constant is never left modified.
-    saved_scale = snapshot_pdf.SCALE
-    snapshot_pdf.SCALE = scale
-    try:
-        images = snapshot_pdf.render_pdf_pages(pdfium, path)
-    finally:
-        snapshot_pdf.SCALE = saved_scale
-
+    crop = req.get("crop") or None
+    if crop not in (None, "letter"):
+        raise ValueError(f"unknown crop {crop!r}; expected 'letter' or none")
+    slot = req.get("slot") or None
     wanted = req.get("pages")
     # Pages the caller already holds, as {"<page>": "<hash>"}. A page whose
     # pixels hash the same is returned without a PNG, marked unchanged,
     # so an edit on page 1 does not re-encode page 2 or send it back.
     known = req.get("known") or {}
 
+    keys = None
+    previous = {}
+    if slot is not None:
+        keys = _slot_keys(path.read_bytes(), scale, crop)
+        previous = _RENDERED.get(slot) or {}
+        # Forget the slot until this render has finished, so a failure
+        # halfway can never leave it describing a mix of two prints.
+        _RENDERED.pop(slot, None)
+
+    def reusable(index):
+        """The previous render's entry for this page, if it may stand in."""
+        if keys is None:
+            return None
+        entry = previous.get(keys[index])
+        if entry is None:
+            return None
+        if known.get(str(index + 1)) == entry["hash"] or entry.get("png"):
+            return entry
+        return None  # the caller needs a PNG this slot never encoded
+
+    # Which pages to render: every wanted page that has no reusable entry.
+    # With no keys this is every wanted page, as before.
+    page_count = None
+    if keys is not None:
+        page_count = len(keys)
+        indices = [i for i in range(page_count) if not wanted or (i + 1) in wanted]
+        only = {i for i in indices if reusable(i) is None}
+    else:
+        only = None if not wanted else {p - 1 for p in wanted}
+
+    images = _rasterize(path, scale, crop, only)
+    if keys is not None and len(images) != len(keys):
+        # The key reader and pdfium disagree about the page count: trust
+        # neither the keys nor the partial render, and render everything.
+        keys = None
+        page_count = None
+        images = _rasterize(path, scale, crop, None)
+
     out = []
     to_encode = []
+    current = {}
     for idx, img in enumerate(images):
         if wanted and (idx + 1) not in wanted:
             continue
-        entry = {
-            "page": idx + 1,
-            "width": img.width,
-            "height": img.height,
-            "hash": _pixel_hash(img),
-        }
-        if known.get(str(idx + 1)) == entry["hash"]:
-            entry["unchanged"] = True
+        entry = reusable(idx) if img is None else None
+        if img is None and entry is None:
+            # Not rendered and nothing to stand in for it: cannot happen
+            # unless the file changed under us. Render it now.
+            img = _rasterize(path, scale, crop, {idx})[idx]
+        if entry is not None:
+            item = {"page": idx + 1, "width": entry["width"],
+                    "height": entry["height"], "hash": entry["hash"]}
+            cached = dict(entry)
         else:
-            to_encode.append((entry, img))
-        out.append(entry)
+            item = {"page": idx + 1, "width": img.width, "height": img.height,
+                    "hash": _pixel_hash(img)}
+            cached = {"width": img.width, "height": img.height, "hash": item["hash"]}
+            prev = previous.get(keys[idx]) if keys is not None else None
+            if prev and prev["hash"] == item["hash"] and prev.get("png"):
+                cached["png"] = prev["png"]
+        if known.get(str(idx + 1)) == item["hash"]:
+            item["unchanged"] = True
+        elif cached.get("png"):
+            item["png"] = cached["png"]
+        else:
+            to_encode.append((item, cached, img))
+        if keys is not None:
+            current[keys[idx]] = cached
+        out.append(item)
 
-    # PNG encoding is most of the rasterize step, and Pillow's encoder
-    # releases the GIL, so the pages are encoded side by side. The bytes
-    # are the same as encoding them one after another.
+    # PNG encoding is most of the rasterize step, and zlib releases the
+    # GIL, so the pages are encoded side by side. The bytes are the same
+    # as encoding them one after another.
     if len(to_encode) > 1:
         workers = min(len(to_encode), os.cpu_count() or 1)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            encoded = list(pool.map(_encode_png, (img for _, img in to_encode)))
+            encoded = list(pool.map(_encode_png, (img for _, _, img in to_encode)))
     else:
-        encoded = [_encode_png(img) for _, img in to_encode]
-    for (entry, _), png in zip(to_encode, encoded):
-        entry["png"] = png
+        encoded = [_encode_png(img) for _, _, img in to_encode]
+    for (item, cached, _), png in zip(to_encode, encoded):
+        item["png"] = png
+        cached["png"] = png
 
-    return {"scale": scale, "pageCount": len(images), "images": out}
+    if slot is not None and keys is not None:
+        _RENDERED[slot] = current
+
+    return {
+        "scale": scale,
+        "pageCount": page_count if page_count is not None else len(images),
+        "images": out,
+        "rendered": sum(1 for img in images if img is not None),
+    }
 
 
 def op_compare(req):

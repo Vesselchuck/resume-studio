@@ -1248,6 +1248,94 @@ def check_stylesheet_freshness():
         )
 
 
+class _TemplateLoader(FileSystemLoader):
+    """A FileSystemLoader that decides "changed" by the file's contents.
+
+    Jinja compiles a template once and keeps it on the Environment; with
+    auto_reload it asks the loader, before every use, whether the file
+    is still what was compiled. FileSystemLoader answers by comparing
+    modification times, which misses an edit that leaves the time
+    unchanged: a filesystem with coarse timestamps (FAT: 2 s), two saves
+    inside one tick, a tool that restores times. The warm worker keeps
+    one Environment for as long as the Studio is open, so it would then
+    go on rendering the old template. Comparing the text cannot miss,
+    and reading a few small files costs microseconds.
+    """
+
+    def get_source(self, environment, template):
+        source, filename, _mtime_check = super().get_source(environment, template)
+
+        def uptodate():
+            # Read exactly as FileSystemLoader reads (text mode, same
+            # encoding), so the comparison is like for like.
+            try:
+                with open(filename, encoding=self.encoding) as f:
+                    return f.read() == source
+            except (OSError, UnicodeDecodeError):
+                return False
+
+        return source, filename, uptodate
+
+
+#: One Environment per templates directory, for the life of the process.
+_JINJA_ENVS = {}
+
+
+def jinja_env(templates_dir=None):
+    """The shared Jinja Environment: created once, reused by every build.
+
+    Creating an Environment is cheap; what it caches is not. Every
+    template is compiled to Python the first time it is used, and a
+    fresh Environment per build — which is what build() used to create —
+    recompiled resume.j2, measurement.j2 and _macros.j2 on every
+    keystroke in the Studio. The warm worker now compiles each once and
+    recompiles one only when its file changes (auto_reload, checked by
+    _TemplateLoader). A cold CLI run is one process and one build per
+    Environment either way.
+
+    build_letter.py uses this same Environment; its settings are the
+    ones every template in templates/ is written against.
+    """
+    templates_dir = str(templates_dir or TEMPLATES_DIR)
+    env = _JINJA_ENVS.get(templates_dir)
+    if env is not None:
+        return env
+
+    env = Environment(
+        loader=_TemplateLoader(str(templates_dir)),
+        # Checks every template for changes before using its compiled
+        # form (see _TemplateLoader) — Jinja's default, stated because a
+        # warm worker depends on it.
+        auto_reload=True,
+        # Autoescape is ON for every template extension. This is the
+        # single defense against an injected '&', '<', or '"' in the
+        # YAML data (resume names, descriptions, URLs) producing
+        # malformed HTML in <title>, <meta content="…">, or <a href="…">.
+        # Before the flip every `{{ var }}` had to be hand-written as
+        # `{{ var | e }}`, and several sites had been missed (<title>,
+        # meta author/description, og:* properties, the .name-first /
+        # .name-last spans). Flipping the default closes that whole
+        # category.
+        #
+        # Filter sites that need to emit literal HTML (the markdown
+        # filter expands `**bold**` into `<strong>` tags) MUST end the
+        # chain with `| safe` so autoescape doesn't re-escape the tags.
+        # In practice the only such chain is `bullet | e | md | safe`:
+        # the leading `| e` does real work (escapes '&' etc. before
+        # markdown_filter sees the text, which it would otherwise pass
+        # through raw), and `| safe` blocks the auto-escape that would
+        # otherwise hit `<strong>` and produce `&lt;strong&gt;`.
+        autoescape=True,
+        undefined=StrictUndefined,
+        trim_blocks=False,
+        lstrip_blocks=False,
+        keep_trailing_newline=True,
+    )
+    env.filters["md"] = markdown_filter
+    _JINJA_ENVS[templates_dir] = env
+    return env
+
+
 def build(mode='final'):
     """Build dist/index.html in the requested mode.
 
@@ -1294,33 +1382,7 @@ def build(mode='final'):
     # French-tagged PDF.
     lang = resolve_lang(data)
 
-    env = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        # Autoescape is ON for every template extension. This is the
-        # single defense against an injected '&', '<', or '"' in the
-        # YAML data (resume names, descriptions, URLs) producing
-        # malformed HTML in <title>, <meta content="…">, or <a href="…">.
-        # Before the flip every `{{ var }}` had to be hand-written as
-        # `{{ var | e }}`, and several sites had been missed (<title>,
-        # meta author/description, og:* properties, the .name-first /
-        # .name-last spans). Flipping the default closes that whole
-        # category.
-        #
-        # Filter sites that need to emit literal HTML (the markdown
-        # filter expands `**bold**` into `<strong>` tags) MUST end the
-        # chain with `| safe` so autoescape doesn't re-escape the tags.
-        # In practice the only such chain is `bullet | e | md | safe`:
-        # the leading `| e` does real work (escapes '&' etc. before
-        # markdown_filter sees the text, which it would otherwise pass
-        # through raw), and `| safe` blocks the auto-escape that would
-        # otherwise hit `<strong>` and produce `&lt;strong&gt;`.
-        autoescape=True,
-        undefined=StrictUndefined,
-        trim_blocks=False,
-        lstrip_blocks=False,
-        keep_trailing_newline=True,
-    )
-    env.filters["md"] = markdown_filter
+    env = jinja_env()
 
     if mode == 'measurement':
         # Render a single-page flowing layout. The solver opens this

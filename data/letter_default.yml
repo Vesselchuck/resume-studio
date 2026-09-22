@@ -92,7 +92,7 @@ letter:
   #     - First paragraph.
   #     - Second paragraph.
   #
-  # `**bold**` and `*italic*` work inside either form.
+  # `**bold**` works inside either form; other markdown prints as typed.
   body: |
     Patres Conscripti,
 

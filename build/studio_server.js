@@ -72,6 +72,65 @@ const DIST = path.join(ROOT, 'dist');
 // Printed on stdout when listening, for the Tauri shell to read.
 const READY_PREFIX = '\x1eSTUDIO_READY ';
 
+/*
+ * SAVES, AND FILES CAUGHT HALF-WRITTEN
+ * ------------------------------------
+ * A save reaches the preview through the watcher below, after
+ * WATCH_DEBOUNCE_MS of quiet. Editors often report one save as two or
+ * three events (write, then rename or touch); 20 ms collects those while
+ * adding next to nothing to every save.
+ *
+ * The cost of a short debounce is that the render can start while the
+ * editor is still writing: an editor that truncates the file and then
+ * writes it can be caught in between, and the YAML then reads as empty
+ * or cut off mid-line. On Windows the editor may also still hold the
+ * file open, and reading it fails with a sharing violation. Rather than
+ * flash that error, a preview whose data could not be read as YAML —
+ * or read as nothing at all, or not read because the file was locked —
+ * within HALF_WRITTEN_WINDOW_MS of a change is tried once more after
+ * HALF_WRITTEN_RETRY_MS. A file that really is broken fails the second
+ * time too and is reported as before, 50 ms later; a schema error in a
+ * file that parsed is never retried.
+ */
+const WATCH_DEBOUNCE_MS = 20;
+const HALF_WRITTEN_WINDOW_MS = 1000;
+const HALF_WRITTEN_RETRY_MS = 50;
+const HALF_WRITTEN_MESSAGE = /could not be read as YAML|is empty or not a YAML mapping/;
+
+/** True for a build failure that a half-written data file would cause. */
+function looksHalfWritten(err) {
+  if (!err) return false;
+  // build/worker.py reports a PermissionError as 'locked_file'.
+  if (err.kind === 'locked_file') return true;
+  return err.kind === 'build_failed' && HALF_WRITTEN_MESSAGE.test(String(err.message || ''));
+}
+
+/**
+ * Run `render`; if it fails the way a half-written file would, within
+ * HALF_WRITTEN_WINDOW_MS of the last change (`changedAt`, a Date.now()
+ * value or null), wait HALF_WRITTEN_RETRY_MS and run it once more.
+ * `now` and `sleep` are injectable for tests.
+ */
+async function retryIfHalfWritten(render, {
+  changedAt = null,
+  now = Date.now,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  onRetry = null,
+} = {}) {
+  const startedAt = now();
+  try {
+    return await render();
+  } catch (err) {
+    if (!looksHalfWritten(err) || changedAt === null
+        || startedAt - changedAt > HALF_WRITTEN_WINDOW_MS) {
+      throw err;
+    }
+    if (onRetry) onRetry(err);
+    await sleep(HALF_WRITTEN_RETRY_MS);
+    return await render();
+  }
+}
+
 /**
  * The two documents this app knows about, and how each one is built.
  *
@@ -779,8 +838,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         // come back without their PNG. See renderPreview in engine.js.
         const known = body.known && typeof body.known === 'object' && !Array.isArray(body.known)
           ? body.known : undefined;
-        const result = await engine.renderPreview({
+        const result = await retryIfHalfWritten(() => engine.renderPreview({
           doc: id, scale: body.scale, pages: body.pages, env: envForRender(id), known,
+        }), {
+          changedAt: lastChangeAt,
+          onRetry: () => console.log('  (the data file may have been caught mid-save; reading it again)'),
         });
         broadcast('render', { state: 'done', doc: id, ms: result.totalMs });
         return { mode: 'live', ...result };
@@ -1160,6 +1222,8 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   let watchTimer = null;
   let pollTimer = null;
   let lastSeen = new Map();
+  // When the watcher last reported a change; see retryIfHalfWritten.
+  let lastChangeAt = null;
 
   function inputFiles() {
     const found = new Map();
@@ -1182,17 +1246,16 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     return found;
   }
 
-  // How long a save has to be quiet before it triggers a render. Editors
-  // often report one save as two or three events (write, then rename or
-  // touch); 75 ms collects those while adding little to every save. A
-  // change that still lands while a render is running is not lost: the
-  // app queues one more render for it (see preview() in ui/index.html).
-  const WATCH_DEBOUNCE_MS = 75;
-
+  // How long a save has to be quiet before it triggers a render — see
+  // WATCH_DEBOUNCE_MS at the top of this file, and retryIfHalfWritten
+  // for a save caught halfway. A change that still lands while a render
+  // is running is not lost: the app queues one more render for it (see
+  // preview() in ui/index.html).
   function noteChange(file) {
     clearTimeout(watchTimer);
     watchTimer = setTimeout(() => {
       lastSeen = inputFiles();   // resync so the poll doesn't re-fire
+      lastChangeAt = Date.now();
       broadcast('changed', { file: file || null });
     }, WATCH_DEBOUNCE_MS);
   }
@@ -1390,4 +1453,5 @@ if (require.main === module) {
 
 module.exports = { start, DOCS, READY_PREFIX, detectDoc, isDocumentFile,
                    listDataFiles, resolveInsideRoot, dataFileInfo, renderEnv,
-                   checkRequest, writeNew };
+                   checkRequest, writeNew, looksHalfWritten, retryIfHalfWritten,
+                   WATCH_DEBOUNCE_MS, HALF_WRITTEN_WINDOW_MS, HALF_WRITTEN_RETRY_MS };

@@ -131,7 +131,11 @@ const coldPython = {
   },
 };
 
-const pipeline = createPipeline({ root: ROOT, python: coldPython, variant: 'letter' });
+// navWait 'fonts': load + document.fonts.ready, as in resume.js and the
+// Studio's engine. See openDocument in build/pipeline.js.
+const pipeline = createPipeline({
+  root: ROOT, python: coldPython, variant: 'letter', navWait: 'fonts',
+});
 
 
 /* ─── Variant selection ───────────────────────────────────────── */

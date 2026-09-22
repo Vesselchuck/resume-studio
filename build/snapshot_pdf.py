@@ -313,8 +313,19 @@ PIXEL_RGB_TOLERANCE = 4         # 0–255 per channel
 MAX_DIFF_FRACTION = 0.001       # 0.1% of pixels
 
 
-def render_pdf_pages(pdfium, path: Path) -> list:
+def render_pdf_pages(pdfium, path: Path, prepare=None, only=None) -> list:
     """Rasterize all pages of a PDF to PIL Images at RENDER_DPI.
+
+    `prepare`, when given, is called with each pypdfium2 page before it
+    is rendered. The Studio's live preview passes
+    crop_pdf.crop_pdfium_page_to_letter, so it rasterizes Chromium's raw
+    print with the crop applied in memory rather than a cropped copy
+    written to disk. The snapshot test passes nothing and renders the
+    file exactly as it is.
+
+    `only`, when given, is a set of 0-based page indices to render; the
+    other entries of the returned list are None (the list still has one
+    entry per page). The preview uses it to skip pages it already has.
 
     The document is closed before returning. pypdfium2 holds an open
     file handle for the lifetime of the PdfDocument, and leaving that to
@@ -330,7 +341,13 @@ def render_pdf_pages(pdfium, path: Path) -> list:
     pdf = pdfium.PdfDocument(str(path))
     try:
         images = []
-        for page in pdf:
+        for index in range(len(pdf)):
+            if only is not None and index not in only:
+                images.append(None)
+                continue
+            page = pdf[index]
+            if prepare is not None:
+                prepare(page)
             bitmap = page.render(scale=SCALE)
             images.append(bitmap.to_pil().convert("RGB"))
         return images

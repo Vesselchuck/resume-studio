@@ -248,7 +248,12 @@ const coldPython = {
   },
 };
 
-const pipeline = createPipeline({ root: ROOT, python: coldPython });
+// navWait 'fonts': wait for `load` and document.fonts.ready, the same
+// wait the Studio's engine uses. The fonts are vendored and nothing is
+// fetched over a network, so the 500 ms of network silence
+// 'networkidle' waited for, twice per build, was idle time; the PDFs
+// are the same. See openDocument in build/pipeline.js.
+const pipeline = createPipeline({ root: ROOT, python: coldPython, navWait: 'fonts' });
 
 
 /* ─── CLI-only phases ─────────────────────────────────────────── */

@@ -41,6 +41,46 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+*The preview shows a change about twice as fast, and a save that
+changes nothing visible shows up almost at once. Builds from the
+command line are faster too. Every PDF and every preview pixel is
+unchanged, and nothing you rely on changed.*
+
+- **Changed.** The preview no longer rewrites the printed PDF to crop
+  it. It sets the same page boxes in memory before rasterizing, with
+  the box computed in one place for both. A Build still crops the file
+  and stamps its metadata as before.
+- **Changed.** The templates are compiled once per worker instead of
+  on every render, and recompiled when a template file's text changes.
+- **Changed.** After the first load, the preview replaces the
+  document already open in Chromium instead of loading the page from
+  scratch. A stylesheet or font change, and every 50th load, still
+  loads it from scratch.
+- **Changed.** A save that leaves the HTML, stylesheet, fonts and
+  metadata byte-for-byte unchanged, such as a comment, returns the
+  last pages without printing again. Pages whose printed content
+  didn't change are not rasterized again.
+- **Changed.** Page images are hashed with SHA-256 instead of BLAKE2b
+  and written as PNGs without per-row filters, which is about twice as
+  fast. The decoded pixels are the same.
+- **Changed.** A save starts a render after 20 ms of quiet instead of
+  75 ms. If the file can't be read as YAML within a second of the save,
+  because the editor may still be writing it, the preview reads it
+  once more after 50 ms before showing the error.
+- **Changed.** `node resume.js` and `node letter.js`, which the
+  Studio's Build runs, no longer wait for 500 ms without network
+  activity after loading the page. They wait for the page and its
+  fonts, as the preview does.
+- **Fixed.** `data/letter_default.yml` said `*italic*` works in the
+  letter body. Only `**bold**` does; other markdown prints as typed.
+- **Added.** `test_preview_raster.py` and `test_cli_navigation.js`,
+  and new checks in the crop, engine-equivalence, worker-equivalence
+  and Studio server tests. The full suite now takes about 30 seconds.
+
+---
+
 ## [0.8.0] — 2026-09-21
 
 *Breaking: the build now refuses data it used to print wrong or drop
@@ -856,6 +896,7 @@ the old names can still be followed.
 | 0.7.1 | — | a lost-save fix, faster previews, a security fix |
 | 0.8.0 | — | breaking: stricter data checks; Studio, build and security fixes |
 
+[Unreleased]: #unreleased
 [0.8.0]: #080--2026-09-21
 [0.7.1]: #071--2026-09-21
 [0.7.0]: #070--2026-09-21
