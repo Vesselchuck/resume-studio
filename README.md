@@ -868,6 +868,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 ├── LICENSE                   MIT license for project code (font files
 │                             under fonts/ are OFL 1.1 — see License section).
 ├── README.md                 This file.
+├── SECURITY.md               How to report a vulnerability privately.
 ├── docs/screenshots/         The images in this README (placeholder data).
 ├── package.json              Node deps (playwright, sass-embedded) + npm scripts.
 ├── package-lock.json         Exact-pinned lockfile for npm ci.
