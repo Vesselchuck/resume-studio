@@ -547,6 +547,9 @@ details[open]>summary::before{content:"▾"}
 
   var root = document.documentElement;
   function $(id) { return document.getElementById(id); }
+  // `html` is inserted as markup. Anything that did not come from this
+  // file — a file name, a server message, YAML content — must go through
+  // esc() first.
   function el(tag, cls, html) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -1499,7 +1502,7 @@ details[open]>summary::before{content:"▾"}
     modal.appendChild(body);
 
     var f = el('div', 'modal-f');
-    var useExisting = el('button', 'btn tiny', 'Read data/' + name);
+    var useExisting = el('button', 'btn tiny', 'Read data/' + esc(name));
     useExisting.addEventListener('click', async function () {
       scrim.remove();
       try {
@@ -1509,7 +1512,7 @@ details[open]>summary::before{content:"▾"}
         toast('Reading data/' + name, 'the dropped copy was discarded');
       } catch (err) { toast('Could not read it', err.message.slice(0, 80)); }
     });
-    var saveAs = el('button', 'btn tiny primary', 'Save as ' + suggestion);
+    var saveAs = el('button', 'btn tiny primary', 'Save as ' + esc(suggestion));
     saveAs.addEventListener('click', async function () {
       scrim.remove();
       try {

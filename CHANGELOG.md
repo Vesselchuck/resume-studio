@@ -43,6 +43,8 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
+- **Added.** `SECURITY.md`: how to report a vulnerability privately,
+  through GitHub's private vulnerability reporting.
 - **Fixed.** A file saved while the Studio was still rendering the
   previous save was ignored, so the preview could show an older version
   until the next save. The Studio now renders once more as soon as the
@@ -53,6 +55,10 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   pixels did not change — editing page 1 of the resume leaves page 2's
   image as it is. In testing, the time from saving the resume to seeing
   the updated page went from about 1.0 s to about 0.8 s.
+- **Security.** Dropping a file whose name contains HTML no longer
+  inserts that markup into the "already exists" dialog. The two buttons
+  that repeat the file name now escape it, as the rest of the app
+  already did. Found by GitHub code scanning (CodeQL).
 
 ---
 
