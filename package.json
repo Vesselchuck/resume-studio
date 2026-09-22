@@ -1,6 +1,6 @@
 {
   "name": "resume-studio",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Single-source-of-truth resume and cover letter, built to pixel-exact US Letter PDFs.",
   "scripts": {
