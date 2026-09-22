@@ -41,13 +41,13 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
-## [Unreleased]
+## [0.8.0] — 2026-09-21
 
 *Breaking: the build now refuses data it used to print wrong or drop
-without a word, and numbers with a leading zero stay text. The next
-release is therefore 0.8.0. Also: a letter Build could delete your
-real letter PDF, a crashed worker froze the Studio, and the Studio
-server accepted requests from other local pages.*
+without a word, and numbers with a leading zero stay text. Also: a
+letter Build could delete your real letter PDF, a crashed worker froze
+the Studio, and the Studio server accepted requests from other local
+pages.*
 
 ### Upgrading from 0.7.x
 
@@ -854,8 +854,9 @@ the old names can still be followed.
 | 0.6.1 | — | security updates, tests on GitHub |
 | 0.7.0 | — | breaking: the Studio is the only way to build |
 | 0.7.1 | — | a lost-save fix, faster previews, a security fix |
+| 0.8.0 | — | breaking: stricter data checks; Studio, build and security fixes |
 
-[Unreleased]: #unreleased
+[0.8.0]: #080--2026-09-21
 [0.7.1]: #071--2026-09-21
 [0.7.0]: #070--2026-09-21
 [0.6.1]: #061--2026-09-21
