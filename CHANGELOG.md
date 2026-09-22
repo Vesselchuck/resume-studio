@@ -41,7 +41,7 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
-## [Unreleased]
+## [0.8.1] — 2026-09-22
 
 *The preview shows a change about twice as fast, and a save that
 changes nothing visible shows up almost at once. Builds from the
@@ -895,8 +895,9 @@ the old names can still be followed.
 | 0.7.0 | — | breaking: the Studio is the only way to build |
 | 0.7.1 | — | a lost-save fix, faster previews, a security fix |
 | 0.8.0 | — | breaking: stricter data checks; Studio, build and security fixes |
+| 0.8.1 | — | a faster preview and faster builds, output unchanged |
 
-[Unreleased]: #unreleased
+[0.8.1]: #081--2026-09-22
 [0.8.0]: #080--2026-09-21
 [0.7.1]: #071--2026-09-21
 [0.7.0]: #070--2026-09-21
