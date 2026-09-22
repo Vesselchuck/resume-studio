@@ -124,7 +124,7 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
     pdfMeta: path.join(root, 'dist', isLetter ? 'letter_meta.json' : 'pdf_meta.json'),
     placement: path.join(root, 'dist', 'placement.json'),
 
-    // The PDFs are named after you — Gaius_Iulius_Resume.pdf, not
+    // The PDFs are named after you — Gaius_Caesar_Resume.pdf, not
     // resume-color.pdf — and the name lives in the YAML, which only
     // Python reads. So these two are getters rather than strings:
     // the stem arrives in dist/pdf_meta.json, which build.py writes
@@ -529,6 +529,13 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
     });
 
     if (!fit) {
+      // reported() promises the driver this was already printed; without
+      // the lines below letter.js exited 1 having said nothing at all.
+      c.err('Could not measure the cover letter');
+      c.detail(`${path.relative(root, paths.html)} has no .page / .letter `
+        + 'element with content to measure.');
+      c.detail('The letter template or its build step likely changed; rebuild, '
+        + 'and check templates/ for the .page and .letter wrappers.');
       throw reported(new Error('Could not find .page/.letter to measure'));
     }
 

@@ -77,8 +77,9 @@ DATA_FILE_DEFAULT = DATA_DIR / "letter_default.yml"
 def load_data():
     """Load letter data with the same precedence as build.load_data.
 
-    Returns a (data, source) tuple where `source` is 'mine' or
-    'default'. See module docstring for the RESUME_DATA_SOURCE rules.
+    Returns a (data, source) tuple where `source` is 'mine',
+    'default' or 'explicit' (see build.data_source_for). See module
+    docstring for the RESUME_DATA_SOURCE rules.
     """
     # An explicit file wins over everything else — see build.load_data
     # for why this exists rather than a tool copying files around.
@@ -92,19 +93,16 @@ def load_data():
                 f"{ENV_LETTER_DATA_FILE} points at a file that does not "
                 f"exist:\n  {path}"
             )
-        try:
-            shown = path.relative_to(ROOT)
-        except ValueError:
-            shown = path
+        shown = build._shown(path)
         c.ok_pair("Loaded data", str(shown))
-        with path.open(encoding="utf-8") as f:
-            data = _yaml_loader.load(f)
+        data = build.read_yaml(path)
         if not isinstance(data, dict):
             build.fail(
                 f"{shown} is empty or not a YAML mapping at the top "
                 f"level (parsed as {type(data).__name__})."
             )
-        return build.apply_profile(data, path), 'mine'
+        return build.apply_profile(data, path), build.data_source_for(
+            path, DATA_FILE_DEFAULT, DATA_FILE_MINE)
 
     override = os.environ.get(ENV_RESUME_DATA_SOURCE, '').strip().lower()
     if override == 'mine':
@@ -137,8 +135,7 @@ def load_data():
             f"  {DATA_FILE_DEFAULT.relative_to(ROOT)}"
         )
     c.ok_pair("Loaded data", str(path.relative_to(ROOT)))
-    with path.open(encoding="utf-8") as f:
-        data = _yaml_loader.load(f)
+    data = build.read_yaml(path)
     if not isinstance(data, dict):
         build.fail(
             f"{path.relative_to(ROOT)} is empty or not a YAML mapping at the "
@@ -230,8 +227,11 @@ def validate_data(data):
         if "description" in meta and meta["description"] is not None \
                 and not isinstance(meta["description"], str):
             raise build.SchemaError("'meta.description' must be a string if provided")
-        if "lang" in meta and not isinstance(meta["lang"], str):
-            raise build.SchemaError("'meta.lang' must be a string if provided")
+        # Null is the same as leaving it out; resolve_lang defaults it.
+        if meta.get("lang") is not None and not isinstance(meta["lang"], str):
+            raise build.SchemaError(
+                "'meta.lang' must be a string if provided, e.g. lang: en-US"
+            )
 
     # Letter.
     letter = data["letter"]
@@ -319,10 +319,49 @@ _MONTHS = ("January", "February", "March", "April", "May", "June",
 # English-speaking regions that write the day first. Not an exhaustive
 # list of the world's date conventions — just the ones where writing
 # "September 20, 2026" to a reader of English would look wrong.
+#
+# Two UN M.49 area codes are included as well: `150` (Europe — en-150
+# is the tag for English as used across Europe, which writes the day
+# first everywhere) and `001` (the world — en-001 is "international
+# English", and month-first is the US convention rather than the
+# international one). Other numeric areas fall through to month-first
+# like any unlisted region.
 _DAY_FIRST_REGIONS = frozenset({
     "GB", "IE", "AU", "NZ", "ZA", "IN", "PK", "BD", "LK",
     "KE", "NG", "GH", "TZ", "UG", "ZW", "MT", "SG", "MY", "HK",
+    "150", "001",
 })
+
+
+def _date_region(lang):
+    """
+    (language, region) from a BCP-47 tag, for format_date's purposes.
+
+    Only as much of BCP 47 as choosing a date order needs:
+
+      • `_` is read as `-`. `en_GB` is a POSIX locale name rather than a
+        language tag, but it is what people type, and reading it as
+        plain `en` would print a British reader a US date.
+      • The region is the first subtag after the language that is two
+        letters (ISO 3166, `GB`) or three digits (UN M.49, `150` for
+        Europe, `001` for the world). A four-letter script subtag
+        (`Latn`) is skipped over.
+      • Nothing after a single-character singleton counts. `x-` opens a
+        private-use section and `u-`/`t-` extensions, so the `gb` in
+        `en-x-gb` is a private label, not the United Kingdom.
+    """
+    subtags = [s for s in re.split(r"[-_]", str(lang or "")) if s]
+    if not subtags:
+        return "", ""
+    language = subtags[0].lower()
+    region = ""
+    for sub in subtags[1:]:
+        if len(sub) == 1:
+            break                           # singleton: extension/private use
+        if (len(sub) == 2 and sub.isalpha()) or (len(sub) == 3 and sub.isdigit()):
+            region = sub.upper()
+            break
+    return language, region
 
 
 def format_date(today, lang):
@@ -345,9 +384,7 @@ def format_date(today, lang):
     `today` is a datetime.date; `lang` is the BCP-47 tag already
     resolved by build.resolve_lang (so it is never None here).
     """
-    subtags = [s for s in str(lang or "").split("-") if s]
-    language = subtags[0].lower() if subtags else ""
-    region = next((s.upper() for s in subtags[1:] if len(s) == 2), "")
+    language, region = _date_region(lang)
 
     if language != "en":
         return today.isoformat()

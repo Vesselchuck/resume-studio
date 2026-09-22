@@ -26,8 +26,14 @@
  * missing). The runner detects SKIP markers and shows them as
  * yellow warnings via c.warn_pair(), distinct from passing suites.
  *
+ * A suite that exits 0 but reports zero passed tests (or no parseable
+ * summary at all) is never shown as a pass: it is a yellow "ran 0
+ * tests" warning and counts as a skip. The same holds for Python's
+ * "Ran 0 tests".
+ *
  *   STRICT_TESTS=1 converts SKIP into a hard failure (exit code 1).
- *   Use this in CI to ensure no suite is silently bypassed.
+ *   Use this in CI to ensure no suite is silently bypassed. Accepts
+ *   1/true/on/yes (any case); anything else, including 0/false, is off.
  *
  * Run with:  node build/run_tests.js
  *
@@ -63,16 +69,55 @@ const PYTHON = detectPython();
 
 const userArg = process.argv[2];
 
+/**
+ * Parse a boolean-ish env var: 1/true/on/yes (trimmed, any case) is on,
+ * anything else — including "0", "false", "off" and the empty string —
+ * is off. `Boolean(process.env.X)` is the trap this avoids: every
+ * non-empty string is truthy, so STRICT_TESTS=0 used to turn strict
+ * mode ON.
+ */
+function envFlag(name) {
+  const raw = process.env[name];
+  if (raw === undefined) return false;
+  return ['1', 'true', 'on', 'yes'].includes(String(raw).trim().toLowerCase());
+}
+
+/**
+ * The env for Python children. Test output and the modules under test
+ * print emoji (the _console symbols); on Windows a captured pipe
+ * defaults to the ANSI code page (cp1252), where encoding ✅ raises
+ * UnicodeEncodeError and the suite dies for reasons unrelated to what
+ * it tests. build/engine.js sets the same two for its worker.
+ */
+function pythonEnv() {
+  return { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+}
+
+/**
+ * Describe why a child produced no exit status. spawnSync reports a
+ * spawn failure (ENOENT for a misspelled PYTHON, EACCES, a timeout) in
+ * r.error and leaves r.status null; a signal kill sets r.signal. Either
+ * way the child printed nothing, so without this the user sees
+ * "failures (exit 2)" and no reason.
+ */
+function describeNoStatus(r, cmd) {
+  if (r.error) return `could not run ${cmd}: ${r.error.message}`;
+  if (r.signal) return `${cmd} was killed by ${r.signal}`;
+  return `${cmd} exited without a status`;
+}
+
 /* ──────────────────────────────────────────────────────────────
    Single-target mode: pass-through runners (preserve native output)
    ────────────────────────────────────────────────────────────── */
 
 function runPythonInherit(args) {
   try {
-    execFileSync(PYTHON, args, { cwd: ROOT, stdio: 'inherit' });
+    execFileSync(PYTHON, args, { cwd: ROOT, stdio: 'inherit', env: pythonEnv() });
     return 0;
   } catch (err) {
-    return typeof err.status === 'number' ? err.status : 2;
+    if (typeof err.status === 'number') return err.status;
+    c.err(`could not run ${PYTHON}: ${err.message}`);
+    return 2;
   }
 }
 
@@ -81,7 +126,9 @@ function runNodeInherit(jsFile) {
     execFileSync(process.execPath, [jsFile], { cwd: ROOT, stdio: 'inherit' });
     return 0;
   } catch (err) {
-    return typeof err.status === 'number' ? err.status : 2;
+    if (typeof err.status === 'number') return err.status;
+    c.err(`could not run ${path.basename(jsFile)}: ${err.message}`);
+    return 2;
   }
 }
 
@@ -104,14 +151,28 @@ function runNodeInherit(jsFile) {
  */
 function runPythonCaptured(args, label) {
   const start = Date.now();
-  const r = spawnSync(PYTHON, args, { cwd: ROOT, encoding: 'utf-8' });
+  const r = spawnSync(PYTHON, args, { cwd: ROOT, encoding: 'utf-8', env: pythonEnv() });
   const elapsed = ((Date.now() - start) / 1000).toFixed(3);
   const code = typeof r.status === 'number' ? r.status : 2;
 
   const combined = (r.stdout || '') + (r.stderr || '');
 
+  // "Ran 0 tests" is not a pass. unittest exits 0 on it before Python
+  // 3.12 and 5 ("NO TESTS RAN") from 3.12 on; either way discovery found
+  // nothing — a broken import path, a renamed directory — and a green
+  // tick would say the opposite. Reported as a skip, so STRICT_TESTS
+  // turns it into a failure.
+  const ran = combined.match(/Ran\s+(\d+)\s+tests?\s+in\s+/);
+  if ((code === 0 || code === 5) && ran && Number(ran[1]) === 0) {
+    c.warn_pair(label, `ran 0 tests (in ${elapsed}s)`);
+    c.detail('unittest discovered no tests — check tests/ and its imports');
+    return { exitCode: 0, skipped: true };
+  }
+
   if (code !== 0) {
     c.err_pair(label, `failures (exit ${code})`);
+    if (r.status === null) c.detail(describeNoStatus(r, PYTHON));
+    else if (!combined.trim()) c.detail(`${PYTHON} exited ${code} without printing anything`);
     process.stdout.write(combined);
     return { exitCode: code, skipped: false };
   }
@@ -148,10 +209,14 @@ function runPythonCaptured(args, label) {
     return { exitCode: 0, skipped: true };
   }
 
-  // Parse "Ran N tests in X.YYYs" out of the output for the count.
-  const m = combined.match(/Ran\s+(\d+)\s+tests?\s+in\s+/);
-  const n = m ? m[1] : '?';
-  c.ok_pair(label, `${n} passed in ${elapsed}s`);
+  // "Ran N tests in X.YYYs" is the count. Without it the run cannot be
+  // shown as a pass: exit 0 with no summary means unittest never got as
+  // far as running anything we can vouch for.
+  if (!ran) {
+    c.warn_pair(label, `ran 0 tests (no unittest summary, in ${elapsed}s)`);
+    return { exitCode: 0, skipped: true };
+  }
+  c.ok_pair(label, `${ran[1]} passed in ${elapsed}s`);
   return { exitCode: 0, skipped: false };
 }
 
@@ -183,6 +248,7 @@ function runNodeCaptured(jsFile, label) {
 
   if (code !== 0) {
     c.err_pair(label, `failures (exit ${code})`);
+    if (r.status === null) c.detail(describeNoStatus(r, `node ${path.basename(jsFile)}`));
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
     return { exitCode: code, skipped: false };
@@ -201,9 +267,22 @@ function runNodeCaptured(jsFile, label) {
   }
 
   // Parse "N passed, M failed" out of stdout.
+  //
+  // A suite that exits 0 having passed nothing is not a pass: it bailed
+  // out before its assertions (an early return, a swallowed error) or
+  // never called report(). It gets a warning and counts as a skip —
+  // STRICT_TESTS then fails it — rather than a green tick that would
+  // hide it. test_engine_equivalence.js once did exactly this: every
+  // engine startup failure printed "0 passed, 0 failed" and showed ✅.
   const m = stdout.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
-  const n = m ? m[1] : '?';
-  c.ok_pair(label, `${n} passed in ${elapsed}s`);
+  if (!m || Number(m[1]) === 0) {
+    c.warn_pair(label, m ? `ran 0 tests (in ${elapsed}s)`
+                         : `ran 0 tests (no "N passed" summary, in ${elapsed}s)`);
+    const lastLine = stdout.trim().split('\n').filter(Boolean).pop();
+    if (lastLine) c.detail(lastLine.trim());
+    return { exitCode: 0, skipped: true };
+  }
+  c.ok_pair(label, `${m[1]} passed in ${elapsed}s`);
   return { exitCode: 0, skipped: false };
 }
 
@@ -235,7 +314,7 @@ if (userArg) {
 } else {
   // Discover-all mode: capture + summarize each runner.
   // Python first since it's faster.
-  const strictTests = Boolean(process.env.STRICT_TESTS);
+  const strictTests = envFlag('STRICT_TESTS');
   let anySkipped = false;
 
   /** Fold a runner's structured result into the running tally. */
@@ -261,7 +340,7 @@ if (userArg) {
   // Used in CI to catch silent skips (e.g. missing browser binary
   // that would otherwise let invariant tests slip past).
   if (anySkipped && strictTests && exitCode === 0) {
-    c.err('STRICT_TESTS=1 — skipped suites are treated as failures');
+    c.err('STRICT_TESTS is on — skipped suites (and suites that ran 0 tests) are treated as failures');
     exitCode = 1;
   }
 }

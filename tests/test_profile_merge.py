@@ -76,7 +76,32 @@ class TestDeepMerge(unittest.TestCase):
 
     def test_a_mapping_can_be_replaced_by_a_scalar(self):
         """Type changes take the override, rather than half-merging."""
-        self.assertEqual(build.deep_merge({"a": {"b": 1}}, {"a": None}), {"a": None})
+        self.assertEqual(build.deep_merge({"a": {"b": 1}}, {"a": "x"}), {"a": "x"})
+
+    def test_null_does_not_wipe_a_profile_mapping(self):
+        """`meta:` with nothing under it is 'not set', not 'delete'.
+
+        It used to replace the profile's whole meta block, so the build
+        then failed on a missing maxPages the document never mentioned,
+        and lost the profile's meta.lang.
+        """
+        merged = build.deep_merge(
+            {"meta": {"lang": "en-GB", "maxPages": 2}},
+            {"meta": None, "role": "X"},
+        )
+        self.assertEqual(merged["meta"], {"lang": "en-GB", "maxPages": 2})
+
+    def test_null_does_not_wipe_a_nested_profile_value(self):
+        merged = build.deep_merge(
+            {"meta": {"lang": "en-GB"}},
+            {"meta": {"lang": None, "description": "D"}},
+        )
+        self.assertEqual(merged["meta"], {"lang": "en-GB", "description": "D"})
+
+    def test_null_with_nothing_underneath_is_kept(self):
+        """No profile value to fall back on: the document's null stays."""
+        self.assertEqual(build.deep_merge({"a": 1}, {"b": None}),
+                         {"a": 1, "b": None})
 
     def test_inputs_are_not_mutated(self):
         """The profile dict is reused across two builds in the warm engine."""
@@ -85,6 +110,30 @@ class TestDeepMerge(unittest.TestCase):
         build.deep_merge(base, override)
         self.assertEqual(base, {"name": {"first": "Gaius"}})
         self.assertEqual(override, {"name": {"last": "Caesar"}})
+
+
+class TestResolveLang(unittest.TestCase):
+    """build.resolve_lang: one answer for both the HTML and the PDF."""
+
+    def test_meta_null_does_not_crash(self):
+        self.assertEqual(build.resolve_lang({"meta": None}), "en-US")
+
+    def test_meta_absent(self):
+        self.assertEqual(build.resolve_lang({}), "en-US")
+
+    def test_whitespace_only_lang_falls_back(self):
+        """lang="" in the HTML while crop_pdf stamped en-US was the bug."""
+        self.assertEqual(build.resolve_lang({"meta": {"lang": "   "}}), "en-US")
+
+    def test_lang_is_stripped(self):
+        self.assertEqual(build.resolve_lang({"meta": {"lang": " en-GB "}}), "en-GB")
+
+    def test_null_lang(self):
+        self.assertEqual(build.resolve_lang({"meta": {"lang": None}}), "en-US")
+
+    def test_document_meta_null_keeps_profile_lang(self):
+        merged = build.deep_merge({"meta": {"lang": "fr-FR"}}, {"meta": None})
+        self.assertEqual(build.resolve_lang(merged), "fr-FR")
 
 
 class TestApplyProfile(unittest.TestCase):
@@ -174,6 +223,31 @@ class TestApplyProfile(unittest.TestCase):
             {"meta": {"maxPages": 2}},
         )
         self.assertEqual(contributions, ["meta.lang", "name"])
+
+    def test_contributions_count_a_null_as_missing(self):
+        """The log must name what the profile filled in for a `meta:` left
+        empty, since the merge now fills it."""
+        contributions = build._profile_contributions(
+            {"meta": {"lang": "en-US", "maxPages": 2}},
+            {"meta": {"lang": None}},
+        )
+        self.assertEqual(contributions, ["meta.lang", "meta.maxPages"])
+
+    def test_document_meta_null_keeps_the_profile_meta(self):
+        self.profile("meta:\n  lang: en-GB\n  maxPages: 2\n")
+        with silenced() as out:
+            merged = build.apply_profile({"meta": None}, self.doc)
+        self.assertEqual(merged["meta"], {"lang": "en-GB", "maxPages": 2})
+        self.assertIn("meta", out.getvalue())
+
+    def test_document_contact_rows_keep_the_profile_address(self):
+        """What resume.schema.json's contact description now says."""
+        self.profile("contact:\n  address: Roma\n  rows:\n    - value: a\n")
+        with silenced():
+            merged = build.apply_profile(
+                {"contact": {"rows": [{"value": "z"}]}}, self.doc)
+        self.assertEqual(merged["contact"],
+                         {"address": "Roma", "rows": [{"value": "z"}]})
 
 
 class TestMigratedDocumentValidates(unittest.TestCase):

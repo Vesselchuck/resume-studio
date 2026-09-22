@@ -30,15 +30,17 @@
  *      fixtures. Auto-bootstraps on first build.
  *
  * The PDFs are named after you, from `name.first` / `name.last` in
- * the profile — dist/Gaius_Iulius_Resume.pdf and
- * dist/Gaius_Iulius_Resume_Grayscale.pdf. See build/_output_name.py.
+ * the profile — dist/Gaius_Caesar_Resume.pdf and
+ * dist/Gaius_Caesar_Resume_Grayscale.pdf. See build/_output_name.py.
  *
  * Run with: node resume.js
  *
  * The script auto-detects Python by trying platform-appropriate
  * candidates. To override, set the PYTHON env var:
  *   bash/zsh:    PYTHON=python3.12 node resume.js
- *   cmd.exe:     set PYTHON=py && node resume.js
+ *   cmd.exe:     set "PYTHON=py" && node resume.js
+ *                (the quotes keep cmd.exe from putting the space before
+ *                && into the value; detect_python trims it anyway)
  *   PowerShell:  $env:PYTHON="py"; node resume.js
  *
  * Requires:
@@ -106,15 +108,24 @@ const PYTHON = detectPython();
 
 /**
  * Build the env passed to subprocesses (build.py, crop_pdf.py,
- * snapshot_pdf.py). When resume.js's own stdout is a TTY, forward
- * that signal via FORCE_COLOR=1 so subprocesses keep their ANSI
- * codes — otherwise execFileSync's pipe-captured stdout would look
- * like non-TTY to them and they'd suppress color. NO_COLOR
- * passthrough is automatic since process.env is inherited.
+ * snapshot_pdf.py, the test runner). When resume.js would itself print
+ * color (its stdout is a TTY, or FORCE_COLOR asks for it), forward
+ * that via FORCE_COLOR=1 so subprocesses keep their ANSI codes —
+ * otherwise execFileSync's pipe-captured stdout would look like
+ * non-TTY to them and they'd suppress color. Asking colorEnabled()
+ * rather than isTTY is what keeps a user's FORCE_COLOR=0 from being
+ * overwritten with 1. NO_COLOR passthrough is automatic since
+ * process.env is inherited.
+ *
+ * PYTHONUTF8 / PYTHONIOENCODING: the Python children print emoji (the
+ * _console symbols). With stdout captured into a pipe, Windows Python
+ * encodes to the ANSI code page (cp1252), where ✅ raises
+ * UnicodeEncodeError and the build dies on its first status line.
+ * build/engine.js sets the same two for its worker.
  */
 function subprocessEnv() {
-  const env = { ...process.env };
-  if (process.stdout.isTTY) {
+  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  if (c.colorEnabled(process.stdout)) {
     env.FORCE_COLOR = '1';
   }
   return env;
@@ -167,7 +178,10 @@ function runPython(scriptArgs, fallbackLabel) {
     process.stdout.write(out);
   } catch (err) {
     if (err.stdout) process.stdout.write(err.stdout);
-    if (!err.stdout && !err.stderr) {
+    // A null status means the script never ran to an exit — spawn
+    // failed (a bad PYTHON) or a signal killed it — so whatever it
+    // printed, it did not print why it stopped.
+    if ((!err.stdout && !err.stderr) || typeof err.status !== 'number') {
       c.err(`${fallbackLabel}: ${err.message}`);
     }
     throw reported(err);
@@ -357,6 +371,17 @@ function runSnapshot() {
     return;
   }
 
+  // A file named through RESUME_DATA_FILE that is neither the template
+  // nor data/resume.yml has no fixture to compare against, so there is
+  // nothing to check — say so rather than report it as a difference.
+  if (readDataSource() === 'explicit') {
+    c.banner('Snapshot (skipped)');
+    c.detail('Fixtures exist only for data/resume_default.yml and data/resume.yml;',
+             { stream: process.stdout });
+    c.detail('this build read a different file.', { stream: process.stdout });
+    return;
+  }
+
   c.banner('Snapshot');
   try {
     runPython(
@@ -364,14 +389,37 @@ function runSnapshot() {
       'Snapshot test failed',
     );
   } catch (err) {
-    // The subprocess already printed its per-page diff lines.
-    c.detail('To accept this as the new baseline:');
-    c.detail('  python build/snapshot_pdf.py --update');
+    // Exit 1 is a visible difference; anything else (2: a missing
+    // dependency, fixture or metadata file) means the comparison never
+    // ran, and the subprocess has already said why.
+    const differs = err.status === 1;
+    if (differs) {
+      // The subprocess already printed its per-page diff lines.
+      c.detail('To accept this as the new baseline:');
+      c.detail('  python build/snapshot_pdf.py --update');
+    }
     if (mode === 'strict') {
       throw reported(err);
     }
-    c.warn_pair('Snapshot differs',
-      'the PDFs above were still written — see the diff files listed');
+    if (differs) {
+      c.warn_pair('Snapshot differs',
+        'the PDFs above were still written — see the diff files listed');
+    } else {
+      c.warn_pair('Snapshot not checked',
+        'the PDFs above were still written — see the message above');
+    }
+  }
+}
+
+
+/** data_source from dist/pdf_meta.json, or null if it can't be read. */
+function readDataSource() {
+  try {
+    const meta = JSON.parse(
+      fs.readFileSync(path.join(ROOT, 'dist', 'pdf_meta.json'), 'utf-8'));
+    return typeof meta.data_source === 'string' ? meta.data_source : null;
+  } catch {
+    return null;
   }
 }
 
@@ -445,8 +493,8 @@ function pruneStaleOutputs(variant, keep) {
     path.join(ROOT, 'dist'),
     variant,
     keep,
-    name => c.info_pair('Removed stale PDF', `dist/${name} (not this build's name)`),
-    (name, why) => c.warn_pair('Could not remove', `dist/${name} — ${why}`),
+    name => c.info_pair('Removed stale PDF', `${path.join('dist', name)} (not this build's name)`),
+    (name, why) => c.warn_pair('Could not remove', `${path.join('dist', name)} — ${why}`),
   );
 }
 
@@ -457,6 +505,11 @@ function pruneStaleOutputs(variant, keep) {
   let browser;
   let exitCode = 0;
   try {
+    // Validated first: a typo in RESUME_VARIANTS is known before any
+    // work starts, and used to surface only after the tests, the Sass
+    // compile, the measurement pass and the browser had all run.
+    const variants = selectedVariants();
+
     runTests();
 
     c.banner('Build (measurement)');
@@ -488,7 +541,6 @@ function pruneStaleOutputs(variant, keep) {
     await pipeline.verifyInvariants(page, placement.pages.length);
 
     c.banner('PDF');
-    const variants = selectedVariants();
     if (!variants.grayscale) dropUnbuiltVariant(pipeline.paths.grayscalePdf, 'grayscale');
     if (!variants.color) dropUnbuiltVariant(pipeline.paths.colorPdf, 'color');
     await pipeline.printPdfs(page, {

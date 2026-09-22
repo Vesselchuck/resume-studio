@@ -112,11 +112,50 @@ class TestLoadData(unittest.TestCase):
         with silenced():
             data, source = build.load_data()
         self.assertEqual(data["name"]["first"], "Explicit")
-        self.assertEqual(source, "mine")
+        # Neither canonical file, so neither fixture describes it.
+        self.assertEqual(source, "explicit")
         # The file it was told to read is the file it read — and the
         # ones it was not told to read are untouched.
         self.assertFalse(self.default_path.exists())
         self.assertFalse(self.mine_path.exists())
+
+    def test_explicit_file_that_is_the_template_is_labelled_default(self):
+        """Picking resume_default.yml in the Studio used to stamp 'mine',
+        which pointed the snapshot tool at the private fixture."""
+        self.default_path.write_text(MINIMAL_YAML, encoding="utf-8")
+        os.environ[ENV_RESUME_DATA_FILE] = str(self.default_path)
+        with silenced():
+            _, source = build.load_data()
+        self.assertEqual(source, "default")
+
+    def test_explicit_file_matched_by_resolved_path(self):
+        self.default_path.write_text(MINIMAL_YAML, encoding="utf-8")
+        (self.tmpdir / "sub").mkdir()
+        os.environ[ENV_RESUME_DATA_FILE] = str(
+            self.tmpdir / "sub" / ".." / self.default_path.name)
+        with silenced():
+            _, source = build.load_data()
+        self.assertEqual(source, "default")
+
+    def test_explicit_file_that_is_yours_is_labelled_mine(self):
+        self.mine_path.write_text(MINIMAL_YAML, encoding="utf-8")
+        os.environ[ENV_RESUME_DATA_FILE] = str(self.mine_path)
+        with silenced():
+            _, source = build.load_data()
+        self.assertEqual(source, "mine")
+
+    def test_invalid_yaml_fails_cleanly(self):
+        """A YAML error is a fail() with the line, not a traceback."""
+        bad = self.tmpdir / "bad.yml"
+        bad.write_text("name:\n  first: A\n  first: B\n", encoding="utf-8")
+        os.environ[ENV_RESUME_DATA_FILE] = str(bad)
+        err = io.StringIO()
+        with silenced(), contextlib.redirect_stderr(err), \
+                self.assertRaises(SystemExit):
+            build.load_data()
+        self.assertIn("could not be read as YAML", err.getvalue())
+        self.assertIn("duplicate key 'first'", err.getvalue())
+        self.assertIn("line 3", err.getvalue())
 
     def test_explicit_file_beats_both_the_source_var_and_the_search(self):
         self.default_path.write_text(MINIMAL_YAML.replace("Gaius", "FromDefault"),

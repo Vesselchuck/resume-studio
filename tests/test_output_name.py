@@ -46,24 +46,24 @@ class TestTheConvention(unittest.TestCase):
     """The shape the user asked for: First_Last_Resume."""
 
     def test_resume_stem(self):
-        self.assertEqual(stem("Gaius", "Iulius"), "Gaius_Iulius_Resume")
+        self.assertEqual(stem("Gaius", "Caesar"), "Gaius_Caesar_Resume")
 
     def test_cover_letter_stem(self):
-        self.assertEqual(stem("Gaius", "Iulius", "letter"),
-                         "Gaius_Iulius_Cover_Letter")
+        self.assertEqual(stem("Gaius", "Caesar", "letter"),
+                         "Gaius_Caesar_Cover_Letter")
 
     def test_color_takes_the_bare_stem(self):
         # The color PDF is the one that gets attached to applications,
         # so it gets the clean name; only grayscale is suffixed.
-        self.assertEqual(on.color_pdf("dist", "Gaius_Iulius_Resume").name,
-                         "Gaius_Iulius_Resume.pdf")
-        self.assertEqual(on.grayscale_pdf("dist", "Gaius_Iulius_Resume").name,
-                         "Gaius_Iulius_Resume_Grayscale.pdf")
+        self.assertEqual(on.color_pdf("dist", "Gaius_Caesar_Resume").name,
+                         "Gaius_Caesar_Resume.pdf")
+        self.assertEqual(on.grayscale_pdf("dist", "Gaius_Caesar_Resume").name,
+                         "Gaius_Caesar_Resume_Grayscale.pdf")
 
     def test_both_variants_share_one_stem(self):
         # Not decoration: the app pairs them by stem, and pruneStale
         # in _output_name.js keeps whichever two the build produced.
-        s = stem("Gaius", "Iulius")
+        s = stem("Gaius", "Caesar")
         color = on.color_pdf("dist", s).name
         gray = on.grayscale_pdf("dist", s).name
         self.assertTrue(gray.startswith(color[:-len(".pdf")]))
@@ -172,7 +172,7 @@ class TestFilesystemSafety(unittest.TestCase):
         # Cutting mid-run would otherwise yield "Foo_..._" + "_Resume".
         raw = ("x" * (on.MAX_PART - 1)) + "  yyy"
         self.assertFalse(on.slug_part(raw).endswith("_"))
-        self.assertNotIn("__", stem(raw, "Iulius"))
+        self.assertNotIn("__", stem(raw, "Caesar"))
 
 
 class TestDegenerateInput(unittest.TestCase):
@@ -205,6 +205,45 @@ class TestDegenerateInput(unittest.TestCase):
         self.assertTrue(result.endswith("_Resume"))
 
 
+class TestMixedScriptNames(unittest.TestCase):
+    """A part that would lose letters to folding is kept whole.
+
+    The ASCII pass used to keep only the Latin half: "Zoë 山田" became
+    "Zoe", "Petrov-Смирнов" became "Petrov" — a file named after half
+    a person.
+    """
+
+    def test_latin_and_cjk_in_one_part(self):
+        self.assertEqual(on.slug_part("Zoë 山田"), "Zoë_山田")
+
+    def test_latin_and_cyrillic_in_one_part(self):
+        self.assertEqual(on.slug_part("Petrov-Смирнов"), "Petrov-Смирнов")
+
+    def test_the_full_stem(self):
+        self.assertEqual(
+            on.stem({"first": "Zoë 山田", "last": "Petrov-Смирнов"}, "resume"),
+            "Zoë_山田_Petrov-Смирнов_Resume")
+
+    def test_pure_latin_parts_are_still_folded(self):
+        self.assertEqual(on.slug_part("Zoë"), "Zoe")
+        self.assertEqual(on.stem({"first": "Zoë", "last": "山田"}, "resume"),
+                         "Zoe_山田_Resume")
+
+    def test_mixed_script_stays_filesystem_safe(self):
+        got = on.slug_part('Zoë/山田: "x"*?<>|\x07')
+        for ch in '\\/:*?"<>|\x07':
+            self.assertNotIn(ch, got)
+        self.assertIn("山田", got)
+
+    def test_mixed_script_is_capped(self):
+        got = on.slug_part("Zoë " + "山" * 200)
+        self.assertLessEqual(len(got), on.MAX_PART)
+
+    def test_symbols_alone_do_not_trigger_the_fallback(self):
+        """Only letters count: an emoji or a dash is not a lost letter."""
+        self.assertEqual(on.slug_part("Ann – Lee ★"), "Ann_Lee")
+
+
 class TestMetadataRoundTrip(unittest.TestCase):
     """The stem travels to Node through the build metadata."""
 
@@ -212,10 +251,10 @@ class TestMetadataRoundTrip(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             meta = Path(tmp) / "pdf_meta.json"
-            meta.write_text(json.dumps({"output_stem": "Gaius_Iulius_Resume"}),
+            meta.write_text(json.dumps({"output_stem": "Gaius_Caesar_Resume"}),
                             encoding="utf-8")
             self.assertEqual(on.stem_from_meta(meta, "resume"),
-                             "Gaius_Iulius_Resume")
+                             "Gaius_Caesar_Resume")
 
     def test_a_missing_metadata_file_yields_the_document_suffix(self):
         # The bootstrap case: nothing has been built, so the fallback

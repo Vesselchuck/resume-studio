@@ -148,7 +148,12 @@ const MAX_CONSECUTIVE_PUSHES = 2;
  * final HTML, modulo sub-pixel rounding.
  */
 function sidebarBlockHeight(block, offset, count, isContinuation) {
-  if (count === 0) return 0;
+  // An empty block still renders its heading, so it costs the heading
+  // (and no heading-to-items gap, since there are no items). Only a
+  // continuation slice with nothing in it is truly zero-height.
+  // validate_data rejects empty blocks upstream; this keeps the solver
+  // honest regardless of what reaches it.
+  if (count === 0) return isContinuation ? 0 : block.headingHeight;
   const heading = isContinuation ? 0 : block.headingHeight;
   const headingGap = (!isContinuation && count > 0) ? block.headingToItemsGap : 0;
   const itemSlice = block.items.slice(offset, offset + count);

@@ -19,9 +19,18 @@ the CHANGELOG entry for the fix if you'd like it.
 
 ## What is in scope
 
-Resume Studio runs on your own computer. Its server listens on
-127.0.0.1 only and accepts requests from its own window, and your data
-files never leave the machine. Worth reporting, for example:
+Resume Studio runs on your own computer, and your data files never
+leave the machine. Its server listens on 127.0.0.1 only, and it
+answers a request only when:
+
+- the `Host` header is `127.0.0.1:<port>` or `localhost:<port>` for
+  the port it is listening on, which stops a DNS-rebinding page from
+  reading it;
+- the `Origin` header, if sent, is that same address and port, so a
+  page from any other site or local port can't drive it;
+- a POST body is sent as `application/json`.
+
+Worth reporting, for example:
 
 - a way for a web page, a dropped file or a data file to run code or
   read files through the Studio;

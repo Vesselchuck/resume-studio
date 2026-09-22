@@ -39,6 +39,7 @@ import os
 import re
 import json
 import argparse
+import difflib
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -124,6 +125,33 @@ def markdown_filter(text):
     return re.sub(r"(?<!\*)\*\*([^*\n]+?)\*\*(?!\*)", r"<strong>\1</strong>", s)
 
 
+def _shown(path):
+    """`path` relative to the project root when it is inside it."""
+    try:
+        return Path(path).relative_to(ROOT)
+    except ValueError:
+        return Path(path)
+
+
+def read_yaml(path):
+    """
+    Parse one YAML file through the project loader, or fail cleanly.
+
+    A syntax error, a duplicate key or a bad explicit tag used to reach
+    the terminal as a Python traceback ending in the useful part. The
+    useful part is kept — PyYAML's message already names the line and
+    column — and the traceback is dropped.
+    """
+    try:
+        with Path(path).open(encoding="utf-8") as f:
+            return _yaml_loader.load(f)
+    except _yaml_loader.YAMLError as e:
+        fail(
+            f"{_shown(path)} could not be read as YAML.\n"
+            + "\n".join(line.rstrip() for line in str(e).splitlines())
+        )
+
+
 # ─── The shared profile ──────────────────────────────────────────
 
 #: A file of values common to every document, merged underneath each
@@ -180,9 +208,20 @@ def deep_merge(base, override):
     chose, and "override one contact row" would be impossible to
     express. Replacing means a document that mentions `rows` at all
     owns the whole list, which is easy to predict and easy to undo.
+
+    A null in `override` means "not set", not "delete". A key written
+    with nothing after it (`meta:` with its children commented out,
+    `lang:` left blank) is the YAML spelling of leaving it out, and the
+    validators already treat it that way; letting it replace the base
+    value instead would make an empty `meta:` wipe the profile's
+    meta.lang and meta.maxPages and fail the build with "maxPages
+    missing" about a key the document never mentioned. A null the base
+    has no value for is kept, so the document still says what it said.
     """
     merged = dict(base)
     for key, value in override.items():
+        if value is None and merged.get(key) is not None:
+            continue
         if isinstance(merged.get(key), dict) and isinstance(value, dict):
             merged[key] = deep_merge(merged[key], value)
         else:
@@ -227,8 +266,7 @@ def apply_profile(data, doc_path):
     if not profile_path.exists():
         return data
 
-    with profile_path.open(encoding="utf-8") as f:
-        profile = _yaml_loader.load(f)
+    profile = read_yaml(profile_path)
 
     # An empty file is a reasonable thing to leave lying around while
     # you decide what to put in it; a list or a string is a mistake.
@@ -265,11 +303,46 @@ def _profile_contributions(profile, data, prefix=""):
     found = []
     for key, value in profile.items():
         path = f"{prefix}{key}"
-        if key not in data:
+        if value is None:
+            continue
+        if data.get(key) is None:       # absent, or null (see deep_merge)
             found.append(path)
         elif isinstance(value, dict) and isinstance(data[key], dict):
             found.extend(_profile_contributions(value, data[key], f"{path}."))
     return sorted(found)
+
+
+#: The data_source labels a build can stamp into its metadata manifest.
+#:   'default'  — the shipped template (data/resume_default.yml)
+#:   'mine'     — your own file (data/resume.yml)
+#:   'explicit' — any other file, named through RESUME_DATA_FILE /
+#:                LETTER_DATA_FILE. Snapshot fixtures exist only for the
+#:                first two, so snapshot_pdf.py refuses this one.
+DATA_SOURCES = ('default', 'mine', 'explicit')
+
+
+def data_source_for(path, default_file, mine_file):
+    """
+    Label an explicitly named data file for the metadata manifest.
+
+    Every file handed over through RESUME_DATA_FILE used to be called
+    'mine', including data/resume_default.yml itself — so previewing
+    the template through the Studio's file picker, then refreshing the
+    fixtures, compared (or overwrote) your private fixture with the
+    template's pixels. The label now says what the file is: one of the
+    two canonical files, compared by resolved path so a relative or
+    differently spelled path still matches, or 'explicit' for anything
+    else.
+    """
+    try:
+        resolved = Path(path).resolve()
+        if resolved == Path(default_file).resolve():
+            return 'default'
+        if resolved == Path(mine_file).resolve():
+            return 'mine'
+    except OSError:
+        pass
+    return 'explicit'
 
 
 def load_data():
@@ -285,8 +358,9 @@ def load_data():
     The env var is consumed by snapshot_pdf.py --update-all to force a
     specific data source for each of the two builds it runs.
 
-    Returns a (data, source) tuple where `source` is 'mine' or
-    'default'. Callers thread `source` explicitly into the PDF metadata
+    Returns a (data, source) tuple where `source` is 'mine',
+    'default' or 'explicit' (see data_source_for). Callers thread
+    `source` explicitly into the PDF metadata
     manifest. Previously this function stamped a `_data_source` field
     on the returned dict, which (a) mutated the user-data dict so
     iteration over its keys saw a phantom underscore-prefixed entry,
@@ -308,21 +382,16 @@ def load_data():
             path = ROOT / path
         if not path.exists():
             fail(f"{ENV_RESUME_DATA_FILE} points at a file that does not exist:\n  {path}")
-        try:
-            shown = path.relative_to(ROOT)
-        except ValueError:
-            shown = path
+        shown = _shown(path)
         c.ok_pair("Loaded data", str(shown))
-        with path.open(encoding="utf-8") as f:
-            data = _yaml_loader.load(f)
+        data = read_yaml(path)
         if not isinstance(data, dict):
             fail(
                 f"{shown} is empty or not a YAML mapping at the top "
                 f"level (parsed as {type(data).__name__})."
             )
-        # 'mine' for metadata purposes: it is not the shipped template,
-        # so the snapshot machinery should treat it as private data.
-        return apply_profile(data, path), 'mine'
+        return apply_profile(data, path), data_source_for(
+            path, DATA_FILE_DEFAULT, DATA_FILE_MINE)
 
     override = os.environ.get(ENV_RESUME_DATA_SOURCE, '').strip().lower()
     if override == 'mine':
@@ -359,8 +428,7 @@ def load_data():
             f"  {DATA_FILE_DEFAULT.relative_to(ROOT)}"
         )
     c.ok_pair("Loaded data", str(path.relative_to(ROOT)))
-    with path.open(encoding="utf-8") as f:
-        data = _yaml_loader.load(f)
+    data = read_yaml(path)
     if not isinstance(data, dict):
         fail(
             f"{path.relative_to(ROOT)} is empty or not a YAML "
@@ -423,9 +491,12 @@ def derive_pdf_metadata(data, lang, data_source):
         # as /Lang by crop_pdf.py — assistive tech (screen readers,
         # refreshable braille) reads this to pick pronunciation/voice.
         'lang':     lang,
-        # Whether the build used the placeholder template data or a
-        # local override. Consumed by snapshot_pdf.py so the visual
-        # regression test compares against the matching fixture.
+        # Which data file backed the build: 'default' (the shipped
+        # template), 'mine' (data/resume.yml) or 'explicit' (any other
+        # file named through RESUME_DATA_FILE). See DATA_SOURCES.
+        # Consumed by snapshot_pdf.py so the visual regression test
+        # compares against the matching fixture — and refuses outright
+        # for 'explicit', which has none.
         'data_source': data_source,
         # maxPages cap from meta.maxPages — read by resume.js to feed
         # the layout solver.
@@ -444,7 +515,7 @@ def resolve_lang(data: dict) -> str:
     Resolve the document's BCP-47 language tag.
 
     Single source of truth for the en-US fallback used when meta.lang is
-    absent or empty. Called exactly once per build, from build(), which
+    absent, null, blank or whitespace — or when `meta` itself is null. Called exactly once per build, from build(), which
     then threads the resolved value into:
       • template.render(lang=…) — drives <html lang="…">
       • derive_pdf_metadata(data, lang, …) — written into the PDF /Lang
@@ -454,7 +525,13 @@ def resolve_lang(data: dict) -> str:
     per build — ensures the HTML and PDF never disagree on the
     document language.
     """
-    return (data.get('meta', {}).get('lang') or 'en-US').strip()
+    lang = (data.get('meta') or {}).get('lang')
+    # `meta: null` has no .get, and a whitespace-only lang used to come
+    # out as lang="" in the HTML while crop_pdf.py stamped en-US into the
+    # PDF — the two disagreeing is exactly what this function prevents.
+    if not isinstance(lang, str):
+        return 'en-US'
+    return lang.strip() or 'en-US'
 
 
 def read_accent() -> str:
@@ -567,11 +644,177 @@ def _validate_id(value, ctx):
         )
 
 
+# ─── Validation helpers ──────────────────────────────────────────
+#
+# Every message names WHERE (a path like mainColumn[experience].jobs[2])
+# and WHAT TO WRITE INSTEAD. The two YAML mistakes that reach here most
+# often get their own wording, because the generic "must be a string"
+# is true and useless for both:
+#
+#   - Led migration: cut costs 30%     an unquoted ": " makes the line a
+#                                      one-key mapping, not text
+#   -                                  a dash with nothing after it is
+#                                      null, not an empty bullet
+#
+# TEXT FIELDS ACCEPT INTEGERS. `datetime: 2021`, `subtitle: 2015` and
+# `date: 2019` are read by YAML as numbers, and they always rendered as
+# the digits you typed. Rejecting them now would break files that
+# built, over a distinction nobody made on purpose. Booleans are NOT
+# text: `true` printed as "True" was never what anyone meant.
+
+#: Allowed keys per object. An object whose JSON schema declares
+#: additionalProperties:false is STRICT: an unknown key there is an
+#: error, matching what the editor already flags. Everywhere else an
+#: unknown key is a warning — reported, ignored, never fatal — because
+#: a stricter build must not reject a file that used to build.
+_KEYS_TOP = ("name", "role", "contact", "meta", "sidebar", "mainColumn")
+_KEYS_NAME = ("first", "last")                               # strict
+_KEYS_CONTACT = ("address", "rows")                          # strict
+_KEYS_CONTACT_ROW = ("value", "href")                        # strict
+_KEYS_META = ("description", "maxPages", "lang")
+_KEYS_SIDEBAR = ("blocks",)                                  # strict
+_KEYS_BLOCK = {"list": ("id", "type", "heading", "items"),
+               "details": ("id", "type", "heading", "rows")}
+_KEYS_GROUP = ("group",)                                     # strict
+_KEYS_DETAIL_ROW = ("label", "value", "href")                # strict
+_KEYS_SECTION = {"summary": ("type", "heading", "text"),
+                 "experience": ("type", "heading", "jobs"),
+                 "education": ("type", "heading", "items")}
+_KEYS_EDU_ITEM = ("title", "subtitle", "institution")        # strict
+_EXAMPLE_HEADING = {"summary": "Summary", "experience": "Work Experience",
+                    "education": "Education"}
+_KEYS_JOB = ("id", "title", "date", "datetime", "location",  # strict
+             "gap", "bullets")
+
+
+def _is_text(value):
+    """A value the templates can print as written: str, or a non-bool int."""
+    return isinstance(value, str) or (
+        isinstance(value, int) and not isinstance(value, bool))
+
+
+def _as_colon_line(value):
+    """
+    The line the user typed, if `value` is the one-key mapping YAML made
+    out of an unquoted `Text: more text`; otherwise None.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        (key, val), = value.items()
+        if _is_text(key) and (val is None or _is_text(val)):
+            return f"{key}: {val}" if val is not None else f"{key}:"
+    return None
+
+
+def _check_text(value, ctx, *, what, example, allow_blank=False):
+    """
+    Raise SchemaError unless `value` is printable text.
+
+    `what` names the thing in the message ("bullet", "'title'");
+    `example` is a line the user could write instead.
+    """
+    if _is_text(value):
+        if not allow_blank and isinstance(value, str) and not value.strip():
+            raise SchemaError(
+                f"{ctx}: {what} is blank — write the text, e.g. "
+                f"{example}, or delete the line"
+            )
+        return
+    if value is None:
+        raise SchemaError(
+            f"{ctx}: {what} is empty (nothing after the dash or colon) — "
+            f"write the text, e.g. {example}, or delete the line"
+        )
+    line = _as_colon_line(value)
+    if line is not None:
+        raise SchemaError(
+            f"{ctx}: {what} was read as a key/value mapping, not text, "
+            f"because it contains ': '. Wrap the whole text in double "
+            f"quotes: \"{line}\""
+        )
+    if isinstance(value, bool):
+        raise SchemaError(
+            f"{ctx}: {what} is {str(value).lower()} (a true/false value), "
+            f"not text — if you meant the word, quote it: "
+            f"\"{str(value).lower()}\""
+        )
+    if isinstance(value, list):
+        raise SchemaError(
+            f"{ctx}: {what} is a list, but it must be a single piece of "
+            f"text, e.g. {example}"
+        )
+    if isinstance(value, dict):
+        raise SchemaError(
+            f"{ctx}: {what} is a mapping, but it must be a single piece "
+            f"of text, e.g. {example}"
+        )
+    raise SchemaError(
+        f"{ctx}: {what} must be text; got {value!r} — quote it, e.g. "
+        f"\"{value}\""
+    )
+
+
+def _check_optional_text(obj, key, ctx, *, example):
+    """An optional text field: absent or null is fine; otherwise text."""
+    if obj.get(key) is not None:
+        _check_text(obj[key], ctx, what=f"'{key}'", example=example,
+                    allow_blank=True)
+
+
+def _check_keys(obj, allowed, ctx, warnings, *, strict, note="", hints=None):
+    """
+    Report keys of `obj` that nothing reads.
+
+    Strict objects raise; the rest append a warning. Either way the
+    message suggests the nearest allowed key, since a misspelling
+    (`locaton`) is by far the most common way to get here.
+    """
+    for key in obj:
+        if key in allowed:
+            continue
+        if hints and key in hints:
+            hint = hints[key]
+        else:
+            close = difflib.get_close_matches(str(key), allowed, n=1)
+            hint = f" (did you mean {close[0]!r}?)" if close else ""
+        if strict:
+            raise SchemaError(
+                f"{ctx}: unknown key {key!r}{hint} — the keys allowed "
+                f"here are {', '.join(allowed)}{note}. Rename it or "
+                f"delete the line"
+            )
+        warnings.append(f"unknown key {key!r} in {ctx} — ignored{hint}")
+
+
+def _check_list(value, ctx, *, what, example):
+    """A non-empty YAML list, with a message for each way it is not one."""
+    if isinstance(value, list):
+        if not value:
+            raise SchemaError(
+                f"{ctx}: {what} is an empty list — add at least one entry, "
+                f"or delete the block"
+            )
+        return
+    if value is None:
+        raise SchemaError(
+            f"{ctx}: {what} is missing or empty — write one entry per "
+            f"line, each starting with '- ':\n{example}"
+        )
+    if isinstance(value, str):
+        raise SchemaError(
+            f"{ctx}: {what} must be a list, one entry per line starting "
+            f"with '- ', not the single text {value!r}:\n{example}"
+        )
+    raise SchemaError(
+        f"{ctx}: {what} must be a list, one entry per line starting with "
+        f"'- ':\n{example}"
+    )
+
+
 def validate_data(data):
     """
     Validate the resume data shape up-front so failures surface
     with clear messages instead of as KeyError / StopIteration deep
-    in template rendering.
+    in template rendering — or, worse, as wrong output.
 
     Schema:
       • Top-level required keys: name, meta, sidebar, mainColumn
@@ -581,22 +824,37 @@ def validate_data(data):
       • contact, if provided, is a mapping with a required `rows` list
         (each row: non-empty `value`, optional `href`) and an optional
         string `address`
-      • meta has 'description' (string), 'maxPages' (positive int),
-        and an optional 'lang' (string)
+      • meta has 'description' (string), 'maxPages' (positive int, not
+        a boolean), and an optional 'lang' (string)
       • sidebar.blocks is a flat list; each block has a unique kebab-case 'id',
-        a 'type' in VALID_SIDEBAR_BLOCK_TYPES, and a heading
+        a 'type' in VALID_SIDEBAR_BLOCK_TYPES, and a heading. A list
+        block has a non-empty 'items' list of text lines or
+        {group: text} headings; a details block a non-empty 'rows'
+        list of {label, value, href?}
       • mainColumn is a list of section dicts; each 'type' is in
-        VALID_SECTION_TYPES; exactly one of each section type exists
-      • experience.jobs is a list; each job has a unique kebab-case 'id'
-        and either bullets (regular job) or gap=true (gap entry).
-        'gap', when present, must be an unquoted boolean
+        VALID_SECTION_TYPES; exactly one of each section type exists;
+        each has a 'heading'. summary has 'text'; education has an
+        'items' list of {title, subtitle?, institution?}
+      • experience.jobs is a list; each job has a unique kebab-case 'id',
+        a 'title', a 'date', optional 'datetime' / 'location', and
+        either bullets (regular job) or gap=true (gap entry, no
+        bullets). 'gap', when present, must be an unquoted boolean
+      • Text fields take a string or an integer (see above); bullets,
+        list lines, headings and titles must not be empty
 
-    Raises SchemaError on the first violation found.
+    Raises SchemaError on the first violation found. Returns a list of
+    warning strings — unknown keys in objects the JSON schema leaves
+    open — for the caller to print; an empty list means a clean file.
     """
+    warnings = []
+    if not isinstance(data, dict):
+        raise SchemaError("the file must be a YAML mapping at the top level")
+
     # Top-level structure.
     for key in ("name", "meta", "sidebar", "mainColumn"):
         if key not in data:
             raise SchemaError(f"missing top-level key: {key!r}")
+    _check_keys(data, _KEYS_TOP, "the top level", warnings, strict=False)
 
     # Name.
     if not isinstance(data["name"], dict):
@@ -604,6 +862,7 @@ def validate_data(data):
     for key in ("first", "last"):
         if not isinstance(data["name"].get(key), str):
             raise SchemaError(f"'name.{key}' must be a string")
+    _check_keys(data["name"], _KEYS_NAME, "name", warnings, strict=True)
 
     # Role (optional). Free-form subtitle rendered under the name; if
     # provided must be a string. A non-string would render via Python's
@@ -620,6 +879,7 @@ def validate_data(data):
         contact = data["contact"]
         if not isinstance(contact, dict):
             raise SchemaError("'contact' must be a mapping")
+        _check_keys(contact, _KEYS_CONTACT, "contact", warnings, strict=True)
         if "address" in contact and not isinstance(contact["address"], str):
             raise SchemaError("'contact.address' must be a string")
         rows = contact.get("rows")
@@ -634,35 +894,51 @@ def validate_data(data):
                 raise SchemaError(
                     f"{ctx}: must be a mapping with 'value' (and optional 'href')"
                 )
+            _check_keys(row, _KEYS_CONTACT_ROW, ctx, warnings, strict=True)
             if not isinstance(row.get("value"), str) or not row["value"]:
                 raise SchemaError(f"{ctx}: 'value' must be a non-empty string")
             if "href" in row and not isinstance(row["href"], str):
                 raise SchemaError(f"{ctx}: 'href' must be a string if provided")
 
     # Meta.
-    if not isinstance(data["meta"], dict):
+    meta = data["meta"]
+    if not isinstance(meta, dict):
         raise SchemaError("'meta' must be a mapping")
-    if not isinstance(data["meta"].get("description"), str):
+    _check_keys(meta, _KEYS_META, "meta", warnings, strict=False)
+    if not isinstance(meta.get("description"), str):
         raise SchemaError("'meta.description' must be a string")
-    max_pages = data["meta"].get("maxPages")
-    if not isinstance(max_pages, int) or max_pages < 1:
+    max_pages = meta.get("maxPages")
+    # bool is a subclass of int in Python, so `maxPages: true` would
+    # otherwise pass as 1.
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int) \
+            or max_pages < 1:
+        if isinstance(max_pages, str) and max_pages.isdigit():
+            hint = (" — write it without quotes or leading zeros, e.g. "
+                    f"maxPages: {int(max_pages) or 1}")
+        else:
+            hint = " — write a whole number of pages, e.g. maxPages: 2"
         raise SchemaError(
-            f"'meta.maxPages' must be a positive integer; got {max_pages!r}"
+            f"'meta.maxPages' must be a positive integer; got "
+            f"{max_pages!r}{hint}"
         )
     # meta.lang (optional). If provided must be a string — resolve_lang()
-    # calls .strip() on it, which would AttributeError on a non-string.
-    if "lang" in data["meta"] and not isinstance(data["meta"]["lang"], str):
-        raise SchemaError("'meta.lang' must be a string if provided")
+    # calls .strip() on it. Null is the same as leaving it out.
+    if meta.get("lang") is not None and not isinstance(meta["lang"], str):
+        raise SchemaError(
+            "'meta.lang' must be a string if provided, e.g. lang: en-US"
+        )
 
     # Sidebar.
     if not isinstance(data["sidebar"], dict):
         raise SchemaError("'sidebar' must be a mapping with a 'blocks' list")
+    _check_keys(data["sidebar"], _KEYS_SIDEBAR, "sidebar", warnings,
+                strict=True)
     blocks = data["sidebar"].get("blocks")
     if not isinstance(blocks, list) or not blocks:
         raise SchemaError("'sidebar.blocks' must be a non-empty list")
     seen_block_ids = set()
-    for i, block in enumerate(blocks, start=1):
-        ctx = f"sidebar.blocks[{i - 1}]"
+    for i, block in enumerate(blocks):
+        ctx = f"sidebar.blocks[{i}]"
         if not isinstance(block, dict):
             raise SchemaError(f"{ctx}: must be a mapping")
         _validate_id(block.get("id"), ctx)
@@ -676,6 +952,13 @@ def validate_data(data):
             )
         if not isinstance(block.get("heading"), str) or not block["heading"]:
             raise SchemaError(f"{ctx}: 'heading' must be a non-empty string")
+        own, other = ("items", "rows") if btype == "list" else ("rows", "items")
+        _check_keys(block, _KEYS_BLOCK[btype], ctx, warnings, strict=False,
+                    hints={other: f" (a {btype} block reads {own!r})"})
+        if btype == "list":
+            _validate_list_items(block.get("items"), f"{ctx}.items", warnings)
+        else:
+            _validate_detail_rows(block.get("rows"), f"{ctx}.rows", warnings)
 
     # Main column.
     if not isinstance(data["mainColumn"], list):
@@ -696,24 +979,80 @@ def validate_data(data):
                 f"supports exactly one of each"
             )
         seen_types.append(stype)
+        ctx = f"mainColumn[{stype}]"
+        _check_keys(section, _KEYS_SECTION[stype], ctx, warnings, strict=False)
+        heading = section.get("heading")
+        if not isinstance(heading, str) or not heading.strip():
+            raise SchemaError(
+                f"{ctx}: 'heading' must be a non-empty string — it is the "
+                f"section's visible title, e.g. heading: "
+                f"{_EXAMPLE_HEADING[stype]}"
+            )
     for required in ("summary", "experience", "education"):
         if required not in seen_types:
             raise SchemaError(f"mainColumn is missing required section type: {required!r}")
 
+    sections = {s["type"]: s for s in data["mainColumn"]}
+
+    # Summary: one paragraph of text.
+    _check_text(sections["summary"].get("text"), "mainColumn[summary]",
+                what="'text'",
+                example="text: >- followed by your paragraph on the next "
+                        "lines")
+
+    # Education: a list (may be empty) of {title, subtitle?, institution?}.
+    items = sections["education"].get("items")
+    if not isinstance(items, list):
+        raise SchemaError(
+            "mainColumn[education]: 'items' must be a list of entries, each "
+            "with a 'title' (and optional 'subtitle' and 'institution'); "
+            "use items: [] for none"
+        )
+    for i, item in enumerate(items):
+        ctx = f"mainColumn[education].items[{i}]"
+        if not isinstance(item, dict):
+            raise SchemaError(
+                f"{ctx}: must be a mapping with 'title' (and optional "
+                f"'subtitle' and 'institution'), e.g.\n"
+                f"  - title: BA in History\n"
+                f"    institution: Springfield University"
+            )
+        _check_keys(item, _KEYS_EDU_ITEM, ctx, warnings, strict=True)
+        _check_text(item.get("title"), ctx, what="'title'",
+                    example="title: BA in History")
+        _check_optional_text(item, "subtitle", ctx,
+                             example="subtitle: Minor in Latin")
+        _check_optional_text(item, "institution", ctx,
+                             example="institution: Springfield University")
+
     # Experience.jobs: every job has a unique kebab-case id; gap
     # entries skip bullets, regular jobs require a non-empty list.
-    experience = next(s for s in data["mainColumn"] if s["type"] == "experience")
+    experience = sections["experience"]
     if not isinstance(experience.get("jobs"), list) or not experience["jobs"]:
         raise SchemaError("'experience.jobs' must be a non-empty list")
     seen_job_ids = set()
-    for i, job in enumerate(experience["jobs"], start=1):
-        ctx = f"experience.jobs[{i - 1}]"
+    for i, job in enumerate(experience["jobs"]):
+        ctx = f"mainColumn[experience].jobs[{i}]"
         if not isinstance(job, dict):
             raise SchemaError(f"{ctx}: must be a mapping")
         _validate_id(job.get("id"), ctx)
         if job["id"] in seen_job_ids:
             raise SchemaError(f"{ctx}: duplicate job id {job['id']!r}")
         seen_job_ids.add(job["id"])
+        _check_keys(job, _KEYS_JOB, ctx, warnings, strict=True)
+        _check_text(job.get("title"), ctx, what="'title'",
+                    example="title: \"Operations Lead, Acme Coffee\"")
+        if "date" not in job:
+            raise SchemaError(
+                f"{ctx}: 'date' is missing — write the dates as you want "
+                f"them printed, e.g. date: Mar 2019 – Aug 2021"
+            )
+        _check_text(job["date"], ctx, what="'date'",
+                    example="date: Mar 2019 – Aug 2021", allow_blank=True)
+        _check_optional_text(job, "datetime", ctx,
+                             example="datetime: \"2019-03\"")
+        _check_optional_text(job, "location", ctx,
+                             example="location: Springfield, IL")
         # 'gap' must be a real boolean, not a string that looks like one.
         #
         # build/_yaml_loader.py resolves an unquoted `gap: true` to True,
@@ -727,13 +1066,85 @@ def validate_data(data):
                 f"{ctx}: 'gap' must be true or false, unquoted; got "
                 f"{job['gap']!r}"
             )
-        # Gap entries skip bullets entirely; regular jobs must have a list.
-        if not job.get("gap"):
-            if not isinstance(job.get("bullets"), list) or not job["bullets"]:
+        bullets = job.get("bullets")
+        if job.get("gap"):
+            # A gap entry is a title and a date. The template would print
+            # bullets under it all the same, in the gap entry's muted
+            # style — the one place in the document where achievements
+            # should not appear.
+            if bullets is not None and bullets != []:
                 raise SchemaError(
-                    f"{ctx}: regular job {job['id']!r} must have a non-empty "
-                    f"'bullets' list (or set 'gap: true' for a gap entry)"
+                    f"{ctx}: a gap entry (gap: true) has no bullets — "
+                    f"delete its 'bullets' list, or remove 'gap: true' to "
+                    f"make it a regular job"
                 )
+            continue
+        # Regular jobs must have a non-empty list of non-empty lines.
+        if not isinstance(bullets, list) or not bullets:
+            raise SchemaError(
+                f"{ctx}: regular job {job['id']!r} must have a non-empty "
+                f"'bullets' list (or set 'gap: true' for a gap entry)"
+            )
+        for j, bullet in enumerate(bullets):
+            _check_text(bullet, f"{ctx}.bullets[{j}]", what="bullet",
+                        example="- \"Cut onboarding time by **30%**\"")
+
+    return warnings
+
+
+def _validate_list_items(items, ctx, warnings):
+    """A list block's `items`: text lines and {group: text} headings."""
+    _check_list(items, ctx, what="'items'",
+                example="  items:\n    - Latin\n    - Greek")
+    for j, item in enumerate(items):
+        ictx = f"{ctx}[{j}]"
+        if isinstance(item, dict) and "group" in item:
+            _check_keys(item, _KEYS_GROUP, ictx, warnings, strict=True,
+                        note=" (a group heading is written - group: "
+                             "\"Heading\" on its own line)")
+            _check_text(item["group"], ictx, what="'group'",
+                        example="- group: \"Languages\"")
+            continue
+        if isinstance(item, dict) and _as_colon_line(item) is not None:
+            raise SchemaError(
+                f"{ictx}: this line was read as a key/value mapping, not "
+                f"text, because it contains ': '. Wrap it in double quotes: "
+                f"- \"{_as_colon_line(item)}\" — or, if it is a group "
+                f"heading, write - group: \"{next(iter(item))}\""
+            )
+        _check_text(item, ictx, what="list entry",
+                    example="- Latin, or - group: \"Languages\" for a "
+                            "heading")
+
+
+def _validate_detail_rows(rows, ctx, warnings):
+    """A details block's `rows`: {label, value, href?} mappings."""
+    _check_list(rows, ctx, what="'rows'",
+                example="  rows:\n    - label: GitHub\n"
+                        "      value: github.com/you")
+    for j, row in enumerate(rows):
+        rctx = f"{ctx}[{j}]"
+        if not isinstance(row, dict):
+            raise SchemaError(
+                f"{rctx}: must be a mapping with 'label' and 'value' (and "
+                f"optional 'href'), e.g.\n"
+                f"    - label: GitHub\n      value: github.com/you"
+            )
+        _check_keys(row, _KEYS_DETAIL_ROW, rctx, warnings, strict=True)
+        if "label" not in row:
+            raise SchemaError(
+                f"{rctx}: 'label' is missing — add the left-hand label, "
+                f"e.g. label: GitHub"
+            )
+        _check_text(row["label"], rctx, what="'label'",
+                    example="label: GitHub", allow_blank=True)
+        _check_text(row.get("value"), rctx, what="'value'",
+                    example="value: github.com/you")
+        if "href" in row and not isinstance(row["href"], str):
+            raise SchemaError(
+                f"{rctx}: 'href' must be a string if provided, e.g. "
+                f"href: \"https://github.com/you\""
+            )
 
 
 def check_no_module_collisions():
@@ -850,9 +1261,13 @@ def build(mode='final'):
     check_stylesheet_freshness()
     data, data_source = load_data()
     try:
-        validate_data(data)
+        warnings = validate_data(data)
     except SchemaError as e:
         fail(f"invalid resume data — {e}")
+    # Reported, never fatal: a key the build does not read in an object
+    # the schema leaves open. See _check_keys.
+    for warning in warnings:
+        c.warn(warning)
 
     # Resolve named sections — schema guarantees exactly one of each.
     sections_by_type = {s["type"]: s for s in data["mainColumn"]}

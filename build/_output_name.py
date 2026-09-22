@@ -7,10 +7,10 @@ a bad name for the file you attach to an application, where the
 recipient sees the filename before they see the document. So the name
 is now yours:
 
-    dist/Gaius_Iulius_Resume.pdf
-    dist/Gaius_Iulius_Resume_Grayscale.pdf
-    dist/Gaius_Iulius_Cover_Letter.pdf
-    dist/Gaius_Iulius_Cover_Letter_Grayscale.pdf
+    dist/Gaius_Caesar_Resume.pdf
+    dist/Gaius_Caesar_Resume_Grayscale.pdf
+    dist/Gaius_Caesar_Cover_Letter.pdf
+    dist/Gaius_Caesar_Cover_Letter_Grayscale.pdf
 
 The color variant takes the bare stem because it is the one you send;
 the grayscale variant is suffixed. Both come from `name.first` and
@@ -49,10 +49,14 @@ the stem is reduced to ASCII letters, digits and underscores:
   • Everything else outside [A-Za-z0-9] collapses to a single
     underscore, which covers spaces, hyphens, periods and the
     characters Windows forbids outright (\\ / : * ? " < > |).
-  • A name that folds away to nothing — a purely CJK name, say — falls
-    back to the raw characters with only the forbidden ones removed.
-    Modern filesystems take them; silently producing "Resume.pdf" for
-    such a person would not be acceptable.
+  • A name part that would LOSE LETTERS to folding — a purely CJK name,
+    or a mixed-script one like "Zoë 山田" or "Petrov-Смирнов", where the
+    ASCII pass would keep "Zoe" or "Petrov" and silently drop the rest —
+    falls back to the raw characters with only what the filesystem
+    forbids removed. Modern filesystems take them; producing
+    "Resume.pdf" for such a person, or a file named after half of
+    their name, would not be acceptable. The part is kept whole, not
+    half folded, so the name reads the way it was written.
   • Failing even that, the stem is the document suffix alone. The build
     always has somewhere to write.
 
@@ -121,6 +125,18 @@ def fold_to_ascii(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+def _loses_letters(folded: str) -> bool:
+    """True if `folded` still holds letters the ASCII filter would drop.
+
+    fold_to_ascii leaves behind exactly the letters it has no ASCII
+    reading for (CJK, Cyrillic, Greek, Arabic, …); anything else
+    non-ASCII at that point is punctuation or a symbol, which the
+    convention is happy to turn into a separator.
+    """
+    return any(ord(ch) > 127 and unicodedata.category(ch).startswith("L")
+               for ch in folded)
+
+
 def slug_part(raw) -> str:
     """Turn one name part into a filename-safe fragment.
 
@@ -131,13 +147,14 @@ def slug_part(raw) -> str:
     if not isinstance(raw, str) or not raw.strip():
         return ""
 
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", fold_to_ascii(_DROPPED.sub("", raw)))
-    cleaned = cleaned.strip("_")
+    folded = fold_to_ascii(_DROPPED.sub("", raw))
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", folded).strip("_")
 
-    if not cleaned:
-        # Nothing survived the ASCII filter. Keep the name rather than
-        # the convention: strip what the filesystem forbids, collapse
-        # whitespace, and let the characters through.
+    if not cleaned or _loses_letters(folded):
+        # The ASCII filter would drop letters — all of them, or the
+        # non-Latin half of a mixed-script name. Keep the name rather
+        # than the convention: strip what the filesystem forbids,
+        # collapse whitespace, and let the characters through.
         cleaned = _FORBIDDEN.sub("", _DROPPED.sub("", raw))
         cleaned = re.sub(r"\s+", SEPARATOR, cleaned).strip("_. ")
 

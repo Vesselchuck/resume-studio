@@ -33,7 +33,8 @@
  * Color suppression
  * ──────────────────
  *   Banner ANSI emitted iff the target stream is a TTY. Honors
- *   NO_COLOR and FORCE_COLOR env vars (https://no-color.org).
+ *   NO_COLOR and FORCE_COLOR env vars (https://no-color.org); see
+ *   colorEnabled() for the exact rules (FORCE_COLOR=0 disables).
  *   Emoji are emitted unconditionally — they're not ANSI.
  *
  * Streams
@@ -67,9 +68,27 @@ const _DETAIL_INDENT   = _consoleConstants.DETAIL_INDENT;
 const _LABEL_PAD_WIDTH = _consoleConstants.LABEL_PAD_WIDTH;
 
 
-function colorEnabled(stream) {
-  if (process.env.NO_COLOR) return false;
-  if (process.env.FORCE_COLOR) return true;
+/**
+ * Whether to emit ANSI on `stream`. The common convention, in order:
+ *
+ *   NO_COLOR present and non-empty          → off (https://no-color.org)
+ *   FORCE_COLOR = 0 / false                 → off, even on a TTY
+ *   FORCE_COLOR = 1 / 2 / 3 / true / empty  → on, even when piped
+ *   otherwise                               → on iff the stream is a TTY
+ *
+ * An empty FORCE_COLOR counts as "set" (chalk and Node's own
+ * `util.inspect` read it that way). Any other value is not a
+ * recognized level and falls back to the TTY check. The previous
+ * truthiness test meant FORCE_COLOR=0 — a request for no color —
+ * forced color ON.
+ */
+function colorEnabled(stream, env = process.env) {
+  if (env.NO_COLOR) return false;
+  if (env.FORCE_COLOR !== undefined) {
+    const v = String(env.FORCE_COLOR).trim().toLowerCase();
+    if (v === '0' || v === 'false') return false;
+    if (v === '' || v === '1' || v === '2' || v === '3' || v === 'true') return true;
+  }
   return Boolean(stream && stream.isTTY);
 }
 
@@ -159,4 +178,5 @@ function detail(msg, { stream = process.stderr } = {}) {
 module.exports = {
   banner, ok, err, warn, detail,
   ok_pair, err_pair, warn_pair, info_pair,
+  colorEnabled,
 };

@@ -15,7 +15,8 @@ each consumer's read site, since they carry domain-specific meaning
 
 Imported by:
   • build.py            — reads ENV_RESUME_DATA_SOURCE
-  • snapshot_pdf.py     — sets all three when invoking resume.js
+  • snapshot_pdf.py     — sets RESUME_DATA_SOURCE and removes the two
+                          data-file variables when invoking resume.js
 """
 
 import json

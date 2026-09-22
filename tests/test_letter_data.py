@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "build"))
 
 import build_letter as clb  # noqa: E402
 from build import SchemaError  # noqa: E402
-from _env_contract import ENV_RESUME_DATA_SOURCE  # noqa: E402
+from _env_contract import ENV_RESUME_DATA_SOURCE, ENV_LETTER_DATA_FILE  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -580,6 +580,117 @@ class TestRecipientSplitting(unittest.TestCase):
         block = "Hiring Team\nAcme Inc.\n100 Main St"
         as_list = ["Hiring Team", "Acme Inc.", "100 Main St"]
         self.assertEqual(self.letter_with(block), self.letter_with(as_list))
+
+
+
+class TestDateLocaleEdgeCases(unittest.TestCase):
+    """Tags that are not the tidy `en-GB` the table was written for."""
+
+    DAY = datetime.date(2026, 9, 20)
+    US, DAY_FIRST = "September 20, 2026", "20 September 2026"
+
+    def test_posix_underscore_is_read_as_a_hyphen(self):
+        """`en_GB` is a locale name, but it is what people type."""
+        for lang in ("en_GB", "en_AU", "EN_ie"):
+            with self.subTest(lang=lang):
+                self.assertEqual(clb.format_date(self.DAY, lang), self.DAY_FIRST)
+        self.assertEqual(clb.format_date(self.DAY, "en_US"), self.US)
+
+    def test_un_m49_europe_is_day_first(self):
+        self.assertEqual(clb.format_date(self.DAY, "en-150"), self.DAY_FIRST)
+
+    def test_un_m49_world_is_day_first(self):
+        """en-001, "international English": month-first is the US habit."""
+        self.assertEqual(clb.format_date(self.DAY, "en-001"), self.DAY_FIRST)
+
+    def test_other_numeric_areas_fall_back_to_month_first(self):
+        self.assertEqual(clb.format_date(self.DAY, "en-021"), self.US)
+
+    def test_private_use_subtags_are_ignored(self):
+        """The `gb` in en-x-gb is a private label, not the UK."""
+        for lang in ("en-x-gb", "en-US-x-gb", "en-u-rg-gbzzzz"):
+            with self.subTest(lang=lang):
+                self.assertEqual(clb.format_date(self.DAY, lang), self.US)
+
+    def test_a_script_subtag_is_skipped_over(self):
+        self.assertEqual(clb.format_date(self.DAY, "en-Latn-GB"), self.DAY_FIRST)
+
+    def test_region_before_a_singleton_still_counts(self):
+        self.assertEqual(clb.format_date(self.DAY, "en-GB-x-foo"), self.DAY_FIRST)
+
+    def test_us_and_bare_english_unchanged(self):
+        for lang in ("en-US", "en", "EN", "en-us"):
+            with self.subTest(lang=lang):
+                self.assertEqual(clb.format_date(self.DAY, lang), self.US)
+
+    def test_non_english_with_underscore_is_still_iso(self):
+        self.assertEqual(clb.format_date(self.DAY, "de_DE"), "2026-09-20")
+
+
+class TestLetterMetaNull(unittest.TestCase):
+    """`meta:` left empty is the same as leaving it out."""
+
+    def test_meta_null_validates_and_resolves_en_us(self):
+        d = good_data()
+        d["meta"] = None
+        clb.validate_data(d)
+        self.assertEqual(clb.resolve_letter(d, today=datetime.date(2026, 9, 20))
+                         ["date"], "September 20, 2026")
+
+    def test_meta_lang_null_validates(self):
+        d = good_data()
+        d["meta"]["lang"] = None
+        clb.validate_data(d)
+
+    def test_meta_lang_blank_is_en_us(self):
+        d = good_data()
+        d["meta"]["lang"] = "  "
+        self.assertEqual(clb.build.resolve_lang(d), "en-US")
+
+
+class TestExplicitLetterFileLabel(unittest.TestCase):
+    """LETTER_DATA_FILE is labelled by what the file IS, not 'mine'."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.default_path = self.tmpdir / "letter_default.yml"
+        self.mine_path = self.tmpdir / "letter.yml"
+        self._patches = [
+            mock.patch.object(clb, "DATA_FILE_DEFAULT", self.default_path),
+            mock.patch.object(clb, "DATA_FILE_MINE", self.mine_path),
+            mock.patch.object(clb, "ROOT", self.tmpdir),
+        ]
+        for p in self._patches:
+            p.start()
+        self._saved = {n: os.environ.pop(n, None)
+                       for n in (ENV_RESUME_DATA_SOURCE, ENV_LETTER_DATA_FILE)}
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        for f in self.tmpdir.iterdir():
+            f.unlink()
+        self.tmpdir.rmdir()
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def load_explicit(self, path):
+        path.write_text(MINIMAL_YAML, encoding="utf-8")
+        os.environ[ENV_LETTER_DATA_FILE] = str(path)
+        with silenced():
+            return clb.load_data()[1]
+
+    def test_the_template_is_default(self):
+        self.assertEqual(self.load_explicit(self.default_path), "default")
+
+    def test_your_letter_is_mine(self):
+        self.assertEqual(self.load_explicit(self.mine_path), "mine")
+
+    def test_any_other_file_is_explicit(self):
+        self.assertEqual(self.load_explicit(self.tmpdir / "acme.yml"), "explicit")
 
 
 if __name__ == "__main__":

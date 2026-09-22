@@ -586,6 +586,10 @@ details[open]>summary::before{content:"▾"}
   }
 
   async function api(method, route, body) {
+    // Every POST is JSON, body or not: the server refuses any other
+    // content type, which is what keeps a form on some other web page
+    // from posting to it.
+    if (method === 'POST' && !body) body = {};
     var res = await fetch(route, {
       method: method,
       headers: body ? { 'content-type': 'application/json' } : undefined,
@@ -815,7 +819,7 @@ details[open]>summary::before{content:"▾"}
         // The path comes from the server. It used to be assembled here
         // from the document id and the variant, which worked only
         // while the outputs were named after the document; they are
-        // named after you now (Gaius_Iulius_Resume.pdf), and that name
+        // named after you now (Gaius_Caesar_Resume.pdf), and that name
         // lives in YAML this page never sees. pdfInfo sends it whether
         // or not the file exists, so the tooltip is right either way.
         var file = info.path || '';
@@ -1013,9 +1017,14 @@ details[open]>summary::before{content:"▾"}
     sel.addEventListener('change', function () { chooseData(id, sel.value); });
     src.appendChild(sel);
 
+    // Each card's choice is its own: the resume's modes never reach the
+    // letter, which reads its picked file, else letter.yml, else the
+    // template.
     src.appendChild(el('div', 'note', m.picked
       ? 'Read in place. Studio never writes to your data files.'
-      : 'Mirrors the RESUME_DATA_SOURCE variable the CLI honors.'));
+      : id === 'resume'
+        ? 'Mirrors the RESUME_DATA_SOURCE variable the CLI honors.'
+        : 'letter.yml if present, else letter_default.yml. The resume\u2019s setting does not apply here.'));
     ins.appendChild(src);
 
     ins.appendChild(el('div', 'sep'));
@@ -1111,11 +1120,27 @@ details[open]>summary::before{content:"▾"}
     if (!state.render[id]) preview(id);
   }
 
-  // A file changed while the engine was busy. Rendering right then would
-  // be refused (one render at a time), and dropping the change would
-  // leave the preview showing an older save until the next one, so it is
-  // remembered here and rendered as soon as the engine is free.
-  var changedWhileBusy = false;
+  // A preview asked for while the engine was busy. Rendering right then
+  // would be refused (one render at a time), and dropping the request
+  // would leave the pane showing something older — a previous save, or
+  // the other document's file after switching cards — so it is
+  // remembered here and run as soon as the engine is free. One slot: the
+  // latest request wins, since it is the one the pane should end up on.
+  //   { id, fromChange }   fromChange: a file save, which renders
+  //                        whichever document is active by then
+  var pendingPreview = null;
+
+  // The page images a render holds, by page and by pixel hash, so the
+  // next preview can ask the server to skip pages that did not change.
+  function heldImages(r) {
+    var known = {}, byHash = {};
+    ((r && r.images) || []).forEach(function (im) {
+      if (!im.hash || !im.png) return;
+      known[im.page] = im.hash;
+      byHash[im.hash] = im.png;
+    });
+    return { known: known, byHash: byHash };
+  }
 
   async function preview(id, opts) {
     id = id || state.active;
@@ -1123,13 +1148,26 @@ details[open]>summary::before{content:"▾"}
     var m = docMeta(id);
     if (!m) return;
     if (state.busy.resume || state.busy.letter) {
-      if (opts.fromChange) changedWhileBusy = true;
+      pendingPreview = { id: id, fromChange: Boolean(opts.fromChange) };
       return;
     }
     state.busy[id] = 'render';
     renderAll();
     try {
-      var r = await api('POST', '/api/preview', { doc: id, scale: 2 });
+      // Unchanged pages come back as {hash, unchanged: true} with no PNG;
+      // the image this page already has is put back in by hash.
+      var held = heldImages(state.render[id]);
+      var r = await api('POST', '/api/preview', { doc: id, scale: 2, known: held.known });
+      var missing = false;
+      (r.images || []).forEach(function (im) {
+        if (!im.unchanged) return;
+        if (held.byHash[im.hash]) im.png = held.byHash[im.hash];
+        else missing = true;
+        delete im.unchanged;
+      });
+      // Cannot happen unless the held images changed under the request;
+      // if it does, ask again for every page rather than show a blank.
+      if (missing) r = await api('POST', '/api/preview', { doc: id, scale: 2 });
       state.render[id] = r;
       delete state.error[id];
     } catch (err) {
@@ -1139,17 +1177,22 @@ details[open]>summary::before{content:"▾"}
       await refreshStatus();
       renderAll();
     }
-    renderQueuedChange();
+    runPendingPreview();
   }
 
-  function renderQueuedChange() {
-    if (!changedWhileBusy) return;
+  function runPendingPreview() {
+    if (!pendingPreview) return;
     if (state.busy.resume || state.busy.letter) return;
-    changedWhileBusy = false;
-    if (state.paused) return;
-    var m = docMeta(state.active);
-    if (!m || !m.live) return;
-    preview(null, { fromChange: true });
+    var next = pendingPreview;
+    pendingPreview = null;
+    if (next.fromChange) {
+      if (state.paused) return;
+      var m = docMeta(state.active);
+      if (!m || !m.live) return;
+      preview(null, { fromChange: true });
+    } else {
+      preview(next.id);
+    }
   }
 
   async function doBuild(id) {
@@ -1223,7 +1266,7 @@ details[open]>summary::before{content:"▾"}
       await refreshStatus();
       renderAll();
     }
-    renderQueuedChange();
+    runPendingPreview();
   }
 
   /**
