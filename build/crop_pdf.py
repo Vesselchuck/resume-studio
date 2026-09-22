@@ -26,6 +26,11 @@ This crop has TWO important guarantees:
 The crop only adjusts the MediaBox (the page's physical extent).
 No content is moved; nothing is rasterized; the PDF stays vector.
 
+The Studio's live preview applies the same geometry in memory, to the
+page it is about to rasterize, instead of running this file on every
+keystroke — see crop_pdfium_page_to_letter(). Both go through
+letter_upper_right(), so the two crops cannot disagree.
+
 METADATA
 ────────
 With --meta <file>, reads a JSON manifest produced by build.py and
@@ -71,43 +76,100 @@ LETTER_W_PT = 8.5 * 72   # 612.0
 LETTER_H_PT = 11 * 72    # 792.0
 
 
+def letter_upper_right(left: float, bottom: float, right: float, top: float):
+    """The upper-right corner that makes a page box exactly US Letter.
+
+    The one place the crop geometry is computed. crop_pages() applies it
+    to the file the CLI writes; crop_pdfium_page_to_letter() applies it
+    in memory to the page the live preview rasterizes. Both call this,
+    so the preview cannot drift from the deliverable's crop.
+
+    The lower-left stays where it is and the width and height excess is
+    shaved from the upper-right, because that is where Chromium parks it
+    (see the module docstring).
+
+    Returns (new_right, new_top), or None when the box is SMALLER than
+    Letter in either axis — extending it would only add blank space, so
+    such a page is left as it is.
+    """
+    # Total excess in each axis; shaved entirely from the upper-right edge.
+    excess_w = (right - left) - LETTER_W_PT
+    excess_h = (top - bottom) - LETTER_H_PT
+    if excess_w < -0.001 or excess_h < -0.001:
+        return None
+    return right - excess_w, top - excess_h
+
+
+def _warn_smaller_than_letter(width: float, height: float) -> None:
+    c.warn(
+        f"page is smaller than Letter "
+        f"({width:.2f} × {height:.2f} pt) — leaving as-is"
+    )
+
+
 def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
     """Copy reader's pages to writer with MediaBox/CropBox cropped to Letter.
 
     Chromium anchors content at the lower-left of the page and parks
     the (small) width and height excess as empty space at the
     upper-right edges. So we only shrink the upper-right corner
-    inward — the lower-left stays where it is.
+    inward — the lower-left stays where it is. The geometry itself is
+    letter_upper_right()'s.
     """
     for page in reader.pages:
         box = page.mediabox
-        cur_w = float(box.width)
-        cur_h = float(box.height)
-
-        # Total excess in each axis; will be shaved entirely from
-        # the upper-right edge.
-        excess_w = cur_w - LETTER_W_PT
-        excess_h = cur_h - LETTER_H_PT
-
-        if excess_w < -0.001 or excess_h < -0.001:
-            # Page is SMALLER than Letter — refuse to "negative-crop" by
-            # extending the box, which would just add blank space.
-            c.warn(
-                f"page is smaller than Letter "
-                f"({cur_w:.2f} × {cur_h:.2f} pt) — leaving as-is"
-            )
+        corner = letter_upper_right(
+            float(box.left), float(box.bottom),
+            float(box.upper_right[0]), float(box.upper_right[1]),
+        )
+        if corner is None:
+            _warn_smaller_than_letter(float(box.width), float(box.height))
             writer.add_page(page)
             continue
 
         # Lower-left stays put; pull the upper-right inward by the excess.
-        new_urx = float(box.upper_right[0]) - excess_w
-        new_ury = float(box.upper_right[1]) - excess_h
-
-        page.mediabox.upper_right = (new_urx, new_ury)
+        page.mediabox.upper_right = corner
         # Also align CropBox so readers that honor it agree with MediaBox.
-        page.cropbox.upper_right = (new_urx, new_ury)
+        page.cropbox.upper_right = corner
 
         writer.add_page(page)
+
+
+class NoOwnMediaBox(ValueError):
+    """The page inherits its MediaBox, which pdfium's box API cannot see."""
+
+
+def crop_pdfium_page_to_letter(page) -> None:
+    """crop_pages()' crop, applied in memory to an open pypdfium2 page.
+
+    For the Studio's live preview. Rasterizing Chromium's raw print with
+    these boxes set gives the pixels that rasterizing crop_pages()'
+    output gives, without pypdf parsing and re-serializing the whole
+    document on every keystroke. Nothing is written anywhere; the
+    deliverables still go through crop_pages() and the metadata stamps.
+
+    Mirrors crop_pages() box for box: the MediaBox's upper-right moves
+    to letter_upper_right(), and so does the CropBox's (whose lower-left
+    stays its own, or the MediaBox's when the page has no CropBox — the
+    same default pypdf applies). A page smaller than Letter is left as
+    it is, as crop_pages() leaves it.
+
+    pdfium's box getters do not inherit from the page tree, so a page
+    without its own MediaBox raises NoOwnMediaBox rather than being
+    cropped against a guessed box; the caller falls back to the file
+    crop. Chromium writes a MediaBox on every page.
+    """
+    media = page.get_mediabox(fallback_ok=False)
+    if media is None:
+        raise NoOwnMediaBox("page has no MediaBox of its own")
+    left, bottom, right, top = media
+    corner = letter_upper_right(left, bottom, right, top)
+    if corner is None:
+        _warn_smaller_than_letter(right - left, top - bottom)
+        return
+    crop_left, crop_bottom, _, _ = page.get_cropbox(fallback_ok=True)
+    page.set_mediabox(left, bottom, *corner)
+    page.set_cropbox(crop_left, crop_bottom, *corner)
 
 
 def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None) -> None:

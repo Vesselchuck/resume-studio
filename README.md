@@ -110,9 +110,12 @@ whatever editor you like and the pane follows.
 </picture>
 
 The preview is not a screenshot of the HTML. It prints a real PDF,
-crops it through `crop_pdf.py`, and rasterizes the cropped file with
-the same function the visual-regression test uses — so what you see is
-the output, post-crop, at true 612 × 792 pt.
+sets the same US Letter page boxes `crop_pdf.py` sets, and rasterizes
+it with the same function the visual-regression test uses — so what
+you see is the output, post-crop, at true 612 × 792 pt. The preview
+sets the boxes in memory instead of rewriting the file (the rewrite
+took longer than printing); a Build still crops the file itself and
+stamps its metadata, and a test checks the two give the same pixels.
 
 **Build** writes the finished PDFs to `dist/`. It runs the same build
 scripts (`resume.js`, `letter.js`) that the command line uses for
@@ -133,7 +136,7 @@ Two checkboxes on the resume card:
 | Checkbox | Default | Effect |
 |----------|---------|--------|
 | Compare against snapshot | off | Runs the pixel diff and reports differences. Never blocks. |
-| Run unit tests first     | off | Runs the full suite before building — about 25 seconds. See "Why the tests can be skipped". |
+| Run unit tests first     | off | Runs the full suite before building — about 30 seconds. See "Why the tests can be skipped". |
 
 **Dropping a file** works out which document it is by reading it, not
 by its name: the two builders require disjoint top-level keys
@@ -564,7 +567,7 @@ clip content under `overflow: hidden`).
 
 The unit suites test the *pipeline* — the solver, the loader, the warm
 engine's equivalence to the cold CLI. None of that changes when you
-edit a bullet, and they cost about 25 seconds. What validates *your data* is not in them and always runs:
+edit a bullet, and they cost about 30 seconds. What validates *your data* is not in them and always runs:
 `validate_data`, the layout invariants, the `maxPages` ceiling. So
 skipping them can leave the pipeline unchecked, but it cannot produce
 a wrong document. The Studio passes `off` unless you tick "Run unit
@@ -593,6 +596,27 @@ the first preview asks for it. Both
 the warm path produces the same bytes and the same pixels as the cold
 CLI — that equivalence is the whole premise, so it is tested rather
 than assumed.
+
+A preview also skips work it has already done:
+
+- The templates are compiled once per worker, and recompiled only
+  when a template file's text changes.
+- After the first load, a new version of the document replaces the
+  one already open in Chromium instead of being loaded from scratch.
+  A change to the stylesheet or the fonts, and every 50th load, still
+  loads it from scratch.
+- A save that leaves the HTML, the stylesheet, the fonts and the
+  metadata byte-for-byte the same — a comment, a blank line — returns
+  the last pages without printing again.
+- Each printed page gets a key from its own content and everything it
+  shares with the other pages. A page whose key is unchanged is not
+  rasterized again; anything the key can't account for renders every
+  page.
+
+A save starts a render after 20 ms of quiet. If the file can't be read
+as YAML within a second of the save — the editor may still be writing
+it — the preview reads it once more, 50 ms later, before showing the
+error.
 
 If the Python worker dies, the request in flight fails with an error
 and the next one starts a fresh worker, instead of every later preview
@@ -728,7 +752,8 @@ pure-logic tests; three launch Chromium.
 | `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
 | `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
 | `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
-| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`         |
+| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`; the preview's in-memory crop gives the same pixels |
+| `test_preview_raster.py`      | The preview's PNG writer and per-page keys  |
 | `test_letter_data.py`         | The cover letter's data layer               |
 | `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
 | `test_profile_merge.py`       | The shared profile's merge and precedence   |
@@ -742,7 +767,8 @@ pure-logic tests; three launch Chromium.
 | `test_detect_doc.js`          | Which document a dropped file is; path containment |
 | `test_output_name.js`         | PDF names read from `pdf_meta.json`; stale-PDF cleanup |
 | `test_engine_equivalence.js`  | Warm engine == cold CLI, pixel for pixel    |
-| `test_studio_server.js`       | The Studio server: data choice per card, worker restart, request checks, drops |
+| `test_studio_server.js`       | The Studio server: data choice per card, worker restart, request checks, drops, saves caught mid-write |
+| `test_cli_navigation.js`      | The build scripts don't wait for `networkidle` |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON`, `NO_COLOR` / `FORCE_COLOR` parsing |
 
@@ -1021,6 +1047,8 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── worker.py             Long-lived Python half of the warm engine.
 │   ├── studio_server.js      The Studio app's backend, on loopback.
 │   ├── crop_pdf.py           Trim Chromium's PDF to true US Letter.
+│   ├── _pdf_page_keys.py     Per-page keys so the preview skips unchanged pages.
+│   ├── _png.py               The preview's PNG writer.
 │   ├── snapshot_pdf.py       Visual regression test.
 │   ├── solve_layout.js       Pure-function layout solver.
 │   ├── measure_dom.js        Playwright DOM measurement extractor.
@@ -1041,6 +1069,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_derive_pdf_metadata.py      PDF metadata derivation.
     ├── test_read_accent.py              Accent-color extractor.
     ├── test_crop_pdf.py                 PDF cropping + /Lang stamping.
+    ├── test_preview_raster.py           Preview PNG writer and page keys.
     ├── test_solve_layout.js             Layout solver.
     ├── test_check_layout.js             Layout invariants (Playwright).
     ├── test_letter_data.py              Letter data layer.
@@ -1055,6 +1084,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_worker_equivalence.py       Warm worker == cold CLI, byte for byte.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
+    ├── test_cli_navigation.js           Build scripts don't wait for networkidle.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.
     └── fixtures/                        Snapshot fixtures. The two template ones

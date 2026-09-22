@@ -130,11 +130,11 @@ class Worker:
     the outside, so it does not share any code with the Node client.
     """
 
-    def __init__(self):
+    def __init__(self, root=ROOT):
         self.proc = subprocess.Popen(
-            [sys.executable, "-B", str(WORKER)],
+            [sys.executable, "-B", str(Path(root) / "build" / "worker.py")],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", bufsize=1, cwd=str(ROOT),
+            text=True, encoding="utf-8", bufsize=1, cwd=str(root),
         )
         self.hello = self._read_frame()
 
@@ -480,6 +480,91 @@ class WorkerEquivalenceTest(unittest.TestCase):
             cleared = self.worker.call(op="build_letter",
                                        env={"RESUME_DATA_SOURCE": None})
             self.assertTrue(cleared["ok"], cleared.get("error"))
+
+
+@unittest.skipUnless(_have_dist(), "dist/ not built — run `node resume.js` first")
+class WarmTemplateReloadTest(unittest.TestCase):
+    """A warm worker keeps one Jinja Environment and must still see edits.
+
+    build.py compiles each template once per process now (see
+    build.jinja_env) and relies on auto_reload to recompile a template
+    whose file changed. The Studio's worker lives as long as the app, so
+    a template edit it did not pick up would leave the preview showing
+    the old template until a restart. Run against a throwaway copy of
+    the project, since it edits templates.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name) / "project"
+        for name in ("build", "templates", "styles"):
+            shutil.copytree(ROOT / name, self.root / name,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        (self.root / "data").mkdir()
+        for f in (ROOT / "data").glob("*_default.yml"):
+            shutil.copy2(f, self.root / "data" / f.name)
+        (self.root / "dist").mkdir()
+        # Copied last, so it is newer than every .scss (build.py checks).
+        shutil.copyfile(STYLES_CSS, self.root / "dist" / "styles.css")
+        self.worker = Worker(self.root)
+        self.addCleanup(self.worker.close)
+
+    def _build(self, **req):
+        frame = self.worker.call(**req)
+        self.assertTrue(frame["ok"], frame.get("error"))
+
+    def _html(self, name="index.html"):
+        return (self.root / "dist" / name).read_text(encoding="utf-8")
+
+    def _append(self, template, text, keep_mtime=False):
+        path = self.root / "templates" / template
+        before = path.stat()
+        path.write_text(path.read_text(encoding="utf-8") + text, encoding="utf-8")
+        if keep_mtime:
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            self.assertEqual(path.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_an_edited_template_is_used_by_the_next_build(self):
+        self._build(op="build", mode="measurement")
+        self.assertNotIn("reload-marker-1", self._html())
+        self._append("measurement.j2", "<!-- reload-marker-1 -->\n")
+        self._build(op="build", mode="measurement")
+        self.assertIn("reload-marker-1", self._html())
+
+    def test_an_edit_that_keeps_the_mtime_is_still_seen(self):
+        """Coarse timestamps, two saves in one tick, a tool that restores
+        times: none may leave the old template in use."""
+        self._build(op="build", mode="measurement")
+        self._append("measurement.j2", "<!-- reload-marker-2 -->\n", keep_mtime=True)
+        self._build(op="build", mode="measurement")
+        self.assertIn("reload-marker-2", self._html())
+
+    def test_an_edited_imported_macro_is_seen(self):
+        self._build(op="build", mode="measurement")
+        path = self.root / "templates" / "_macros.j2"
+        text = path.read_text(encoding="utf-8")
+        # A macro the measurement template calls, given a visible comment
+        # right after its header.
+        target = "{% macro render_job("
+        self.assertIn(target, text)
+        body = text.index("%}", text.index(target)) + 2
+        path.write_text(text[:body] + "<!-- macro-marker -->" + text[body:], encoding="utf-8")
+        self._build(op="build", mode="measurement")
+        self.assertIn("macro-marker", self._html())
+
+    def test_the_letter_template_is_reloaded_too(self):
+        self._build(op="build_letter")
+        self.assertNotIn("letter-marker", self._html("letter.html"))
+        self._append("letter.j2", "<!-- letter-marker -->\n")
+        self._build(op="build_letter")
+        self.assertIn("letter-marker", self._html("letter.html"))
+
+    def test_unchanged_templates_render_identically(self):
+        self._build(op="build", mode="measurement")
+        first = self._html()
+        self._build(op="build", mode="measurement")
+        self.assertEqual(self._html(), first)
 
 
 if __name__ == "__main__":

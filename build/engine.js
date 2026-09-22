@@ -34,11 +34,12 @@
  *
  * THE PREVIEW IS THE PDF
  * ----------------------
- * renderPreview() does not screenshot the page. It prints a real PDF,
- * crops it through crop_pdf.py, and rasterizes the cropped file with
- * the same function the visual-regression test uses. What the app
- * displays is the output, post-crop, at true 612 × 792 pt — not an
- * approximation of it.
+ * renderPreview() does not screenshot the page. It prints a real PDF
+ * and rasterizes it with the same function the visual-regression test
+ * uses, after applying crop_pdf.py's crop to each page in memory (the
+ * same geometry, from the same function, as the file crop — see
+ * crop_pdfium_page_to_letter). What the app displays is the output,
+ * post-crop, at true 612 × 792 pt — not an approximation of it.
  *
  * ORDERING
  * --------
@@ -47,6 +48,13 @@
  * dist/placement.json is solved for one specific set of ids, and
  * rendering final mode against a stale one is the one way this design
  * can produce a wrong document. See op_build in build/worker.py.
+ *
+ * What a preview does skip is Chromium work whose inputs are byte for
+ * byte those of the last render: the measurement page load when the
+ * measurement HTML is identical, and the load, print and rasterize when
+ * the final HTML is too. Both HTML files are still rebuilt from the
+ * YAML and the placement still re-solved every time; only the result
+ * of an identical input is reused. See "Early cutoff" in createEngine.
  *
  * PROTOCOL (when run as a process)
  * --------------------------------
@@ -72,6 +80,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 
 const { createPipeline, disposeSass, warmUpSass } = require('./pipeline');
 const { detectPython } = require('./detect_python');
@@ -79,6 +88,65 @@ const c = require('./_console');
 
 const FRAME_PREFIX = '\x1e';
 const WORKER = path.join(__dirname, 'worker.py');
+
+// A real navigation at least this often, however many in-place loads
+// would otherwise follow one another. See renderPreview.
+const GOTO_EVERY = 50;
+
+
+/* ─── Fingerprints for the early cutoff ───────────────────────── */
+
+/** A file's bytes, or a marker that it is absent (never equal to bytes). */
+function readOrMissing(file) {
+  try {
+    return fs.readFileSync(file);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SHA-256 over a list of parts (Buffers, strings or null), each
+ * length-prefixed so that no two different lists hash alike.
+ */
+function digestOf(parts) {
+  const h = crypto.createHash('sha256');
+  for (const part of parts) {
+    if (part === null || part === undefined) {
+      h.update('\0missing\0');
+      continue;
+    }
+    const buf = Buffer.isBuffer(part) ? part : Buffer.from(String(part), 'utf-8');
+    h.update(`\0${buf.length}:`);
+    h.update(buf);
+  }
+  return h.digest('hex');
+}
+
+/**
+ * The font directory, by name, size and modification time of every
+ * file in it. The fonts are read by Chromium through styles.css, so a
+ * replaced font file is a changed input even though no byte the engine
+ * hashes has changed.
+ */
+function fontsFingerprint(dir) {
+  let names;
+  try {
+    names = fs.readdirSync(dir).sort();
+  } catch {
+    return 'no fonts directory';
+  }
+  const parts = [];
+  for (const name of names) {
+    try {
+      const st = fs.statSync(path.join(dir, name));
+      parts.push(`${name}|${st.size}|${st.mtimeMs}`);
+    } catch {
+      parts.push(`${name}|unreadable`);
+    }
+  }
+  return digestOf(parts);
+}
 
 
 /* ─── The warm Python adapter ─────────────────────────────────── */
@@ -310,9 +378,10 @@ class PythonWorker {
     return frame.result;
   }
 
-  async raster({ pdfPath, scale, pages, known }) {
+  async raster({ pdfPath, scale, pages, known, crop, slot }) {
     const frame = await this.run({
       op: 'raster', path: pdfPath, scale, pages: pages || null, known: known || null,
+      crop: crop || null, slot: slot || null,
     });
     return frame.result;
   }
@@ -348,9 +417,10 @@ async function createEngine({ root, python, warm = false } = {}) {
   const worker = new PythonWorker({ root, python: interpreter });
   const workerReady = worker.start();
 
-  // 'fonts' instead of the CLI's 'networkidle': the fonts are vendored,
-  // so waiting 500 ms for network silence on a file:// document with no
-  // remote assets is idling. See openDocument in build/pipeline.js.
+  // 'fonts' — load + document.fonts.ready, the same wait the CLI uses;
+  // the fonts are vendored, so waiting for network silence on a file://
+  // document with no remote assets would be idling. See openDocument in
+  // build/pipeline.js, which also does the engine's in-place loads.
   //
   // One pipeline per document. They share the worker and the browser —
   // the only thing that differs is which paths and which build phase
@@ -426,6 +496,113 @@ async function createEngine({ root, python, warm = false } = {}) {
   // that did not change. See renderPreview.
   const lastImages = { resume: null, letter: null };
 
+  /* ── Early cutoff ──────────────────────────────────────────────
+   *
+   * What Chromium lays out and prints is a function of the document's
+   * HTML, the stylesheet, the fonts, and nothing else that changes
+   * between two keystrokes (the fonts are vendored; nothing is fetched).
+   * So each document remembers, by the exact bytes of those inputs,
+   * what its last render produced:
+   *
+   *   measureKey  — the measurement HTML, dist/styles.css, the PDF
+   *                 metadata (maxPages is read from it), the font files,
+   *                 the per-render env. Same key: the page would measure
+   *                 the same, so the stored measurements are reused and
+   *                 that page load is skipped. The solver still runs and
+   *                 still writes dist/placement.json; it is cheap and
+   *                 pure.
+   *   finalKey    — the final HTML (letter HTML for the letter), the
+   *                 placement, the same stylesheet, metadata, fonts and
+   *                 env, and the requested scale and pages. Same key: the
+   *                 print would be the same PDF, so the last result is
+   *                 returned without loading, printing or rasterizing.
+   *
+   * Keys are SHA-256 over the bytes, not mtimes: a save that changes
+   * nothing the document shows (a YAML comment, whitespace, key order)
+   * hits; any change to a byte of the HTML misses. The HTML and metadata
+   * are always rebuilt by Python first, so a data edit can only hit if
+   * it rendered to identical bytes.
+   *
+   * A Sass compile clears both, and the stylesheet's and fonts' own
+   * fingerprints are part of every key.
+   */
+  const memo = { resume: {}, letter: {} };
+  function forgetRenders() {
+    for (const m of Object.values(memo)) {
+      for (const k of Object.keys(m)) delete m[k];
+    }
+    nav.assets = null;
+  }
+
+  /* ── Real navigations versus in-place loads ────────────────────
+   *
+   * The engine loads each HTML file into its page in place (see
+   * openDocument and swapDocument in build/pipeline.js) — except when
+   * the stylesheet or a font file has changed since the page last
+   * navigated (an in-place load keeps the old stylesheet object and the
+   * loaded fonts, which is the point, and would be wrong then), and
+   * every GOTO_EVERY loads regardless, so nothing a long session
+   * accumulates in one document outlives a few dozen renders. The
+   * pipeline itself also navigates whenever the page is not showing the
+   * file it last navigated to (switching between resume and letter).
+   */
+  const nav = { assets: null, sinceGoto: 0 };
+
+  function renderInputs(pl) {
+    return {
+      css: digestOf([readOrMissing(pl.paths.css)]),
+      fonts: fontsFingerprint(path.join(root, 'fonts')),
+      env: JSON.stringify(worker.buildEnv || null),
+    };
+  }
+
+  function navOptions(inputs, timings) {
+    const assets = `${inputs.css}:${inputs.fonts}`;
+    return {
+      inPlace: nav.assets === assets && nav.sinceGoto < GOTO_EVERY,
+      onLoad: (how) => {
+        timings.loads = [...(timings.loads || []), how];
+        if (how === 'goto') {
+          nav.assets = assets;
+          nav.sinceGoto = 0;
+        } else {
+          nav.sinceGoto += 1;
+        }
+      },
+    };
+  }
+
+  /**
+   * The images to return for a result, given what the caller holds.
+   *
+   * `images` all carry PNGs. With `known` (the caller's {page: hash}),
+   * a page whose hash the caller already has is sent as {hash,
+   * unchanged: true} without its PNG; without it, every page carries its
+   * PNG. Counts reused pages into timings.reusedPages either way, as
+   * the rasterizer does.
+   */
+  function forCaller(doc, images, scale, opts, timings) {
+    const callerKnows = opts.known && typeof opts.known === 'object';
+    const previous = lastImages[doc] && lastImages[doc].scale === scale
+      ? lastImages[doc].pages : {};
+    return images.map((im) => {
+      const held = callerKnows ? opts.known[im.page] : (previous[im.page] && previous[im.page].hash);
+      if (held === im.hash) timings.reusedPages = (timings.reusedPages || 0) + 1;
+      if (callerKnows && held === im.hash) {
+        return { page: im.page, width: im.width, height: im.height, hash: im.hash, unchanged: true };
+      }
+      return { page: im.page, width: im.width, height: im.height, hash: im.hash, png: im.png };
+    });
+  }
+
+  function remember(doc, images, scale) {
+    const cache = {};
+    for (const im of images) {
+      cache[im.page] = { page: im.page, width: im.width, height: im.height, hash: im.hash, png: im.png };
+    }
+    lastImages[doc] = { scale, pages: cache };
+  }
+
   // One page, one placement file: overlapping renders would interleave
   // on both. Serialize every operation through this chain so a burst of
   // keystrokes queues instead of corrupting a render in flight.
@@ -460,11 +637,14 @@ async function createEngine({ root, python, warm = false } = {}) {
       const started = Date.now();
       const timings = {};
       const mark = (name, t0) => { timings[name] = Date.now() - t0; };
+      const scale = opts.scale || 2.0;
+      const m = memo[doc];
 
       worker.buildEnv = opts.env && Object.keys(opts.env).length ? opts.env : null;
 
       let t = Date.now();
       if (opts.recompileStyles || pl.stylesAreStale()) {
+        forgetRenders();
         pl.compileSass();
         timings.sass = Date.now() - t;
       } else {
@@ -487,19 +667,45 @@ async function createEngine({ root, python, warm = false } = {}) {
         mark('measurementHtml', t);
       }
 
+      const inputs = renderInputs(pl);
+      const keyOf = (...extra) => digestOf([
+        readOrMissing(pl.paths.html), readOrMissing(pl.paths.pdfMeta),
+        inputs.css, inputs.fonts, inputs.env, ...extra,
+      ]);
+
       // Timed separately because the first render of a session pays a
       // cold Chromium launch here and every later one pays nothing.
       // Folding it into another bucket would make the first render look
-      // like a mysteriously slow measurement step.
-      t = Date.now();
-      const hadBrowser = Boolean(page);
-      const pg = await browserPage();
-      timings.browserLaunch = hadBrowser ? 0 : Date.now() - t;
+      // like a mysteriously slow measurement step. Only asked for when a
+      // step needs the page: a render that changed nothing never does.
+      let pg = null;
+      const needPage = async () => {
+        if (pg) return pg;
+        const t0 = Date.now();
+        const hadBrowser = Boolean(page);
+        pg = await browserPage();
+        timings.browserLaunch = hadBrowser ? 0 : Date.now() - t0;
+        return pg;
+      };
 
-      t = Date.now();
-      await pl.openDocument(pg);
+      let finalKey;
       if (doc === 'resume') {
-        const measurements = await pl.getMeasurements(pg);
+        t = Date.now();
+        const measureKey = keyOf('measurement');
+        let measurements;
+        if (m.measureKey === measureKey && m.measurements) {
+          // A copy: nothing downstream may alter the remembered one.
+          measurements = structuredClone(m.measurements);
+          timings.cached = 'measurement';
+        } else {
+          const p = await needPage();
+          t = Date.now();
+          m.measureKey = null;
+          await pl.openDocument(p, navOptions(inputs, timings));
+          measurements = await pl.getMeasurements(p);
+          m.measureKey = measureKey;
+          m.measurements = structuredClone(measurements);
+        }
         mark('measure', t);
 
         t = Date.now();
@@ -510,6 +716,35 @@ async function createEngine({ root, python, warm = false } = {}) {
         await pl.buildFinal();
         mark('finalHtml', t);
 
+        finalKey = keyOf('final', readOrMissing(pl.paths.placement), String(scale),
+          JSON.stringify(opts.pages || null));
+      } else {
+        finalKey = keyOf('letter', String(scale), JSON.stringify(opts.pages || null));
+      }
+
+      if (m.finalKey === finalKey && m.result) {
+        // Nothing the print depends on changed: the last render stands.
+        timings.cached = 'render';
+        const images = forCaller(doc, m.result.images, scale, opts, timings);
+        remember(doc, m.result.images, scale);
+        const meta = JSON.parse(fs.readFileSync(pl.paths.pdfMeta, 'utf-8'));
+        worker.buildEnv = null;
+        return {
+          doc,
+          pages: m.result.pages,
+          dataSource: meta.data_source,
+          meta,
+          invariants: m.result.invariants,
+          images,
+          timings,
+          totalMs: Date.now() - started,
+        };
+      }
+      m.finalKey = null;
+      m.result = null;
+
+      const p = await needPage();
+      if (doc === 'resume') {
         // Invariants are a real check, not a formality — they catch
         // content overflowing its page. In a live preview a violation is
         // information rather than a reason to show nothing, so report it
@@ -517,25 +752,31 @@ async function createEngine({ root, python, warm = false } = {}) {
         // CLI) treats the same violation as fatal.
         t = Date.now();
         try {
-          await pl.verifyInvariants(pg, placement.pages.length);
+          await pl.verifyInvariants(p, placement.pages.length, navOptions(inputs, timings));
         } catch (err) {
           invariants = { ok: false, message: err.message };
         }
         mark('invariants', t);
       } else {
+        t = Date.now();
+        await pl.openDocument(p, navOptions(inputs, timings));
         mark('load', t);
       }
 
+      // Chromium's print as it comes, uncropped: the worker crops it in
+      // memory with crop_pdf's own geometry while rasterizing, which is
+      // pixel for pixel what rasterizing crop_pdf.py's output gives. See
+      // printPreviewPdf in build/pipeline.js.
       const tmpPdf = path.join(os.tmpdir(), `studio-preview-${doc}-${process.pid}.pdf`);
       t = Date.now();
-      await pl.printPdfs(pg, { color: tmpPdf, grayscale: null, quiet: true });
+      await pl.printPreviewPdf(p, tmpPdf);
       mark('print', t);
 
       // Pages whose pixels did not change since this document's last
       // preview come back from the worker without a PNG; their image is
       // filled in from the previous render, so every returned page still
-      // carries one.
-      const scale = opts.scale || 2.0;
+      // carries one. Pages whose PDF-level key did not change are not
+      // even rendered again (the worker's `slot`).
       const callerKnows = opts.known && typeof opts.known === 'object';
       const previous = lastImages[doc] && lastImages[doc].scale === scale
         ? lastImages[doc].pages : {};
@@ -543,15 +784,32 @@ async function createEngine({ root, python, warm = false } = {}) {
       if (callerKnows) {
         // Only what the caller says it holds: it is the one that has to
         // put the image back on screen.
-        for (const [page, hash] of Object.entries(opts.known)) {
-          if (typeof hash === 'string') known[page] = hash;
+        for (const [pageNo, hash] of Object.entries(opts.known)) {
+          if (typeof hash === 'string') known[pageNo] = hash;
         }
       } else {
-        for (const [page, im] of Object.entries(previous)) known[page] = im.hash;
+        for (const [pageNo, im] of Object.entries(previous)) known[pageNo] = im.hash;
       }
 
       t = Date.now();
-      const raster = await worker.raster({ pdfPath: tmpPdf, scale, pages: opts.pages, known });
+      let raster;
+      try {
+        raster = await worker.raster({
+          pdfPath: tmpPdf, scale, pages: opts.pages, known, crop: 'letter', slot: doc,
+        });
+      } finally {
+        // Best-effort. On Windows a rasterizer that still holds the file
+        // open makes this throw EBUSY, and losing a preview because a
+        // scratch file outlived it would be absurd. build/snapshot_pdf.py
+        // closes its PdfDocument, which removes the usual cause; this
+        // stays as the belt to that suspenders.
+        try {
+          fs.rmSync(tmpPdf, { force: true });
+        } catch (err) {
+          c.detail(`(could not remove the preview scratch file: ${err.code || err.message})`);
+        }
+      }
+      if (typeof raster.rendered === 'number') timings.renderedPages = raster.rendered;
       for (const im of raster.images) {
         if (!im.unchanged) continue;
         timings.reusedPages = (timings.reusedPages || 0) + 1;
@@ -562,35 +820,34 @@ async function createEngine({ root, python, warm = false } = {}) {
         im.png = previous[im.page].png;
         delete im.unchanged;
       }
-      // Kept only for callers that do not track their own images; a page
-      // the caller reused has no PNG here, so it is carried over from the
-      // previous entry when that one had the same pixels.
-      const cache = {};
+      // Kept for callers that do not track their own images, and for the
+      // early cutoff; a page the caller reused has no PNG here, so it is
+      // carried over from the previous entry when that one had the same
+      // pixels.
+      const full = [];
       for (const im of raster.images) {
         const prev = previous[im.page];
         const png = im.png || (prev && prev.hash === im.hash ? prev.png : null);
-        if (png) cache[im.page] = { page: im.page, width: im.width, height: im.height, hash: im.hash, png };
+        if (png) full.push({ page: im.page, width: im.width, height: im.height, hash: im.hash, png });
       }
-      lastImages[doc] = { scale, pages: cache };
+      remember(doc, full, scale);
       mark('raster', t);
-
-      // Best-effort. On Windows a rasterizer that still holds the file
-      // open makes this throw EBUSY, and losing a preview because a
-      // scratch file outlived it would be absurd. build/snapshot_pdf.py
-      // now closes its PdfDocument, which removes the usual cause; this
-      // stays as the belt to that suspenders.
-      try {
-        fs.rmSync(tmpPdf, { force: true });
-      } catch (err) {
-        c.detail(`(could not remove the preview scratch file: ${err.code || err.message})`);
-      }
 
       const meta = JSON.parse(fs.readFileSync(pl.paths.pdfMeta, 'utf-8'));
       worker.buildEnv = null;
 
+      const pages = placement ? placement.pages.length : raster.pageCount;
+      // Remembered only when complete: every page with its PNG. A caller
+      // who held a page the engine never had leaves a gap, and then the
+      // next render simply runs in full.
+      if (full.length === raster.images.length) {
+        m.finalKey = finalKey;
+        m.result = { pages, invariants, images: full };
+      }
+
       return {
         doc,
-        pages: placement ? placement.pages.length : raster.pageCount,
+        pages,
         dataSource: meta.data_source,
         meta,
         invariants,

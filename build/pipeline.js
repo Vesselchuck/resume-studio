@@ -97,15 +97,19 @@ function reported(err) {
  * @param {string}   opts.variant — 'resume' (default) or 'letter'; selects
  *   the document's paths and which build phase applies.
  * @param {string}   opts.navWait — how openDocument() decides the page is
- *   settled: 'networkidle' (default, what the CLI has always used) or
- *   'fonts'. See openDocument for why the faster option exists and what
- *   had to be true before it was allowed to.
+ *   settled: 'fonts' (default; load + document.fonts.ready, what the CLI
+ *   and the engine both use) or 'networkidle' (what the CLI used to wait
+ *   for, kept for the equivalence test). See openDocument for why the
+ *   faster option is sound and what has to stay true for it to be.
  * @param {boolean}  opts.warmSass — keep one Sass compiler process running
  *   between compiles (the engine) instead of starting one per compile
  *   (the CLI, which compiles once). See compileSass. A driver that sets
  *   it must call disposeSass() when it is done.
  */
-function createPipeline({ root, python, navWait = 'networkidle', variant = 'resume', warmSass = false }) {
+function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', warmSass = false }) {
+  if (navWait !== 'fonts' && navWait !== 'networkidle') {
+    throw new Error(`unknown navWait ${navWait}; expected 'fonts' or 'networkidle'`);
+  }
   if (variant !== 'resume' && variant !== 'letter') {
     throw new Error(`unknown variant ${variant}; expected 'resume' or 'letter'`);
   }
@@ -243,32 +247,72 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
   /* ─── Phases ────────────────────────────────────────────────── */
 
   /**
-   * Load dist/index.html and wait until it is safe to measure.
+   * Load the document (dist/index.html or dist/letter.html) into `page`
+   * and wait until it is safe to measure or print.
    *
-   * 'networkidle' — the original strategy, and still the CLI's: wait
-   * for 500 ms of network silence. Correct, and on a document whose
-   * every asset is a local file, 500 ms of that wait is pure idling.
-   * Two navigations per build made it the single largest cost in a
-   * live render (measured: ~545 ms of a ~1530 ms render, twice over).
+   * 'fonts' (the default, for the CLI and the engine alike) — navigate,
+   * wait for `load`, then for `document.fonts.ready`. What measurement
+   * and printing depend on is the stylesheet being applied and the web
+   * fonts being laid out; the fonts are vendored under fonts/ precisely
+   * so that no network is involved. This is only sound because of that
+   * vendoring. If a stylesheet ever pulls a font or an image from a
+   * CDN, this strategy stops being safe and 'networkidle' has to come
+   * back.
    *
-   * 'fonts' — wait for `load`, then for `document.fonts.ready`. The
-   * thing measurement actually depends on is the web fonts being laid
-   * out; the fonts are vendored under fonts/ precisely so that no
-   * network is involved. This is only sound because of that vendoring.
-   * If a stylesheet ever pulls a font or an image from a CDN, this
-   * strategy stops being safe and 'networkidle' has to come back.
+   * 'networkidle' — the original strategy: wait for 500 ms of network
+   * silence. Correct, and on a document whose every asset is a local
+   * file, 500 ms of pure idling per navigation. Kept so that
+   * tests/test_engine_equivalence.js can keep proving 'fonts' renders
+   * the same pixels.
    *
-   * The CLI keeps 'networkidle' so a cold build's behavior is
-   * unchanged. The engine opts into 'fonts' and its output is
-   * pixel-compared against the CLI's to prove the two agree.
+   * `inPlace` (the engine only) — instead of navigating, replace the
+   * current document's head and body with the new file's, in the same
+   * page. See swapDocument below for what is kept and why. It applies
+   * only when the page is still showing the file this pipeline last
+   * navigated it to (so relative URLs resolve the same way) and the
+   * stylesheet links are the same; otherwise, or if anything about the
+   * swap fails, this navigates as usual. The engine decides when a real
+   * navigation is due regardless (first load, a changed stylesheet or
+   * font, every so many renders) and passes `inPlace: false` then.
+   *
+   * Returns 'goto' or 'swap': which of the two happened, and passes the
+   * same to `onLoad` if given (which is how a caller learns it from
+   * inside verifyInvariants, even when the check then throws).
    */
-  async function openDocument(page) {
-    if (navWait === 'fonts') {
+  async function openDocument(page, { inPlace = false, onLoad = null } = {}) {
+    const loaded = await load(page, inPlace);
+    if (onLoad) onLoad(loaded);
+    return loaded;
+  }
+
+  async function load(page, inPlace) {
+    if (inPlace && navWait === 'fonts') {
+      const shown = navigated.get(page);
+      if (shown && shown.requested === paths.htmlUrl && page.url() === shown.actual) {
+        const html = fs.readFileSync(paths.html, 'utf-8');
+        let outcome;
+        try {
+          outcome = await page.evaluate(swapDocument, html);
+        } catch (err) {
+          outcome = `error: ${err.message.split('\n')[0]}`;
+        }
+        if (outcome === 'ok') return 'swap';
+        if (process.env.DEBUG_MEASUREMENTS === '1') {
+          console.log(`(in-place load declined: ${outcome}; navigating instead)`);
+        }
+      }
+    }
+    // Forget first: if the navigation below fails, the page is showing
+    // something unknown and must not be swapped into.
+    navigated.delete(page);
+    if (navWait === 'networkidle') {
+      await page.goto(paths.htmlUrl, { waitUntil: 'networkidle' });
+    } else {
       await page.goto(paths.htmlUrl, { waitUntil: 'load' });
       await page.evaluate(() => document.fonts.ready);
-      return;
     }
-    await page.goto(paths.htmlUrl, { waitUntil: 'networkidle' });
+    navigated.set(page, { requested: paths.htmlUrl, actual: page.url() });
+    return 'goto';
   }
 
   /**
@@ -435,10 +479,10 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
    * (useful when invariants fire and you want to compare against what
    * the solver thought would fit).
    */
-  async function verifyInvariants(page, expectedPageCount) {
+  async function verifyInvariants(page, expectedPageCount, navOptions = {}) {
     // Reload the page so the invariant check runs against the FINAL
     // HTML (not the measurement HTML still loaded from phase 3).
-    await openDocument(page);
+    const loaded = await openDocument(page, navOptions);
 
     const result = await checkLayoutInvariants(page, { expectedPageCount });
 
@@ -464,6 +508,7 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
 
     const pagesWord = expectedPageCount === 1 ? 'page' : 'pages';
     c.ok_pair('Layout invariants', `clean (${expectedPageCount} ${pagesWord})`);
+    return loaded;
   }
 
   /**
@@ -596,23 +641,18 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
    * @param {object}   targets
    * @param {?string}  targets.color     — where to write the color PDF, or null to skip
    * @param {?string}  targets.grayscale — where to write the grayscale PDF, or null to skip
-   * @param {boolean}  targets.quiet     — suppress the "Wrote PDF" lines.
-   *   A live preview prints to a throwaway file in the system temp
-   *   directory; announcing "Wrote PDF (color): C:\Temp\studio-preview-
-   *   resume-6844.pdf" on every keystroke is noise that also reads like
-   *   the app is writing deliverables somewhere strange.
+   * @param {boolean}  targets.quiet     — suppress the "Wrote PDF" lines,
+   *   for a caller printing to a throwaway file, where announcing it on
+   *   every run is noise that also reads like deliverables being written
+   *   somewhere strange.
    *
-   * The engine passes a temp path and `grayscale: null` for a live
-   * preview: one variant, never into dist/. The CLI passes both real
-   * dist/ paths, which is the only way dist/*.pdf is ever written.
+   * The CLI passes both real dist/ paths, which is the only way
+   * dist/*.pdf is ever written. The engine's live preview does not come
+   * through here at all: it prints with printPreviewPdf and leaves the
+   * crop to the rasterizer.
    */
   async function printPdfs(page, targets) {
-    const pdfOptions = {
-      width: '8.5in',
-      height: '11in',
-      margin: { top: '0', bottom: '0', left: '0', right: '0' },
-      printBackground: true,
-    };
+    const pdfOptions = PDF_OPTIONS;
 
     let wroteOne = false;
 
@@ -654,6 +694,22 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
     }
   }
 
+  /**
+   * The live preview's print: Chromium's PDF exactly as printed, with no
+   * crop and no metadata, to `outPath`.
+   *
+   * The preview never needed the crop written to a file — only the
+   * crop's effect on the pixels. build/worker.py's raster op applies the
+   * same crop in memory (crop_pdf.crop_pdfium_page_to_letter, which
+   * shares crop_pages' geometry) as it rasterizes, so this skips a pypdf
+   * parse and rewrite of the whole document on every keystroke. The
+   * metadata stamps do not change a pixel. Deliverables still go through
+   * printPdfs, and only there.
+   */
+  async function printPreviewPdf(page, outPath) {
+    await page.pdf({ path: outPath, ...PDF_OPTIONS });
+  }
+
   return {
     paths,
     // Exposed so a driver can reach its own adapter for operations
@@ -671,7 +727,129 @@ function createPipeline({ root, python, navWait = 'networkidle', variant = 'resu
     verifyInvariants,
     verifyLetterFits,
     printPdfs,
+    printPreviewPdf,
   };
+}
+
+
+/** page.pdf() options for every print: one US Letter sheet, no margins. */
+const PDF_OPTIONS = Object.freeze({
+  width: '8.5in',
+  height: '11in',
+  margin: Object.freeze({ top: '0', bottom: '0', left: '0', right: '0' }),
+  printBackground: true,
+});
+
+
+/**
+ * What each page is showing, as far as openDocument knows: the URL it
+ * last navigated the page to, and the URL Chromium reported afterwards.
+ * An in-place load is only attempted when both still match — a page
+ * something else navigated is always navigated again.
+ */
+const navigated = new WeakMap();
+
+
+/**
+ * Runs INSIDE the page (via page.evaluate): replace the current
+ * document's content with `html` without navigating.
+ *
+ * A navigation tears the document down and parses, styles and lays out
+ * a new one — and re-parses the stylesheet and re-decodes both fonts,
+ * which are the same bytes as a moment ago. Replacing the head and body
+ * of the live document keeps those: same stylesheet object, same loaded
+ * FontFaces.
+ *
+ * What makes it safe:
+ *
+ *   • The stylesheet <link> elements are kept IN PLACE, never detached
+ *     and re-inserted. Moving a <link> restarts its load, and during
+ *     that load the page is unstyled — in testing about one render in
+ *     forty measured an unstyled document. New head nodes are inserted
+ *     around the kept links instead.
+ *   • It declines (returns a reason, and the caller navigates) whenever
+ *     the new document differs in a way this cannot reproduce: another
+ *     set of stylesheet links, a <script> (which DOMParser would leave
+ *     unexecuted), a <base>, a different compatibility mode, or a
+ *     stylesheet that is not loaded.
+ *   • The <html>, <head> and <body> attributes are set to the new
+ *     document's exactly — lang, classes, and removing any a previous
+ *     step added (printPdfs' force-grayscale class).
+ *   • It then forces a style and layout pass, so any font the new text
+ *     needs has started loading, and waits for every stylesheet and for
+ *     document.fonts.ready — the same wait a navigation gets.
+ *
+ * The caller only uses this for a stylesheet and fonts the page loaded
+ * itself, from the same file:// directory; see openDocument.
+ */
+async function swapDocument(html) {
+  const next = new DOMParser().parseFromString(html, 'text/html');
+  if (next.compatMode !== document.compatMode) return 'compatibility mode differs';
+  if (next.querySelector('script')) return 'the new document has a script';
+  if (next.querySelector('base') || document.querySelector('base')) return 'a <base> element';
+
+  const isSheet = n => n.nodeType === 1 && n.localName === 'link'
+    && /(^|\s)stylesheet(\s|$)/i.test(n.getAttribute('rel') || '');
+  const sameAttributes = (a, b) => a.attributes.length === b.attributes.length
+    && [...a.attributes].every(attr => b.getAttribute(attr.name) === attr.value);
+
+  const kept = [...document.head.childNodes].filter(isSheet);
+  const incoming = [...next.head.childNodes].filter(isSheet);
+  if (document.querySelectorAll('link').length !== document.head.querySelectorAll('link').length
+      || next.querySelectorAll('link').length !== next.head.querySelectorAll('link').length) {
+    return 'a <link> outside <head>';
+  }
+  if (kept.length !== incoming.length
+      || kept.some((link, i) => !sameAttributes(link, incoming[i]))) {
+    return 'the stylesheet links differ';
+  }
+  if (kept.some(link => !link.sheet)) return 'a stylesheet is not loaded';
+
+  const syncAttributes = (dst, src) => {
+    for (const attr of [...dst.attributes]) {
+      if (!src.hasAttribute(attr.name)) dst.removeAttribute(attr.name);
+    }
+    for (const attr of [...src.attributes]) {
+      if (dst.getAttribute(attr.name) !== attr.value) dst.setAttribute(attr.name, attr.value);
+    }
+  };
+
+  // Head: drop everything but the kept links, then put the new nodes
+  // around them in the new document's order. The kept links never move.
+  const head = document.head;
+  for (const node of [...head.childNodes]) {
+    if (!kept.includes(node)) node.remove();
+  }
+  let last = null;
+  let k = 0;
+  for (const node of [...next.head.childNodes]) {
+    if (isSheet(node)) {
+      last = kept[k++];
+      continue;
+    }
+    const adopted = document.adoptNode(node);
+    head.insertBefore(adopted, last ? last.nextSibling : head.firstChild);
+    last = adopted;
+  }
+
+  syncAttributes(document.documentElement, next.documentElement);
+  syncAttributes(head, next.head);
+  syncAttributes(document.body, next.body);
+  document.body.replaceChildren(...[...next.body.childNodes].map(n => document.adoptNode(n)));
+  window.scrollTo(0, 0);
+
+  // Style and lay out now, so a font the new text needs starts loading
+  // before document.fonts.ready is asked.
+  void document.body.getBoundingClientRect();
+  void document.documentElement.offsetHeight;
+
+  await Promise.all(kept.map(link => (link.sheet ? null : new Promise((resolve) => {
+    link.addEventListener('load', resolve, { once: true });
+    link.addEventListener('error', resolve, { once: true });
+  }))));
+  await document.fonts.ready;
+  if (kept.some(link => !link.sheet)) return 'a stylesheet did not load';
+  return 'ok';
 }
 
 

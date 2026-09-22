@@ -16,6 +16,9 @@
  *     name (_profile.yml) is refused.
  *   • Closing the server's stdin (what the desktop shell does) shuts it
  *     down gracefully, worker included.
+ *   • A save is picked up after a 20 ms debounce, and a preview that
+ *     fails the way a half-written data file would, shortly after a
+ *     change, is tried once more before the error is shown.
  *
  * ISOLATION
  * ---------
@@ -46,7 +49,7 @@ const server = require('../build/studio_server');
 
 /* ─── Pure helpers ────────────────────────────────────────────── */
 
-function unitTests(tmp) {
+async function unitTests(tmp) {
   // renderEnv: the letter never gets the resume's source.
   const pickedFile = path.join(tmp, 'x.yml');
   assertEq(server.renderEnv('letter', { dataSource: 'default', picked: {} }),
@@ -99,12 +102,69 @@ function unitTests(tmp) {
     'content-type': 'text/plain' }, 'POST'), 5000) || [])[0], 415,
     'checkRequest: a text/plain POST is refused');
 
+  // The save debounce, and a data file caught half-written.
+  assertEq(server.WATCH_DEBOUNCE_MS, 20, 'debounce: a save is rendered after 20 ms of quiet');
+  assertTrue(server.HALF_WRITTEN_RETRY_MS >= 20 && server.HALF_WRITTEN_RETRY_MS <= 100,
+    'half-written: the retry waits tens of milliseconds');
+  assertTrue(!server.looksHalfWritten(null) && !server.looksHalfWritten(new Error('x')),
+    'half-written: an ordinary error is not one');
+  const yamlErr = Object.assign(new Error('❌ data/resume.yml could not be read as YAML.'), { kind: 'build_failed' });
+  const emptyErr = Object.assign(new Error('❌ data/resume.yml is empty or not a YAML mapping at the top level (parsed as NoneType).'), { kind: 'build_failed' });
+  const schemaErr = Object.assign(new Error('❌ invalid resume data — sidebar is required'), { kind: 'build_failed' });
+  assertTrue(server.looksHalfWritten(yamlErr), 'half-written: a YAML syntax error is one');
+  assertTrue(server.looksHalfWritten(emptyErr), 'half-written: an empty file is one');
+  assertTrue(!server.looksHalfWritten(schemaErr), 'half-written: a schema error in a file that parsed is not');
+  assertTrue(server.looksHalfWritten(Object.assign(new Error('Permission denied'), { kind: 'locked_file' })),
+    'half-written: a file still locked by the editor (Windows) is one');
+
+  const clock = { t: 10000 };
+  const slept = [];
+  const opts = (changedAt) => ({
+    changedAt, now: () => clock.t, sleep: async (ms) => { slept.push(ms); clock.t += ms; },
+  });
+  const failingThen = (errors, value) => {
+    let calls = 0;
+    const fn = async () => {
+      calls++;
+      if (errors.length) throw errors.shift();
+      return value;
+    };
+    fn.calls = () => calls;
+    return fn;
+  };
+  let fn = failingThen([yamlErr], 'rendered');
+  assertEq(await server.retryIfHalfWritten(fn, opts(clock.t - 100)), 'rendered',
+    'half-written: a YAML error just after a change is retried, and the retry is returned');
+  assertEq([fn.calls(), slept[slept.length - 1]], [2, server.HALF_WRITTEN_RETRY_MS],
+    'half-written: ...once, after the retry delay');
+
+  const rejects = async (promise) => { try { await promise; return null; } catch (e) { return e; } };
+  fn = failingThen([yamlErr, yamlErr], 'never');
+  assertTrue(await rejects(server.retryIfHalfWritten(fn, opts(clock.t - 100))) === yamlErr,
+    'half-written: a file still broken on the retry reports its error');
+  assertEq(fn.calls(), 2, 'half-written: ...after exactly one retry');
+
+  fn = failingThen([yamlErr], 'never');
+  assertTrue(await rejects(server.retryIfHalfWritten(fn, opts(clock.t - server.HALF_WRITTEN_WINDOW_MS - 1))) === yamlErr,
+    'half-written: long after a change, the error is shown at once');
+  assertEq(fn.calls(), 1, 'half-written: ...without a retry');
+
+  fn = failingThen([yamlErr], 'never');
+  assertTrue(await rejects(server.retryIfHalfWritten(fn, opts(null))) === yamlErr,
+    'half-written: with no change seen, the error is shown at once');
+
+  fn = failingThen([schemaErr], 'never');
+  assertTrue(await rejects(server.retryIfHalfWritten(fn, opts(clock.t))) === schemaErr,
+    'half-written: a schema error is not retried');
+  assertEq(fn.calls(), 1, 'half-written: ...not even once');
+
   // writeNew: never replaces.
   const target = path.join(tmp, 'wn', 'a.yml');
   assertTrue(server.writeNew(target, 'one'), 'writeNew: writes a free name');
   assertTrue(!server.writeNew(target, 'two'), 'writeNew: reports a taken name');
   assertEq(fs.readFileSync(target, 'utf-8'), 'one', 'writeNew: never replaces the file');
 }
+
 
 
 /* ─── The isolated project ────────────────────────────────────── */
@@ -342,6 +402,23 @@ async function httpTests(project, srv) {
   assertTrue(((r.data && r.data.images) || []).every(im => im.png && !im.unchanged),
     'L-a: a preview that names no known pages gets every PNG');
 
+  // A data file that does not parse: the error the preview reports is
+  // the one looksHalfWritten() recognizes (so a save caught halfway is
+  // retried), and a file that stays broken is still reported.
+  fs.writeFileSync(path.join(project, 'data', 'broken.yml'), 'letter:\n  body: [unclosed\n');
+  r = await api('POST', '/api/pick', { doc: 'letter', name: 'broken.yml' });
+  assertEq(r.status, 200, 'half-written: a broken letter file can be picked');
+  r = await api('POST', '/api/preview', { doc: 'letter', scale: 1 });
+  assertTrue(r.status === 500 && r.data && r.data.kind === 'build_failed'
+    && server.looksHalfWritten({ kind: r.data.kind, message: r.data.error }),
+    `half-written: a YAML error is reported as one (${r.data && r.data.error})`);
+  fs.writeFileSync(path.join(project, 'data', 'broken.yml'), '');
+  r = await api('POST', '/api/preview', { doc: 'letter', scale: 1 });
+  assertTrue(r.status === 500 && server.looksHalfWritten({ kind: r.data.kind, message: r.data.error }),
+    `half-written: an empty file is reported as one (${r.data && r.data.error})`);
+  await api('POST', '/api/pick', { doc: 'letter', name: null });
+  fs.rmSync(path.join(project, 'data', 'broken.yml'));
+
   // H2 — a crashed worker fails fast and comes back.
   const pid = status.worker.pid;
   assertTrue(isAlive(pid), 'H2: the worker pid in /api/status is a live process');
@@ -384,7 +461,7 @@ async function httpTests(project, srv) {
   const project = path.join(tmp, 'project');
   let srv = null;
   try {
-    unitTests(tmp);
+    await unitTests(tmp);
 
     copyProject(project);
     srv = await startServer(project);

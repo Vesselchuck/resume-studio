@@ -18,8 +18,16 @@ accessor change.
 The round-trip pattern (write to in-memory bytes, re-read with a
 fresh PdfReader, inspect the catalog) keeps the test side off of
 pypdf private internals entirely.
+
+Also covered: the live preview's in-memory crop
+(crop_pdfium_page_to_letter) must rasterize to exactly the pixels of
+the file crop_pages writes — for an oversized page like Chromium's, a
+page whose box does not start at the origin, a page with its own
+CropBox, and a page smaller than Letter. Those tests need pypdfium2 and
+Pillow and skip without them.
 """
 
+import contextlib
 import io
 import json
 import sys
@@ -296,6 +304,144 @@ class TestApplyLanguage(unittest.TestCase):
         buf.seek(0)
         r = PdfReader(buf)
         self.assertEqual(str(r.trailer["/Root"]["/Lang"]), "en-US")
+
+
+# ── The preview's in-memory crop ─────────────────────────────────
+
+try:
+    import pypdfium2 as pdfium  # noqa: E402
+    import snapshot_pdf  # noqa: E402
+    HAVE_PDFIUM = True
+except ImportError:  # pragma: no cover — requirements.txt installs both
+    HAVE_PDFIUM = False
+
+
+def make_pdf_with_content(pages) -> bytes:
+    """A PDF whose pages carry paint right up to (and past) the crop line.
+
+    `pages` is a list of dicts: {"media": (l, b, r, t)} and optionally
+    {"crop": (l, b, r, t)}. Each page gets a background fill over its
+    whole MediaBox, a block in the lower-left corner, hairlines at the
+    Letter edges, and a red block in the upper-right excess — so a crop
+    that is off by any fraction of a point changes pixels.
+    """
+    from pypdf.generic import (ArrayObject, DecodedStreamObject,
+                               FloatObject, NameObject)
+    w = PdfWriter()
+    for spec in pages:
+        l, b, r, t = spec["media"]
+        page = w.add_blank_page(width=r - l, height=t - b)
+        page[NameObject("/MediaBox")] = ArrayObject(FloatObject(v) for v in (l, b, r, t))
+        if "crop" in spec:
+            page[NameObject("/CropBox")] = ArrayObject(FloatObject(v) for v in spec["crop"])
+        ops = (
+            f"0.93 0.95 0.97 rg {l} {b} {r - l} {t - b} re f\n"
+            f"0.18 0.29 0.24 rg {l + 36} {b + 36} 180 90 re f\n"
+            f"0 0 0 RG 0.35 w {l} {b + 792 - 0.5} m {l + 612} {b + 792 - 0.5} l S\n"
+            f"{l + 612 - 0.5} {b} m {l + 612 - 0.5} {b + 792} l S\n"
+            f"1 0 0 rg {l + 611.8} {b + 791.8} 5 5 re f\n"
+        ).encode("ascii")
+        stream = DecodedStreamObject()
+        stream.set_data(ops)
+        page[NameObject("/Contents")] = w._add_object(stream)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+@unittest.skipUnless(HAVE_PDFIUM, "pypdfium2 / Pillow not installed")
+class TestInMemoryCropMatchesFileCrop(unittest.TestCase):
+    """crop_pdfium_page_to_letter + render == render of crop_pages' file."""
+
+    PAGES = [
+        # Chromium's 0.12-pt quantization, oversized both ways.
+        {"media": (0, 0, 612.12, 792.24)},
+        # Exactly Letter already: a no-op either way.
+        {"media": (0, 0, 612, 792)},
+        # A box that does not start at the origin, with its own CropBox.
+        {"media": (10, 20, 625.5, 815.25), "crop": (12, 21, 625.5, 815.25)},
+        # Smaller than Letter: both paths leave it alone.
+        {"media": (0, 0, 600, 780)},
+    ]
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.raw = self.tmp / "raw.pdf"
+        self.raw.write_bytes(make_pdf_with_content(self.PAGES))
+        # The smaller-than-Letter page draws a warning from both crops;
+        # it is expected here, so keep it out of the test output.
+        quiet = contextlib.redirect_stderr(io.StringIO())
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        writer = PdfWriter()
+        crop_pdf.crop_pages(PdfReader(str(self.raw)), writer)
+        self.cropped = self.tmp / "cropped.pdf"
+        with open(self.cropped, "wb") as f:
+            writer.write(f)
+        self.saved_scale = snapshot_pdf.SCALE
+
+    def tearDown(self):
+        snapshot_pdf.SCALE = self.saved_scale
+        for f in self.tmp.iterdir():
+            f.unlink()
+        self.tmp.rmdir()
+
+    def _render(self, path, prepare=None, scale=None):
+        snapshot_pdf.SCALE = scale or self.saved_scale
+        return snapshot_pdf.render_pdf_pages(pdfium, path, prepare)
+
+    def test_pixels_equal_at_preview_and_snapshot_scale(self):
+        for scale in (2.0, self.saved_scale, 1.0):
+            in_memory = self._render(self.raw, crop_pdf.crop_pdfium_page_to_letter, scale)
+            from_file = self._render(self.cropped, None, scale)
+            self.assertEqual(len(in_memory), len(from_file))
+            for i, (a, b) in enumerate(zip(in_memory, from_file), 1):
+                self.assertEqual(a.size, b.size, f"page {i} at scale {scale}: size")
+                self.assertEqual(a.tobytes(), b.tobytes(), f"page {i} at scale {scale}: pixels")
+
+    def test_oversized_page_really_is_cropped(self):
+        """Guards the test above against comparing two uncropped renders."""
+        uncropped = self._render(self.raw, None, 1.0)[0]
+        in_memory = self._render(self.raw, crop_pdf.crop_pdfium_page_to_letter, 1.0)[0]
+        self.assertEqual(in_memory.size, (612, 792))
+        self.assertNotEqual(uncropped.size, in_memory.size)
+
+    def test_boxes_match_crop_pages(self):
+        pdf = pdfium.PdfDocument(str(self.raw))
+        cropped = PdfReader(str(self.cropped))
+        try:
+            for i in range(len(pdf)):
+                page = pdf[i]
+                crop_pdf.crop_pdfium_page_to_letter(page)
+                ref = cropped.pages[i]
+                for got, want in ((page.get_mediabox(), ref.mediabox),
+                                  (page.get_cropbox(), ref.cropbox)):
+                    for g, w in zip(got, (want.left, want.bottom, want.right, want.top)):
+                        self.assertAlmostEqual(g, float(w), places=3, msg=f"page {i + 1}")
+        finally:
+            pdf.close()
+
+    def test_only_and_prepare_are_optional(self):
+        """The snapshot test's call — no hook, every page — is unchanged."""
+        pages = snapshot_pdf.render_pdf_pages(pdfium, self.cropped)
+        self.assertEqual(len(pages), len(self.PAGES))
+        some = snapshot_pdf.render_pdf_pages(pdfium, self.cropped, None, {1})
+        self.assertIsNone(some[0])
+        self.assertEqual(some[1].tobytes(), pages[1].tobytes())
+
+
+class TestLetterUpperRight(unittest.TestCase):
+    def test_shaves_the_excess_from_the_upper_right(self):
+        r, t = crop_pdf.letter_upper_right(10, 20, 625.5, 815.25)
+        self.assertAlmostEqual(r, 622.0, places=9)
+        self.assertAlmostEqual(t, 812.0, places=9)
+
+    def test_smaller_than_letter_is_left_alone(self):
+        self.assertIsNone(crop_pdf.letter_upper_right(0, 0, 611, 792))
+        self.assertIsNone(crop_pdf.letter_upper_right(0, 0, 612, 791))
+
+    def test_within_tolerance_counts_as_letter(self):
+        self.assertIsNotNone(crop_pdf.letter_upper_right(0, 0, 611.9995, 792))
 
 
 if __name__ == "__main__":

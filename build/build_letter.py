@@ -42,8 +42,6 @@ import os
 import re
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
-
 # Local sibling modules.
 sys.path.insert(0, str(Path(__file__).parent))
 import _console as c  # noqa: E402
@@ -524,15 +522,10 @@ def build_letter():
     lang = build.resolve_lang(data)  # reads meta.lang, defaults en-US
     letter = resolve_letter(data, lang=lang)
 
-    env = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        autoescape=True,
-        undefined=StrictUndefined,
-        trim_blocks=False,
-        lstrip_blocks=False,
-        keep_trailing_newline=True,
-    )
-    env.filters["md"] = build.markdown_filter
+    # The resume's Environment, shared: same settings, same filters, and
+    # compiled templates kept for the life of the process. See
+    # build.jinja_env.
+    env = build.jinja_env(TEMPLATES_DIR)
 
     template = env.get_template("letter.j2")
     rendered = template.render(
