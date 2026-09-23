@@ -47,12 +47,6 @@ module.exports = Object.freeze({
   // fixtures.
   ENV_SKIP_SNAPSHOT: _envConstants.SKIP_SNAPSHOT,
 
-  // Which PDF variants to produce: a comma-separated subset of
-  // 'color' and 'grayscale'. Unset means both. A variant left out has
-  // its dist/ output removed, so "the file exists" stays a truthful
-  // signal that it was built by the run that just finished.
-  ENV_RESUME_VARIANTS: _envConstants.RESUME_VARIANTS,
-
   // Whether a build checks its PDFs against the committed fixtures:
   // 'off' (default) skips, 'on' reports a difference without failing,
   // 'strict' fails the build the way this always used to.
@@ -68,4 +62,11 @@ module.exports = Object.freeze({
   // of each pass during a multi-source rebuild. Unset in normal
   // builds.
   ENV_RESUME_PIPELINE_SUFFIX: _envConstants.RESUME_PIPELINE_SUFFIX,
+
+  // Whether the warm engine may load the final HTML speculatively while
+  // the measurement pass is still running (build/engine.js). 'off', '0',
+  // 'false' or 'no' turns it off; unset leaves it on. A diagnostic
+  // switch, not a correctness control: the speculative page is only ever
+  // printed when its HTML is byte-for-byte the final HTML.
+  ENV_RESUME_SPECULATIVE: _envConstants.RESUME_SPECULATIVE,
 });

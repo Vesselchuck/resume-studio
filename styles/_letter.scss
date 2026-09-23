@@ -8,9 +8,8 @@
    of prose instead of the resume's two-column .body-grid.
 
    Tokens only (spacing scale, type scale, color roles) so the letter
-   shares the document's rhythm and the color/grayscale print paths
-   in _print.scss apply automatically — no letter-specific print
-   rules are needed.
+   shares the document's rhythm and the print rules in _print.scss
+   apply automatically — no letter-specific print rules are needed.
    ─────────────────────────────────────────────────────────────── */
 
 /* The letter occupies the page area beneath the header, mirroring how

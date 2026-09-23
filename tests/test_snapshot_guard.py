@@ -60,12 +60,8 @@ class SandboxedSnapshot(unittest.TestCase):
             "ROOT": self.tmp,
             "FIXTURE_DIR": self.fixtures,
             "PDF_META_FILE": self.meta,
-            "FIXTURE_COLOR_DEFAULT": self.fixtures / "expected_resume-color.pdf",
-            "FIXTURE_COLOR_MINE": self.fixtures / "expected_resume-color.mine.pdf",
-            "FIXTURE_GRAYSCALE_DEFAULT":
-                self.fixtures / "expected_resume-grayscale.pdf",
-            "FIXTURE_GRAYSCALE_MINE":
-                self.fixtures / "expected_resume-grayscale.mine.pdf",
+            "FIXTURE_DEFAULT": self.fixtures / "expected_resume.pdf",
+            "FIXTURE_MINE": self.fixtures / "expected_resume.mine.pdf",
         }
         self._patches = [mock.patch.object(snapshot_pdf, k, v)
                          for k, v in patches.items()]
@@ -84,7 +80,6 @@ class SandboxedSnapshot(unittest.TestCase):
             meta["data_source"] = data_source
         self.meta.write_text(json.dumps(meta), encoding="utf-8")
         (self.dist / f"{self.STEM}.pdf").write_bytes(content)
-        (self.dist / f"{self.STEM}_Grayscale.pdf").write_bytes(content)
 
     def run_main(self, *args):
         err = io.StringIO()
@@ -154,14 +149,11 @@ class TestMainRefusesExplicit(SandboxedSnapshot):
         self.assertEqual(code, 2)
         self.assertEqual(self.fixture_files(), [])
 
-    def test_update_of_a_mine_build_writes_only_mine_fixtures(self):
+    def test_update_of_a_mine_build_writes_only_the_mine_fixture(self):
         self.write_build("mine")
         code, _ = self.run_main("--update")
         self.assertEqual(code, 0)
-        self.assertEqual(self.fixture_files(), [
-            "expected_resume-color.mine.pdf",
-            "expected_resume-grayscale.mine.pdf",
-        ])
+        self.assertEqual(self.fixture_files(), ["expected_resume.mine.pdf"])
 
 
 class TestUpdateAll(SandboxedSnapshot):
@@ -199,7 +191,7 @@ class TestUpdateAll(SandboxedSnapshot):
         self.assertNotIn(ENV_LETTER_DATA_FILE, self.envs[0])
         self.assertEqual(self.envs[0][ENV_RESUME_DATA_SOURCE], "default")
         self.assertEqual(
-            (self.fixtures / "expected_resume-color.pdf").read_bytes(),
+            (self.fixtures / "expected_resume.pdf").read_bytes(),
             b"default")
 
     def test_a_pass_that_built_the_wrong_source_is_not_copied(self):
@@ -222,10 +214,10 @@ class TestUpdateAll(SandboxedSnapshot):
                         side_effect=self.fake_build(lambda s: s)):
             self.assertEqual(self.update_all(), 0)
         self.assertEqual(
-            (self.fixtures / "expected_resume-color.pdf").read_bytes(),
+            (self.fixtures / "expected_resume.pdf").read_bytes(),
             b"default")
         self.assertEqual(
-            (self.fixtures / "expected_resume-color.mine.pdf").read_bytes(),
+            (self.fixtures / "expected_resume.mine.pdf").read_bytes(),
             b"mine")
 
 

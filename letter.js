@@ -12,14 +12,12 @@
  *      letter partial).
  *   2. Build HTML: build/build_letter.py → dist/letter.html
  *      (+ dist/letter_meta.json, dist/favicon.svg).
- *   3. Open the HTML in Playwright and print TWO PDFs — color, then
- *      grayscale (via html.force-grayscale, exactly like resume.js).
- *   4. Crop each PDF to exact US Letter (8.5×11 in) and stamp metadata
+ *   3. Open the HTML in Playwright and print the PDF.
+ *   4. Crop it to exact US Letter (8.5×11 in) and stamp metadata
  *      from dist/letter_meta.json via build/crop_pdf.py.
  *
- * Output: dist/<Your_Name>_Cover_Letter.pdf and
- *         dist/<Your_Name>_Cover_Letter_Grayscale.pdf, named from
- *         the profile's name — see build/_output_name.py.
+ * Output: dist/<Your_Name>_Cover_Letter.pdf, named from the profile's
+ *         name — see build/_output_name.py.
  *         (The intermediate HTML stays dist/letter.html — it is
  *         build_letter.py's to name, and it is not a deliverable.)
  *
@@ -36,10 +34,10 @@
  * ──────────────────
  * The phases live in build/pipeline.js, created with variant 'letter',
  * which selects this document's paths and its single build step. The
- * Sass compile, the navigation, the two print passes and the cropping
- * are the same code the resume runs — previously this file carried its
- * own copy of all four, and a fix to one (the temp-file naming, say, or
- * the grayscale toggle) had to be remembered in two places.
+ * Sass compile, the navigation, the print and the cropping are the same
+ * code the resume runs — previously this file carried its own copy of
+ * all four, and a fix to one (the temp-file naming, say) had to be
+ * remembered in two places.
  *
  * This file is one of that module's drivers: the cold CLI. The other is
  * build/engine.js, which keeps a browser and a Python worker warm so
@@ -53,7 +51,6 @@ const { execFileSync } = require('child_process');
 const { detectPython } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
 const { pruneStale } = require('./build/_output_name');
-const { ENV_RESUME_VARIANTS } = require('./build/_env_contract');
 const c = require('./build/_console');
 
 
@@ -138,65 +135,17 @@ const pipeline = createPipeline({
 });
 
 
-/* ─── Variant selection ───────────────────────────────────────── */
-
-/**
- * Which PDF variants this run should produce.
- *
- * Unset means both, which is what this script has always done and what
- * the committed fixtures assume — so nothing changes for anyone who
- * does not set the variable.
- *
- * A variant that is NOT selected has its dist/ file removed. That is
- * deliberate: leaving last run's grayscale PDF sitting there would let
- * the snapshot test compare a fixture against a file this build never
- * wrote, which is the kind of stale-artifact bug that passes for weeks
- * and then fails for reasons nobody can reconstruct. Absent means
- * absent.
- */
-function selectedVariants() {
-  const raw = (process.env[ENV_RESUME_VARIANTS] || '').trim();
-  if (!raw) return { color: true, grayscale: true };
-
-  const wanted = new Set(
-    raw.split(',').map(v => v.trim().toLowerCase()).filter(Boolean),
-  );
-  const unknown = [...wanted].filter(v => v !== 'color' && v !== 'grayscale');
-  if (unknown.length) {
-    c.err(`${ENV_RESUME_VARIANTS}: unknown variant ${unknown.join(', ')}`);
-    c.detail("Expected a comma-separated subset of 'color' and 'grayscale'.");
-    throw reported(new Error('bad variant selection'));
-  }
-  if (!wanted.size) {
-    c.err(`${ENV_RESUME_VARIANTS} selected no variants`);
-    c.detail("Set it to 'color', 'grayscale' or both, or leave it unset.");
-    throw reported(new Error('bad variant selection'));
-  }
-  return { color: wanted.has('color'), grayscale: wanted.has('grayscale') };
-}
-
-/** Remove the output of a variant this run is not producing. */
-function dropUnbuiltVariant(target, label) {
-  if (!fs.existsSync(target)) return;
-  try {
-    fs.rmSync(target, { force: true });
-    c.info_pair('Removed stale PDF', `${path.relative(ROOT, target)} (${label} not selected)`);
-  } catch (err) {
-    c.warn_pair('Could not remove', `${path.relative(ROOT, target)} — ${err.message}`);
-  }
-}
-
-
 /**
  * Clear this document's outputs from earlier builds that this one did
  * not overwrite.
  *
- * The PDFs are named after you, so the set of filenames a build
- * occupies moves when `name.first` / `name.last` does — and it moved
- * once already for everyone, when outputs stopped being called
- * {DOC}-color.pdf. Left alone, dist/ accumulates complete,
- * plausible-looking resumes under names that are no longer current,
- * in the exact directory you open when you need to attach one.
+ * The PDF is named after you, so the set of filenames a build occupies
+ * moves when `name.first` / `name.last` does — and it moved for
+ * everyone twice already: once when outputs stopped being called
+ * {DOC}-color.pdf, and again when the grayscale variant stopped being
+ * built at all. Left alone, dist/ accumulates complete,
+ * plausible-looking letters under names that are no longer current, in
+ * the exact directory you open when you need to attach one.
  *
  * Runs after printPdfs, so `keep` is what actually landed on disk.
  * _output_name.pruneStale does the deleting and is scoped there; this
@@ -219,11 +168,6 @@ function pruneStaleOutputs(variant, keep) {
   let browser;
   let exitCode = 0;
   try {
-    // Validated first: a typo in RESUME_VARIANTS is known before any
-    // work starts, and used to surface only after the tests, the Sass
-    // compile, the measurement pass and the browser had all run.
-    const variants = selectedVariants();
-
     c.banner('Cover letter');
     c.ok_pair('Detected Python', PYTHON);
     pipeline.compileSass();
@@ -241,19 +185,12 @@ function pruneStaleOutputs(variant, keep) {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await pipeline.openDocument(page);
+
     await pipeline.verifyLetterFits(page);
 
     c.banner('PDF');
-    if (!variants.grayscale) dropUnbuiltVariant(pipeline.paths.grayscalePdf, 'grayscale');
-    if (!variants.color) dropUnbuiltVariant(pipeline.paths.colorPdf, 'color');
-    await pipeline.printPdfs(page, {
-      color: variants.color ? pipeline.paths.colorPdf : null,
-      grayscale: variants.grayscale ? pipeline.paths.grayscalePdf : null,
-    });
-    pruneStaleOutputs('letter', [
-      ...(variants.color ? [pipeline.paths.colorPdf] : []),
-      ...(variants.grayscale ? [pipeline.paths.grayscalePdf] : []),
-    ]);
+    await pipeline.printPdfs(page, { output: pipeline.paths.pdf });
+    pruneStaleOutputs('letter', [pipeline.paths.pdf]);
   } catch (err) {
     if (!err.alreadyReported) {
       c.err('Unexpected error');

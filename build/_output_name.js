@@ -18,7 +18,7 @@
  *                                          │
  *                        ┌─────────────────┼──────────────────┐
  *                   pipeline.js         resume.js       studio_server.js
- *                  (writes them)     (prunes them)        (opens them)
+ *                   (writes it)      (prunes stale)       (opens it)
  *
  * Nothing here guesses at a name. When the metadata is absent the stem
  * falls back to the bare document suffix ('Resume'), which names a
@@ -36,7 +36,6 @@ const fs = require('fs');
 const {
   DOC_SUFFIX,
   SEPARATOR,
-  GRAYSCALE_SUFFIX,
   RETIRED_GRAYSCALE_SUFFIXES,
   LEGACY,
 } = JSON.parse(
@@ -84,23 +83,23 @@ function readStem(metaFile, variant) {
 
 
 /**
- * The two PDF paths for one document.
+ * The PDF path for one document.
  *
- * The color variant takes the bare stem — it is the file that gets
- * attached to an application, and it deserves the clean name. The
- * grayscale variant is suffixed.
+ * One document, one PDF, under the bare stem — it is the file that
+ * gets attached to an application, and it deserves the clean name.
+ * There used to be a second, grayscale PDF under a suffixed name;
+ * see outputPattern for what remains of it.
  *
  * @param {string} dist     — the project's dist/ directory
  * @param {string} metaFile — that document's metadata JSON
  * @param {string} variant  — 'resume' or 'letter'
- * @returns {{stem: string, colorPdf: string, grayscalePdf: string}}
+ * @returns {{stem: string, pdf: string}}
  */
 function outputPaths(dist, metaFile, variant) {
   const stem = readStem(metaFile, variant);
   return {
     stem,
-    colorPdf: path.join(dist, `${stem}.pdf`),
-    grayscalePdf: path.join(dist, `${stem}${GRAYSCALE_SUFFIX}.pdf`),
+    pdf: path.join(dist, `${stem}.pdf`),
   };
 }
 
@@ -111,25 +110,28 @@ function outputPaths(dist, metaFile, variant) {
  * Anchored on both ends and built from the same constants the writer
  * uses, so it matches the project's own output namespace and nothing
  * else: an optional name part, the document suffix, an optional
- * grayscale suffix, `.pdf`. `Gaius_Caesar_Resume_Grayscale.pdf` and
- * `Resume.pdf` match; `letter_meta.json`, `styles.css` and a PDF
- * you dropped in dist/ yourself do not.
+ * retired grayscale suffix, `.pdf`. `Resume.pdf` and
+ * `Gaius_Caesar_Resume_Grayscale.pdf` match; `letter_meta.json`,
+ * `styles.css` and a PDF you dropped in dist/ yourself do not.
  *
- * RETIRED_GRAYSCALE_SUFFIXES widens it, and only it — never the paths
- * a build writes. The grayscale marker has been respelled once
- * (`-grayscale` → `_Grayscale`), and a file written under the old
- * spelling would otherwise fall outside the pattern the moment the
- * constant changed: not deleted, not overwritten, just left in dist/
- * looking like a current deliverable. Matching the retired spellings
- * here is what makes a respelling self-cleaning.
+ * This pattern is WIDER than what a build writes, deliberately, and
+ * RETIRED_GRAYSCALE_SUFFIXES is the whole of the difference. This
+ * project used to write a second, black-and-white PDF beside each
+ * document (under `_Grayscale`, and before that `-grayscale`). It does
+ * not any more — the one PDF prints correctly either way — but a copy
+ * from an older build, or from an older spelling, would otherwise fall
+ * outside the pattern the moment the constant changed: not deleted,
+ * not overwritten, just left in dist/ looking like a current
+ * deliverable, next to the file it is not. Matching the retired
+ * spellings here is what makes both the removal and the earlier
+ * respelling self-cleaning.
  */
 function outputPattern(variant) {
   assertVariant(variant);
-  const grayscale = [GRAYSCALE_SUFFIX, ...RETIRED_GRAYSCALE_SUFFIXES]
-    .map(escapeRe).join('|');
+  const retired = RETIRED_GRAYSCALE_SUFFIXES.map(escapeRe).join('|');
   return new RegExp(
     `^(?:.+${escapeRe(SEPARATOR)})?${escapeRe(DOC_SUFFIX[variant])}`
-    + `(?:${grayscale})?\\.pdf$`);
+    + `(?:${retired})?\\.pdf$`);
 }
 
 
@@ -139,11 +141,12 @@ function outputPattern(variant) {
  *
  * Two things put them there. The first is history: outputs used to be
  * called resume-color.pdf and letter-grayscale.pdf, and those names
- * are listed in _constants.json under LEGACY; the grayscale marker has
- * since been respelled again, which RETIRED_GRAYSCALE_SUFFIXES covers.
- * The second is ongoing — the stem follows `name.first` /
- * `name.last`, so correcting a typo in your surname renames all four
- * files and strands the old ones.
+ * are listed in _constants.json under LEGACY; there also used to be a
+ * second, black-and-white PDF per document, which
+ * RETIRED_GRAYSCALE_SUFFIXES covers under both spellings it had. The
+ * second is ongoing — the stem follows `name.first` / `name.last`, so
+ * correcting a typo in your surname renames the files and strands the
+ * old ones.
  *
  * Either way a stale PDF in dist/ is worse than clutter: it is a
  * complete, plausible-looking resume that is not the one you just
@@ -236,7 +239,6 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
 module.exports = {
   DOC_SUFFIX,
   SEPARATOR,
-  GRAYSCALE_SUFFIX,
   RETIRED_GRAYSCALE_SUFFIXES,
   LEGACY,
   readStem,

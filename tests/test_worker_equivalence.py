@@ -79,7 +79,7 @@ PDF_META = DIST / "pdf_meta.json"
 # would make test_crop_matches_cli skip forever while still printing a
 # reason that sounds like an ordinary "nothing built yet". Hence the
 # lookup, and hence the skip message below quoting the resolved name.
-COLOR_PDF = _output_name.color_pdf(DIST, _output_name.stem_from_meta(PDF_META, 'resume'))
+BUILT_PDF = _output_name.output_pdf(DIST, _output_name.stem_from_meta(PDF_META, 'resume'))
 
 # The three files a build writes. Compared after every build op.
 BUILD_ARTIFACTS = (DIST / "index.html", PDF_META, DIST / "favicon.svg")
@@ -283,19 +283,19 @@ class WorkerEquivalenceTest(unittest.TestCase):
     # -- crop --------------------------------------------------------
 
     @unittest.skipUnless(
-        COLOR_PDF.exists() and PDF_META.exists(),
-        f"{COLOR_PDF.name} not built")
+        BUILT_PDF.exists() and PDF_META.exists(),
+        f"{BUILT_PDF.name} not built")
     def test_crop_matches_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             cold_out = Path(tmp) / "cold.pdf"
             warm_out = Path(tmp) / "warm.pdf"
 
-            cold = run_cold([str(CROP_PY), str(COLOR_PDF), str(cold_out),
+            cold = run_cold([str(CROP_PY), str(BUILT_PDF), str(cold_out),
                              "--meta", str(PDF_META)])
             self.assertEqual(cold.returncode, 0,
                              f"cold crop failed:\n{cold.stdout}\n{cold.stderr}")
 
-            frame = self.worker.call(op="crop", input=str(COLOR_PDF),
+            frame = self.worker.call(op="crop", input=str(BUILT_PDF),
                                      output=str(warm_out), meta=str(PDF_META))
             self.assertTrue(frame["ok"], f"warm crop failed: {frame.get('error')}")
 
@@ -336,7 +336,7 @@ class WorkerEquivalenceTest(unittest.TestCase):
         alive = self.worker.call(op="ping")
         self.assertTrue(alive["ok"], "worker died on malformed input")
 
-    @unittest.skipUnless(COLOR_PDF.exists(), "no built resume PDF to rasterize")
+    @unittest.skipUnless(BUILT_PDF.exists(), "no built resume PDF to rasterize")
     def test_raster_skips_pages_the_caller_already_has(self):
         """The preview only re-sends pages whose pixels changed.
 
@@ -344,7 +344,7 @@ class WorkerEquivalenceTest(unittest.TestCase):
         must mark every page unchanged and send no image data — and the
         hashes must be stable, or nothing would ever be skipped.
         """
-        first = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1)
+        first = self.worker.call(op="raster", path=str(BUILT_PDF), scale=1)
         self.assertTrue(first["ok"], first.get("error"))
         pages = first["result"]["images"]
         self.assertTrue(pages)
@@ -353,7 +353,7 @@ class WorkerEquivalenceTest(unittest.TestCase):
             self.assertRegex(im["hash"], r"^[0-9a-f]{32}$")
 
         known = {str(im["page"]): im["hash"] for im in pages}
-        second = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1, known=known)
+        second = self.worker.call(op="raster", path=str(BUILT_PDF), scale=1, known=known)
         self.assertTrue(second["ok"], second.get("error"))
         for before, after in zip(pages, second["result"]["images"]):
             self.assertEqual(after["hash"], before["hash"])
@@ -362,19 +362,19 @@ class WorkerEquivalenceTest(unittest.TestCase):
 
         # A stale hash is not trusted: that page comes back with an image.
         known["1"] = "0" * 32
-        third = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1, known=known)
+        third = self.worker.call(op="raster", path=str(BUILT_PDF), scale=1, known=known)
         page1 = third["result"]["images"][0]
         self.assertNotIn("unchanged", page1)
         self.assertEqual(page1["png"], pages[0]["png"])
 
-    @unittest.skipUnless(COLOR_PDF.exists(), "no built resume PDF to rasterize")
+    @unittest.skipUnless(BUILT_PDF.exists(), "no built resume PDF to rasterize")
     def test_parallel_encoding_matches_one_page_at_a_time(self):
         """Encoding pages side by side must give the bytes a single-page
         request gives, page for page."""
-        both = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1)
+        both = self.worker.call(op="raster", path=str(BUILT_PDF), scale=1)
         images = both["result"]["images"]
         for im in images:
-            alone = self.worker.call(op="raster", path=str(COLOR_PDF), scale=1,
+            alone = self.worker.call(op="raster", path=str(BUILT_PDF), scale=1,
                                      pages=[im["page"]])
             self.assertEqual(alone["result"]["images"][0]["png"], im["png"])
 

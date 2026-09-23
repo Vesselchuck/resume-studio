@@ -260,6 +260,36 @@ function request(port, method, route, { body, headers = {}, timeoutMs = 120000 }
   });
 }
 
+/**
+ * Listen on /api/events and collect the named events.
+ *
+ * The preview's streamed pages arrive here, which is the only way to
+ * see them: they are deliberately not in the reply.
+ */
+function events(port, onEvent) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/events',
+      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      let buffer = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const name = /^event: (.+)$/m.exec(block);
+          const data = /^data: (.+)$/m.exec(block);
+          if (!name || !data) continue;
+          try { onEvent(name[1], JSON.parse(data[1])); } catch { /* not ours */ }
+        }
+      });
+      resolve({ close: () => req.destroy() });
+    });
+    req.on('error', () => resolve({ close: () => {} }));
+  });
+}
+
 function rawRequest(port, text) {
   return new Promise((resolve) => {
     const sock = net.connect(port, '127.0.0.1', () => sock.write(text));
@@ -358,10 +388,10 @@ async function httpTests(project, srv) {
   assertEq(status.documents.letter.dataFile.name, 'letter.yml',
     'H1: the letter card names letter.yml while the resume is forced to its template');
 
-  r = await api('POST', '/api/build', { doc: 'letter', variants: { color: true }, scale: 1 });
+  r = await api('POST', '/api/build', { doc: 'letter', scale: 1 });
   assertEq(r.status, 200, `H1: the letter builds (${r.data && r.data.error})`);
-  assertTrue(r.data && /Testy_McTest_Cover_Letter\.pdf$/.test(r.data.color.path),
-    `H1: the build read letter.yml (${r.data && r.data.color.path})`);
+  assertTrue(r.data && /Testy_McTest_Cover_Letter\.pdf$/.test(r.data.pdf.path),
+    `H1: the build read letter.yml (${r.data && r.data.pdf.path})`);
   assertTrue(fs.existsSync(path.join(project, 'dist', 'Testy_McTest_Cover_Letter.pdf')),
     'H1: the real letter PDF exists after the build');
   assertEq(r.data && r.data.render && r.data.render.meta && r.data.render.meta.author, 'Testy McTest',
@@ -382,9 +412,9 @@ async function httpTests(project, srv) {
 
   // H3 — that preview rewrote dist/letter_meta.json for other data.
   status = (await api('GET', '/api/status')).data;
-  assertTrue(/Testy_McTest_Cover_Letter\.pdf$/.test(status.documents.letter.color.path)
-    && status.documents.letter.color.exists,
-    `H3: the tray still names the built PDF after a preview (${status.documents.letter.color.path})`);
+  assertTrue(/Testy_McTest_Cover_Letter\.pdf$/.test(status.documents.letter.pdf.path)
+    && status.documents.letter.pdf.exists,
+    `H3: the tray still names the built PDF after a preview (${status.documents.letter.pdf.path})`);
   r = await api('POST', '/api/preview', { doc: 'letter', from: 'built', scale: 1 });
   assertTrue(r.data && r.data.built === true && /Testy_McTest/.test(r.data.source),
     'H3: from:"built" shows the PDF the Build wrote');
@@ -401,6 +431,101 @@ async function httpTests(project, srv) {
   r = await api('POST', '/api/preview', { doc: 'letter', scale: 1 });
   assertTrue(((r.data && r.data.images) || []).every(im => im.png && !im.unchanged),
     'L-a: a preview that names no known pages gets every PNG');
+
+  // L-d — a streamed render: the pages on the event stream, the rest of
+  // the render in the reply.
+  //
+  // The pane asks for the pages it is showing, in the order it shows
+  // them, and applies each as it arrives instead of waiting for the
+  // whole render. What must hold over HTTP is that the two halves fit
+  // back together, that each page names the render it belongs to (so a
+  // superseded render's pages can be dropped), and that a caller which
+  // asks for none of this still gets exactly one reply with everything
+  // in it.
+  await api('POST', '/api/pick', { doc: 'letter', name: null });
+  const streamData = path.join(project, 'data', 'stream.yml');
+  fs.copyFileSync(path.join(project, 'data', 'resume_default.yml'), streamData);
+  await api('POST', '/api/pick', { doc: 'resume', name: 'stream.yml' });
+  const bump = (n) => fs.writeFileSync(streamData,
+    fs.readFileSync(streamData, 'utf-8')
+      .replace(/Phasellusx* scelerisque/, `Phasellus${'x'.repeat(n)} scelerisque`));
+
+  const seen = [];
+  const stream = await events(port, (name, data) => {
+    if (name === 'page') seen.push(data);
+  });
+  try {
+    bump(1);
+    seen.length = 0;
+    r = await api('POST', '/api/preview',
+      { doc: 'resume', scale: 1, stream: true, renderId: 'rid-one' });
+    assertEq(r.status, 200, `L-d: a streamed preview succeeds (${r.data && r.data.error})`);
+    const one = r.data;
+    assertEq(one.renderId, 'rid-one', 'L-d: the reply echoes the render id');
+    assertTrue(one.streamed === true, 'L-d: ...and says it was streamed');
+    // Give the last event a moment: it is a different socket.
+    for (let i = 0; i < 50 && seen.length < one.images.length; i++) {
+      await new Promise(res => setTimeout(res, 20));
+    }
+    assertTrue(seen.length > 0 && seen.every(e => e.renderId === 'rid-one' && e.doc === 'resume'),
+      'L-d: every page event names its render and its document');
+    assertEq(seen.map(e => e.image.page), one.images.map(im => im.page),
+      'L-d: with no order asked for, the pages arrive in page order');
+    // The reply leaves out what the events carried, and the two put
+    // together are the whole render.
+    assertTrue(one.images.some(im => im.sent) && one.images.every(im => !(im.sent && im.png)),
+      'L-d: a page already sent carries no PNG in the reply');
+    const assembled = one.images.map((im) => {
+      if (!im.sent) return im;
+      const ev = seen.find(e => e.image.page === im.page);
+      return ev && ev.image.hash === im.hash ? ev.image : null;
+    });
+    assertTrue(assembled.every(im => im && im.png),
+      'L-d: the events fill in every page the reply left out');
+
+    // Order: the page on screen first. Page 2 named alone must arrive
+    // before page 1.
+    if (one.images.length > 1) {
+      bump(2);
+      seen.length = 0;
+      r = await api('POST', '/api/preview',
+        { doc: 'resume', scale: 1, stream: true, renderId: 'rid-two', order: [2] });
+      for (let i = 0; i < 50 && seen.length < r.data.images.length; i++) {
+        await new Promise(res => setTimeout(res, 20));
+      }
+      assertEq(seen.map(e => e.image.page), [2, 1],
+        'L-d: the page the caller asked for first arrives first');
+      assertTrue(seen.every(e => e.renderId === 'rid-two'),
+        'L-d: ...all tagged with the new render, none with the old one');
+    }
+
+    // A caller that does not ask for streaming is answered exactly as
+    // before: one reply, every page, every PNG, and nothing broadcast.
+    bump(3);
+    seen.length = 0;
+    r = await api('POST', '/api/preview', { doc: 'resume', scale: 1 });
+    assertEq(r.status, 200, `L-d: a plain preview still works (${r.data && r.data.error})`);
+    assertTrue(r.data.images.length > 0 && r.data.images.every(im => im.png && !im.sent),
+      'L-d: a non-streaming caller gets every PNG in the reply');
+    assertTrue(r.data.renderId === undefined && r.data.streamed === undefined,
+      'L-d: ...and no streaming fields');
+    await new Promise(res => setTimeout(res, 150));
+    assertEq(seen.length, 0, 'L-d: ...and no page events were sent');
+
+    // The unchanged-page fast path, over HTTP, with streaming on: an
+    // edit on page 1 leaves page 2 unrendered.
+    bump(4);
+    seen.length = 0;
+    r = await api('POST', '/api/preview',
+      { doc: 'resume', scale: 1, stream: true, renderId: 'rid-three' });
+    assertTrue(r.data.timings && r.data.timings.renderedPages < r.data.images.length,
+      `L-d: an edit on one page still leaves the others unrendered `
+      + `(${r.data.timings && r.data.timings.renderedPages} of ${r.data.images.length})`);
+  } finally {
+    stream.close();
+    await api('POST', '/api/pick', { doc: 'resume', name: null });
+    fs.rmSync(streamData, { force: true });
+  }
 
   // A data file that does not parse: the error the preview reports is
   // the one looksHalfWritten() recognizes (so a save caught halfway is
@@ -436,7 +561,7 @@ async function httpTests(project, srv) {
   // Kill it again, then build: the shared queue must not be wedged.
   process.kill(status.worker.pid, 'SIGKILL');
   await new Promise(res => setTimeout(res, 200));
-  r = await api('POST', '/api/build', { doc: 'letter', variants: { color: true }, scale: 1 },
+  r = await api('POST', '/api/build', { doc: 'letter', scale: 1 },
     { timeoutMs: 60000 });
   assertEq(r.status, 200, `H2: a build after a crash completes (${r.data && r.data.error})`);
 

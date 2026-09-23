@@ -2,10 +2,9 @@
 """
 snapshot_pdf.py — Visual regression test for the rendered PDFs.
 
-Compares the freshly-built color and grayscale PDFs against four
-committed fixtures using per-pixel RGB diffs with configurable
-tolerances. Designed to catch CSS / template / data regressions
-that change visible output in either variant.
+Compares the freshly-built PDF against a committed fixture using
+per-pixel RGB diffs with configurable tolerances. Designed to catch
+CSS / template / data regressions that change visible output.
 
 This is a verification TOOL, not a unittest. It lives in build/
 because unittest discovery in tests/ would import it eagerly and fail
@@ -18,51 +17,52 @@ It is also auto-invoked by resume.js as the final pipeline step.
 
 Workflow
 ────────
-1. First build (no fixtures yet):
+1. First build (no fixture yet):
        node resume.js
-   resume.js auto-bootstraps any missing fixture on its first
+   resume.js auto-bootstraps a missing fixture on its first
    snapshot call.
 
 2. Routine verification (subsequent builds):
        node resume.js
-   The snapshot test runs automatically. Exit 0 = both variants
-   match within tolerance. Exit 1 = visible regression; side-by-
-   side diff images written to tests/fixtures/diff_<variant>_pageN.png.
+   The snapshot test runs automatically. Exit 0 = the PDF matches
+   within tolerance. Exit 1 = visible regression; side-by-side diff
+   images written to tests/fixtures/diff_pageN.png.
 
 3. After an INTENTIONAL change (new content, design tweak, etc.):
        python3 build/snapshot_pdf.py --update
-   Refreshes BOTH variants of the fixture matching the data source
-   of the most recent build (read from dist/pdf_meta.json).
+   Refreshes the fixture matching the data source of the most recent
+   build (read from dist/pdf_meta.json).
 
-4. To refresh ALL four fixtures (color + grayscale × default + mine):
+4. To refresh BOTH fixtures (default + mine):
        python3 build/snapshot_pdf.py --update-all
    Re-runs the full build pipeline twice — once forcing default data,
    once forcing your data (if data/resume.yml exists) — and
-   replaces both variants' fixtures each time.
+   replaces the matching fixture each time.
 
-Dual variants × dual data sources = four fixtures
-─────────────────────────────────────────────────
-Render produces two PDFs per build, named after you rather than
+One PDF, two data sources = two fixtures
+────────────────────────────────────────
+Render produces one PDF per build, named after you rather than
 after the document (see build/_output_name.py):
   • dist/<Your_Name>_Resume.pdf
-  • dist/<Your_Name>_Resume_Grayscale.pdf
+
+(There used to be a second, grayscale PDF and therefore four
+fixtures. The palette prints correctly in color and in black and
+white from the one file now, so there is one of each.)
 
 The fixtures below keep their fixed, document-shaped names. A
 fixture is a committed reference image, and naming it after
 whoever last built would both churn the directory and put a real
 name into a repository the placeholder data exists to keep it out
 of. The build's own dist/pdf_meta.json says where to find the
-PDFs to compare.
+PDF to compare.
 
 The build can use either data/resume_default.yml (placeholder, committed)
 or data/resume.yml (your real data, gitignored). The snapshot
 test reads dist/pdf_meta.json to learn which one was loaded and
-picks the matching fixture for each variant:
+picks the matching fixture:
 
-  data_source = 'default' → tests/fixtures/expected_resume-color.pdf       (committed)
-                            tests/fixtures/expected_resume-grayscale.pdf   (committed)
-  data_source = 'mine'    → tests/fixtures/expected_resume-color.mine.pdf (gitignored)
-                            tests/fixtures/expected_resume-grayscale.mine.pdf (gitignored)
+  data_source = 'default' → tests/fixtures/expected_resume.pdf      (committed)
+  data_source = 'mine'    → tests/fixtures/expected_resume.mine.pdf (gitignored)
   data_source = 'explicit' → refused. The build read some other file,
                             named through RESUME_DATA_FILE, and no
                             fixture describes it. Compare, bootstrap and
@@ -107,7 +107,6 @@ from _env_contract import (  # noqa: E402
     ENV_LETTER_DATA_FILE,
     ENV_SKIP_SNAPSHOT,
     ENV_RESUME_PIPELINE_SUFFIX,
-    ENV_RESUME_VARIANTS,
 )
 
 
@@ -115,72 +114,35 @@ ROOT = Path(__file__).parent.parent          # project root (build/ → ..)
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
 PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
 
-# Built PDFs — resume.js produces both color and grayscale variants
-# in dist/, named after you (Gaius_Caesar_Resume.pdf and
-# Gaius_Caesar_Resume_Grayscale.pdf). The stem comes from the build's
-# own metadata rather than from a constant here, because it follows
+# Built PDF — resume.js produces one, in dist/, named after you
+# (Gaius_Caesar_Resume.pdf). The stem comes from the build's own
+# metadata rather than from a constant here, because it follows
 # `name.first` / `name.last` and therefore changes when they do.
 
-# Fixtures — four combinations of (variant × data_source).
-# The default fixtures are committed to the repo; the 'mine' fixtures
-# are gitignored and only exist on a machine that has data/resume.yml.
-FIXTURE_COLOR_DEFAULT     = FIXTURE_DIR / "expected_resume-color.pdf"
-FIXTURE_COLOR_MINE        = FIXTURE_DIR / "expected_resume-color.mine.pdf"
-FIXTURE_GRAYSCALE_DEFAULT = FIXTURE_DIR / "expected_resume-grayscale.pdf"
-FIXTURE_GRAYSCALE_MINE    = FIXTURE_DIR / "expected_resume-grayscale.mine.pdf"
+# Fixtures — one per data_source. The default fixture is committed to
+# the repo; the 'mine' fixture is gitignored and only exists on a
+# machine that has data/resume.yml.
+FIXTURE_DEFAULT = FIXTURE_DIR / "expected_resume.pdf"
+FIXTURE_MINE    = FIXTURE_DIR / "expected_resume.mine.pdf"
 
-def pdf_variants():
-    """The (label, pdf_path, default_fixture, mine_fixture) tuples.
 
-    A function rather than a module constant because `pdf_path` is
+def built_pdf():
+    """Where the last build put the PDF.
+
+    A function rather than a module constant because the path is
     resolved from dist/pdf_meta.json, which the build rewrites on every
-    run — reading it once at import time would pin the paths to
-    whatever the *previous* build was called, and snapshot_pdf.py's
-    --update-all runs two builds inside one process.
+    run — reading it once at import time would pin the path to whatever
+    the *previous* build was called, and snapshot_pdf.py's --update-all
+    runs two builds inside one process.
 
-    The label feeds the Snapshot phase output ("Colored page 1",
-    "Grayscale page 1"). The diff filename slug is derived separately
-    (see diff_images) so the label stays grammatical while the slug
-    aligns with the rest of the codebase's "color"/"grayscale" naming.
-
-    The FIXTURES are not renamed along with the outputs, and that is
+    The FIXTURES are not renamed along with the output, and that is
     deliberate. A fixture is a committed reference image; naming it
     after whoever last ran the build would churn tests/fixtures/ every
     time someone edited their surname, and would leak that name into a
     repository the placeholder data exists precisely to keep it out of.
     """
-    dist = ROOT / "dist"
     stem = _output_name.stem_from_meta(PDF_META_FILE, 'resume')
-    return [
-        ('Colored',
-         _output_name.color_pdf(dist, stem),
-         FIXTURE_COLOR_DEFAULT, FIXTURE_COLOR_MINE),
-        ('Grayscale',
-         _output_name.grayscale_pdf(dist, stem),
-         FIXTURE_GRAYSCALE_DEFAULT, FIXTURE_GRAYSCALE_MINE),
-    ]
-
-
-def active_variants():
-    """The variants the last build actually produced.
-
-    A build can be told to skip a variant (RESUME_VARIANTS), and when it
-    does it removes that variant's PDF rather than leaving the previous
-    run's file behind. So presence on disk is a truthful signal here:
-    if the grayscale PDF is absent, this build did not make one and
-    there is nothing to compare.
-
-    Returns (variants, missing_labels). An empty `variants` means no
-    build has run at all, which is a different problem and stays an
-    error at the call site.
-    """
-    present, missing = [], []
-    for variant in pdf_variants():
-        if variant[1].exists():
-            present.append(variant)
-        else:
-            missing.append(variant[0])
-    return present, missing
+    return _output_name.output_pdf(ROOT / "dist", stem)
 
 
 #: The data_source values that have fixtures. build.py can also stamp
@@ -355,25 +317,17 @@ def render_pdf_pages(pdfium, path: Path, prepare=None, only=None) -> list:
         pdf.close()
 
 
-def diff_images(Image, ImageChops, actual, expected, page_num: int, variant_label: str):
+def diff_images(Image, ImageChops, actual, expected, page_num: int):
     """
     Compare two same-page images.
 
-    `variant_label` is e.g. "Colored" or "Grayscale" — folded into the
-    output label ("Colored page 1") and (via lowercase + mapping) into
-    the diff filename slug ("color"/"grayscale", giving
-    diff_color_page1.png) so concurrent variants don't collide. The
-    label and slug differ deliberately: the label is a human-readable
-    phrase, the slug aligns with the rest of the codebase's
-    color/grayscale naming.
-
     Returns (ok, label, value, diff_path) where label is the column
-    heading, value is the result text, and diff_path is the path to
-    the written diff image on regression (None otherwise). The caller
-    emits aligned `c.ok_pair(label, value)` on pass and a
-    `❌ Colored page N` + `ℹ️ Diff file` pair on regression.
+    heading ("Page 1"), value is the result text, and diff_path is the
+    path to the written diff image on regression (None otherwise). The
+    caller emits aligned `c.ok_pair(label, value)` on pass and a
+    `❌ Page N` + `ℹ️ Diff file` pair on regression.
     """
-    label = f"{variant_label} page {page_num}"
+    label = f"Page {page_num}"
     if actual.size != expected.size:
         return False, label, (
             f"size mismatch — actual {actual.size}, expected {expected.size}"
@@ -411,14 +365,7 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int, variant_labe
     # Amplify diff for visibility (raw differences are usually invisible).
     amplified = ImageChops.multiply(diff, Image.new("RGB", diff.size, (8, 8, 8)))
     side_by_side.paste(amplified, (w * 2, 0))
-    # Map label → slug so the diff filename uses the codebase's
-    # canonical "color"/"grayscale" naming (matches the fixtures'
-    # expected_resume-color.pdf spelling) while the label stays
-    # grammatical for human-readable output.
-    _LABEL_TO_SLUG = {'Colored': 'color', 'Grayscale': 'grayscale'}
-    variant_slug = _LABEL_TO_SLUG.get(variant_label,
-                                     variant_label.lower().replace(' ', '-'))
-    out_path = FIXTURE_DIR / f"diff_{variant_slug}_page{page_num}.png"
+    out_path = FIXTURE_DIR / f"diff_page{page_num}.png"
     side_by_side.save(out_path)
 
     return False, label, (
@@ -428,19 +375,17 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int, variant_labe
 
 def update_all_fixtures():
     """
-    Refresh ALL fixtures by running the full build pipeline twice
-    and copying both PDF variants (color + grayscale) from each pass.
+    Refresh BOTH fixtures by running the full build pipeline twice and
+    copying the PDF from each pass.
 
     1. Rebuild with RESUME_DATA_SOURCE=default and SKIP_SNAPSHOT=1.
-       Copy that build's color PDF to expected_resume-color.pdf and
-       its grayscale PDF to expected_resume-grayscale.pdf. Both are
-       located through dist/pdf_meta.json, which each pass rewrites —
-       the two passes load different data files and so produce
-       differently named outputs.
+       Copy that build's PDF to expected_resume.pdf. It is located
+       through dist/pdf_meta.json, which each pass rewrites — the two
+       passes load different data files and so produce differently
+       named outputs.
     2. If data/resume.yml exists, rebuild with
-       RESUME_DATA_SOURCE=mine and copy the two PDFs to the
-       matching .mine.pdf fixtures. Otherwise skip step 2 with a
-       notice.
+       RESUME_DATA_SOURCE=mine and copy its PDF to
+       expected_resume.mine.pdf. Otherwise skip step 2 with a notice.
 
     SKIP_SNAPSHOT prevents resume.js from running the snapshot
     against the about-to-be-replaced fixtures and failing.
@@ -467,12 +412,6 @@ def update_all_fixtures():
             env.pop(name, None)
         env[ENV_RESUME_DATA_SOURCE] = source
         env[ENV_SKIP_SNAPSHOT] = '1'
-        # --update-all refreshes all four fixtures, so both variants have
-        # to be built regardless of what the caller's environment asks
-        # for. Without this, running it from a Studio session configured
-        # for color-only would silently leave the grayscale fixtures
-        # stale while reporting success.
-        env[ENV_RESUME_VARIANTS] = 'color,grayscale'
         # Tells resume.js to suffix its first phase banner with this
         # label so the user sees "Tests (default data)" / "Tests (my
         # data)" at the top of each pass, identifying which data source
@@ -488,12 +427,11 @@ def update_all_fixtures():
             return False
         return True
 
-    def copy_variants_for(source_kind):
+    def copy_fixture_for(source_kind):
         """
-        After a successful build, copy both variants (color + grayscale)
-        from dist/ to the matching fixtures for `source_kind` ('default'
-        or 'mine'). Returns the list of fixture paths copied, or None
-        on error.
+        After a successful build, copy the PDF from dist/ to the
+        matching fixture for `source_kind` ('default' or 'mine').
+        Returns the list of fixture paths copied, or None on error.
 
         Checks first that the build it is copying from really read that
         data source, by what the build itself stamped into
@@ -512,17 +450,15 @@ def update_all_fixtures():
             c.detail(f"Check that {ENV_RESUME_DATA_FILE} is not set by "
                      "something outside this script, then re-run.")
             return None
-        copied = []
-        for label, pdf_path, default_fixture, mine_fixture in pdf_variants():
-            if not pdf_path.exists():
-                c.err(f"{pdf_path.relative_to(ROOT)} missing after build.")
-                return None
-            target = mine_fixture if source_kind == 'mine' else default_fixture
-            if not safe_copy(pdf_path, target):
-                return None
-            copied.append(target)
-            c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
-        return copied
+        pdf_path = built_pdf()
+        if not pdf_path.exists():
+            c.err(f"{pdf_path.relative_to(ROOT)} missing after build.")
+            return None
+        target = FIXTURE_MINE if source_kind == 'mine' else FIXTURE_DEFAULT
+        if not safe_copy(pdf_path, target):
+            return None
+        c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
+        return [target]
 
     updated = []
 
@@ -533,7 +469,7 @@ def update_all_fixtures():
     if not run_build('default', 'default data'):
         return 1
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-    default_copied = copy_variants_for('default')
+    default_copied = copy_fixture_for('default')
     if default_copied is None:
         return 1
     updated.extend(default_copied)
@@ -547,7 +483,7 @@ def update_all_fixtures():
         print('', flush=True)
         if not run_build('mine', 'my data'):
             return 1
-        mine_copied = copy_variants_for('mine')
+        mine_copied = copy_fixture_for('mine')
         if mine_copied is None:
             return 1
         updated.extend(mine_copied)
@@ -565,16 +501,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--update", action="store_true",
-        help="Replace BOTH variants (color + grayscale) of the fixture "
-             "matching the LAST build's data source (read from "
-             "dist/pdf_meta.json) with the PDFs that build wrote to dist/.",
+        help="Replace the fixture matching the LAST build's data source "
+             "(read from dist/pdf_meta.json) with the PDF that build "
+             "wrote to dist/.",
     )
     parser.add_argument(
         "--update-all", action="store_true",
         help="Run the full build pipeline twice (once with default data, "
-             "once with your data if present) and refresh ALL four "
-             "fixtures (color + grayscale × default + mine). Use after "
-             "intentional design changes that affect both modes.",
+             "once with your data if present) and refresh BOTH fixtures "
+             "(default + mine). Use after intentional design changes.",
     )
     parser.add_argument(
         "--auto-bootstrap", action="store_true",
@@ -590,65 +525,43 @@ def main() -> int:
             return 2
         return update_all_fixtures()
 
-    # Check what the last build produced. A variant that was
-    # deliberately not built is skipped with a note; nothing built at
-    # all is still an error.
-    variants, missing = active_variants()
-    if not variants:
-        c.err("No built PDFs in dist/. Run `node resume.js` first.")
+    # Check that the last build produced something at all.
+    pdf_path = built_pdf()
+    if not pdf_path.exists():
+        c.err("No built PDF in dist/. Run `node resume.js` first.")
         return 2
-    for label in missing:
-        c.info_pair("Skipped variant", f"{label.lower()} — not built by the last run")
 
-    # --update: refresh the current data-source fixture for every
-    # variant the last build produced.
+    # --update: refresh the current data-source fixture.
     if args.update:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-        # A variant that was not built cannot be refreshed, and saying
-        # nothing would leave its fixture quietly describing an older
-        # document — the next build that does produce that variant would
-        # then fail for reasons that look unrelated to this moment.
-        for label in missing:
-            c.warn_pair(
-                "Fixture NOT refreshed",
-                f"{label.lower()} — build it first "
-                f"({ENV_RESUME_VARIANTS}=color,grayscale node resume.js) "
-                f"then re-run --update",
-            )
-        for label, pdf_path, default_fix, mine_fix in variants:
-            target = resolve_fixture_path(default_fix, mine_fix,
-                                          require_meta=True)
-            if not safe_copy(pdf_path, target):
-                return 1
-            c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
+        target = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE,
+                                      require_meta=True)
+        if not safe_copy(pdf_path, target):
+            return 1
+        c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
         return 0
 
     # --auto-bootstrap or normal compare path.
-    # Bootstrap any missing fixtures before comparing.
+    # Bootstrap a missing fixture before comparing.
     if args.auto_bootstrap:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-        bootstrapped = False
-        for label, pdf_path, default_fix, mine_fix in variants:
-            target = resolve_fixture_path(default_fix, mine_fix,
-                                          require_meta=True)
-            if not target.exists():
-                if not safe_copy(pdf_path, target):
-                    return 1
-                c.info_pair("Created fixture", str(target.relative_to(ROOT)))
-                bootstrapped = True
-        if bootstrapped:
+        target = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE,
+                                      require_meta=True)
+        if not target.exists():
+            if not safe_copy(pdf_path, target):
+                return 1
+            c.info_pair("Created fixture", str(target.relative_to(ROOT)))
             c.info_pair("Update with", "python build/snapshot_pdf.py --update")
             return 0
-        # All fixtures exist — fall through to normal compare.
+        # The fixture exists — fall through to normal compare.
 
-    # Normal compare path: verify all fixtures exist.
-    for label, pdf_path, default_fix, mine_fix in variants:
-        target = resolve_fixture_path(default_fix, mine_fix)
-        if not target.exists():
-            c.err(f"fixture missing at {target.relative_to(ROOT)}.")
-            c.detail("To create it from the PDF the last build wrote, run:")
-            c.detail(f"  python {Path(__file__).relative_to(ROOT)} --update")
-            return 2
+    # Normal compare path: verify the fixture exists.
+    expected_pdf = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE)
+    if not expected_pdf.exists():
+        c.err(f"fixture missing at {expected_pdf.relative_to(ROOT)}.")
+        c.detail("To create it from the PDF the last build wrote, run:")
+        c.detail(f"  python {Path(__file__).relative_to(ROOT)} --update")
+        return 2
 
     # Lazy-import the heavy snapshot deps. If they're missing, fail
     # with an actionable message instead of an ImportError traceback.
@@ -662,21 +575,16 @@ def main() -> int:
         return 2
 
     all_ok = True
-    for variant_label, pdf_path, default_fix, mine_fix in variants:
-        expected_pdf = resolve_fixture_path(default_fix, mine_fix)
-        actual_pages = render_pdf_pages(pdfium, pdf_path)
-        expected_pages = render_pdf_pages(pdfium, expected_pdf)
+    actual_pages = render_pdf_pages(pdfium, pdf_path)
+    expected_pages = render_pdf_pages(pdfium, expected_pdf)
 
-        if len(actual_pages) != len(expected_pages):
-            c.err(f"{variant_label} page count differs — "
-                  f"actual {len(actual_pages)}, expected {len(expected_pages)}")
-            all_ok = False
-            continue
-
+    if len(actual_pages) != len(expected_pages):
+        c.err(f"page count differs — actual {len(actual_pages)}, "
+              f"expected {len(expected_pages)}")
+        all_ok = False
+    else:
         for i, (a, e) in enumerate(zip(actual_pages, expected_pages), start=1):
-            ok, label, value, diff_path = diff_images(
-                Image, ImageChops, a, e, i, variant_label,
-            )
+            ok, label, value, diff_path = diff_images(Image, ImageChops, a, e, i)
             if ok:
                 c.ok_pair(label, value)
             else:

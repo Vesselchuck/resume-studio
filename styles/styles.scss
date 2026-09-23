@@ -11,8 +11,8 @@
 
    Content lives in data/resume.yml. The build pipeline
    (build/build.py + templates/) renders dist/index.html, then
-   resume.js produces the color and grayscale PDFs in dist/, named
-   after you rather than after the document (build/_output_name.py).
+   resume.js produces the PDF in dist/, named after you rather than
+   after the document (build/_output_name.py).
    Page placement is
    AUTOMATIC: a layout solver (build/solve_layout.js) measures
    content heights from a single-column flowing render and decides

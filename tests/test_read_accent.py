@@ -4,8 +4,7 @@ Tests for build.read_accent — extract --accent hex from _tokens.scss.
 The function is a thin regex extractor with a few sharp edges worth
 pinning down:
   • It must return the FIRST --accent it sees (the canonical :root
-    declaration), not the later @media print and html.force-grayscale
-    overrides.
+    declaration), not any later context-specific override.
   • It must fail clearly when the file is missing or has no --accent.
   • It accepts any hex form the regex allows (#fff, #aabbcc, #aabbccdd).
 
@@ -84,10 +83,10 @@ class TestReadAccent(unittest.TestCase):
 
     def test_returns_first_when_multiple_declarations(self):
         # _tokens.scss in this project does NOT have multiple :root
-        # decls, but _print.scss does have @media print and
-        # html.force-grayscale overrides. read_accent reads only
-        # _tokens.scss; even so, pin the "first wins" semantics in
-        # case someone adds an @media block to _tokens.scss.
+        # decls, and nothing overrides --accent anywhere any more —
+        # the monochrome block that used to is gone. Pin the "first
+        # wins" semantics anyway, in case someone adds an @media block
+        # to _tokens.scss.
         self.tokens.write_text(
             ":root {\n"
             "  --accent: #111111;\n"

@@ -559,10 +559,11 @@ def read_accent() -> str:
         )
     source = TOKENS_FILE.read_text(encoding='utf-8')
     # Match only the :root declaration (the first --accent encountered).
-    # Subsequent overrides under @media print and (monochrome) and
-    # html.force-grayscale are intentional context-specific re-definitions
-    # — the canonical value for non-CSS consumers (favicon SVG, theme-color)
-    # is the chromatic :root value, not the grayscale fallback.
+    # There are no other --accent declarations today — the monochrome
+    # overrides that used to follow are gone — but taking the first is
+    # still the rule: a context-specific re-definition added later would
+    # be exactly that, context-specific, while non-CSS consumers (favicon
+    # SVG, theme-color) want the canonical :root value.
     m = re.search(r'--accent:\s*(#[0-9a-fA-F]+)\s*;', source)
     if not m:
         fail(

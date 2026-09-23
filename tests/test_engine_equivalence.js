@@ -147,7 +147,7 @@ async function renderTo(pipeline, page, outPath, variant) {
     await pipeline.verifyInvariants(page, placement.pages.length);
   }
 
-  await pipeline.printPdfs(page, { color: outPath, grayscale: null, quiet: true });
+  await pipeline.printPdfs(page, { output: outPath, quiet: true });
 }
 
 

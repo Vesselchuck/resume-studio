@@ -14,20 +14,36 @@
   --surface-app:    #e9eaee;   /* off-white surrounding the pages on screen */
   --surface-page:   #ffffff;
   --text-primary:   #1a1a1a;
-  --text-muted:     #555555;
-  --text-muted-soft:#666666;   /* one tier lighter than --text-muted.
-                                  Used for the gap-entry meta line so it
-                                  reads as softer than regular meta. In
-                                  the monochrome / force-grayscale paths
-                                  (see _print.scss) this collapses to
-                                  --text-muted's overridden value because
-                                  italic + smaller size + no bullets
-                                  already carry the gap-entry rank, and
-                                  a mid-gray at that size sits inside
-                                  laser-printer halftone territory. */
-  --border-rule:    #d8d8d8;   /* thin separator rules between sections,
-                                  date/location separators, etc. */
-  --accent:         #2d4a3e;   /* deep slate-green; structural accent.
+  --text-muted:     #4a4a4a;
+  --text-muted-soft:#4a4a4a;   /* deliberately equal to --text-muted.
+                                  The gap-entry meta line used to sit one
+                                  tier lighter (#666), but its distinctness
+                                  is already carried by italic + smaller
+                                  size + no bullets, all of which survive
+                                  any printer. A separate mid-gray at 9pt
+                                  sits inside laser-printer halftone
+                                  territory, so the tier is collapsed here
+                                  rather than only in a print override.
+                                  Kept as its own token so a future design
+                                  can reintroduce the tier in one place. */
+  --border-rule:    #777777;   /* thin separator rules between sections,
+                                  date/location separators, etc.
+
+                                  Y=119, which is the practical floor for
+                                  print: office drivers in threshold mode
+                                  binarize at 127, so anything lighter
+                                  (the old #d8d8d8 at Y=216, or even
+                                  #828282 at Y=130) prints as nothing at
+                                  all. #777777 also clears the halftone
+                                  window, so the rule comes out as a solid
+                                  density-reduced line rather than a
+                                  screened texture, and survives 2–3
+                                  photocopy generations.
+
+                                  The rule reads light on screen not by
+                                  being light in color but by being thin —
+                                  see --rule-paint below. */
+  --accent:         #2a4436;   /* deep slate-green; structural accent.
                                   Applied to: section heading bars,
                                   link interactions. All structural rules
                                   (top rule, column divider, section
@@ -35,20 +51,22 @@
                                   so the accent stays exclusive to
                                   content-level emphasis.
 
-                                  In the monochrome / force-grayscale
-                                  paths the accent is explicitly
-                                  overridden — NOT to its luminance
-                                  match (which would land at ~#434343
-                                  and place section headings LIGHTER
-                                  than the meta captions below them,
-                                  inverting hierarchy). The override
-                                  collapses headings to --text-primary
-                                  and lets typography (serif face,
-                                  14pt size, all-caps, letter-spacing)
-                                  carry the rank instead. See the
-                                  rationale block in _print.scss. */
-  --rule:    1pt;       /* shared thickness for all rules (top rule,
-                                  column divider, section separator).
+                                  Chosen so that ONE file works in color
+                                  and in B&W. Converted to gray (Rec.709)
+                                  it lands at Y=62, between --text-primary
+                                  (Y=26) and --text-muted (Y=74) — section
+                                  headings stay darker than the captions
+                                  under them, so the hierarchy holds
+                                  without a monochrome-specific override.
+                                  The previous #2d4a3e converted to Y=67
+                                  against a #333 muted (Y=51) and inverted
+                                  that ranking, which is why a separate
+                                  grayscale palette existed. */
+  --rule:    1pt;       /* LAYOUT thickness for all rules (top rule,
+                                  column divider, section separator) —
+                                  the box the rule occupies, and the value
+                                  the solver's spacing formulas reason
+                                  about.
                                   Must be a whole-number pt value: fractional
                                   pt values (e.g. 1.5pt) land at non-integer
                                   PDF coordinates and anti-alias differently
@@ -57,9 +75,30 @@
                                   1pt is the atomic PDF coordinate unit —
                                   both edges span exactly one PDF unit,
                                   minimizing the H/V anti-aliasing disparity.
-                                  Next clean option up is 2pt if 1pt is too
-                                  thin; there is no consistent option at
-                                  1.5pt.                                    */
+                                  To change how heavy the rules LOOK, use
+                                  --rule-paint; leave this at 1pt.         */
+  --rule-paint: 0.5;    /* PAINTED fraction of --rule, applied as a
+                                  transform in _layout.scss. Decouples the
+                                  visible weight of a rule from its layout
+                                  box: --rule stays at the one thickness
+                                  Chromium reproduces consistently, while
+                                  the painted band is scaled down to this
+                                  fraction. Chromium snaps sub-point
+                                  border-width to 1.0pt in the emitted PDF,
+                                  but it does NOT snap a transform (it goes
+                                  in as a matrix on a form XObject), so this
+                                  is the only route to a true sub-point
+                                  rule. The transform is paint-only, so
+                                  layout geometry and the solver's
+                                  measurements are untouched.
+
+                                  0.5 measured as the knee: at 0.4 the rule
+                                  is thinner than one halftone cell often
+                                  enough to start dropping dots on coarse
+                                  screens (53% worst-case continuity across
+                                  85–150 lpi); 0.5 holds 57% worst / 97%
+                                  median, and 0.6 measures identically
+                                  while looking heavier on screen. */
 
   /* Typography. Two faces:
      --font          Body face (Manrope). Used for everything by default.
