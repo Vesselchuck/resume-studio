@@ -8,20 +8,21 @@ recipient sees the filename before they see the document. So the name
 is now yours:
 
     dist/Gaius_Caesar_Resume.pdf
-    dist/Gaius_Caesar_Resume_Grayscale.pdf
     dist/Gaius_Caesar_Cover_Letter.pdf
-    dist/Gaius_Caesar_Cover_Letter_Grayscale.pdf
 
-The color variant takes the bare stem because it is the one you send;
-the grayscale variant is suffixed. Both come from `name.first` and
-`name.last`, which since the profile split live in data/_profile.yml
-for every document at once — so the two documents always agree.
+One document, one PDF, under the bare stem. (There used to be a second,
+black-and-white PDF per document under a `_Grayscale` suffix; it is not
+built any more, and the suffix survives only in the prune pattern over
+in _output_name.js, so an old copy gets cleaned out of dist/.) The stem
+comes from `name.first` and `name.last`, which since the profile split
+live in data/_profile.yml for every document at once — so the two
+documents always agree.
 
 WHY THE DERIVATION LIVES HERE AND ONLY HERE
 ───────────────────────────────────────────
 Node needs these paths too: the pipeline writes the PDFs, resume.js
-prunes the variants it did not build, and the Studio tray offers them
-for opening. It does NOT recompute them. The name depends on the YAML,
+prunes whatever an earlier build left behind, and the Studio tray
+offers them for opening. It does NOT recompute them. The name depends on the YAML,
 and Node has no YAML parser in this project — that is precisely why
 studio_server's document detection is a column-anchored regex rather
 than a parse.
@@ -78,7 +79,6 @@ _CONSTANTS = json.loads(
 
 DOC_SUFFIX = _CONSTANTS["DOC_SUFFIX"]
 SEPARATOR = _CONSTANTS["SEPARATOR"]
-GRAYSCALE_SUFFIX = _CONSTANTS["GRAYSCALE_SUFFIX"]
 MAX_PART = _CONSTANTS["MAX_PART"]
 LEGACY = _CONSTANTS["LEGACY"]
 
@@ -166,8 +166,8 @@ def stem(name, variant: str) -> str:
     """The shared filename stem for one document's PDFs.
 
     `name` is the data file's `name` mapping ({first, last}); `variant`
-    is the pipeline's 'resume' or 'letter'. Both variants of a document
-    share this stem — only the grayscale one is suffixed.
+    is the pipeline's 'resume' or 'letter'. The document's PDF is this
+    stem plus '.pdf'.
     """
     if variant not in DOC_SUFFIX:
         raise ValueError(
@@ -185,14 +185,9 @@ def stem(name, variant: str) -> str:
     return SEPARATOR.join(parts + [suffix])
 
 
-def color_pdf(dist, output_stem: str) -> Path:
-    """Path of the color PDF — the bare stem."""
+def output_pdf(dist, output_stem: str) -> Path:
+    """Path of this document's PDF — the bare stem."""
     return Path(dist) / f"{output_stem}.pdf"
-
-
-def grayscale_pdf(dist, output_stem: str) -> Path:
-    """Path of the black-and-white PDF — the stem plus GRAYSCALE_SUFFIX."""
-    return Path(dist) / f"{output_stem}{GRAYSCALE_SUFFIX}.pdf"
 
 
 def stem_from_meta(meta_file, variant: str) -> str:

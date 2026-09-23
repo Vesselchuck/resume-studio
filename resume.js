@@ -22,16 +22,14 @@
  *      page bottom margin; section-rhythm equal across sidebar
  *      and main column; expected page count = solver's count;
  *      no descendant overflows its page's content area).
- *   8. Generate TWO PDFs via Playwright — color, then grayscale
- *      (rendered by toggling html.force-grayscale on the page).
- *   9. Crop each PDF to exact US Letter (8.5×11 in) and stamp
+ *   8. Generate the PDF via Playwright.
+ *   9. Crop it to exact US Letter (8.5×11 in) and stamp
  *      authoritative metadata from dist/pdf_meta.json.
- *  10. Snapshot test: pixel-diff both built PDFs against committed
- *      fixtures. Auto-bootstraps on first build.
+ *  10. Snapshot test: pixel-diff the built PDF against the committed
+ *      fixture. Auto-bootstraps on first build.
  *
- * The PDFs are named after you, from `name.first` / `name.last` in
- * the profile — dist/Gaius_Caesar_Resume.pdf and
- * dist/Gaius_Caesar_Resume_Grayscale.pdf. See build/_output_name.py.
+ * The PDF is named after you, from `name.first` / `name.last` in the
+ * profile — dist/Gaius_Caesar_Resume.pdf. See build/_output_name.py.
  *
  * Run with: node resume.js
  *
@@ -84,7 +82,6 @@ const { createPipeline, reported } = require('./build/pipeline');
 const { pruneStale } = require('./build/_output_name');
 const {
   ENV_SKIP_SNAPSHOT,
-  ENV_RESUME_VARIANTS,
   ENV_RESUME_SNAPSHOT,
   ENV_RESUME_TESTS,
   ENV_RESUME_DATA_SOURCE,
@@ -429,65 +426,17 @@ function readDataSource() {
 }
 
 
-/* ─── Variant selection ───────────────────────────────────────── */
-
-/**
- * Which PDF variants this run should produce.
- *
- * Unset means both, which is what this script has always done and what
- * the committed fixtures assume — so nothing changes for anyone who
- * does not set the variable.
- *
- * A variant that is NOT selected has its dist/ file removed. That is
- * deliberate: leaving last run's grayscale PDF sitting there would let
- * the snapshot test compare a fixture against a file this build never
- * wrote, which is the kind of stale-artifact bug that passes for weeks
- * and then fails for reasons nobody can reconstruct. Absent means
- * absent.
- */
-function selectedVariants() {
-  const raw = (process.env[ENV_RESUME_VARIANTS] || '').trim();
-  if (!raw) return { color: true, grayscale: true };
-
-  const wanted = new Set(
-    raw.split(',').map(v => v.trim().toLowerCase()).filter(Boolean),
-  );
-  const unknown = [...wanted].filter(v => v !== 'color' && v !== 'grayscale');
-  if (unknown.length) {
-    c.err(`${ENV_RESUME_VARIANTS}: unknown variant ${unknown.join(', ')}`);
-    c.detail("Expected a comma-separated subset of 'color' and 'grayscale'.");
-    throw reported(new Error('bad variant selection'));
-  }
-  if (!wanted.size) {
-    c.err(`${ENV_RESUME_VARIANTS} selected no variants`);
-    c.detail("Set it to 'color', 'grayscale' or both, or leave it unset.");
-    throw reported(new Error('bad variant selection'));
-  }
-  return { color: wanted.has('color'), grayscale: wanted.has('grayscale') };
-}
-
-/** Remove the output of a variant this run is not producing. */
-function dropUnbuiltVariant(target, label) {
-  if (!fs.existsSync(target)) return;
-  try {
-    fs.rmSync(target, { force: true });
-    c.info_pair('Removed stale PDF', `${path.relative(ROOT, target)} (${label} not selected)`);
-  } catch (err) {
-    c.warn_pair('Could not remove', `${path.relative(ROOT, target)} — ${err.message}`);
-  }
-}
-
-
 /**
  * Clear this document's outputs from earlier builds that this one did
  * not overwrite.
  *
- * The PDFs are named after you, so the set of filenames a build
- * occupies moves when `name.first` / `name.last` does — and it moved
- * once already for everyone, when outputs stopped being called
- * {DOC}-color.pdf. Left alone, dist/ accumulates complete,
- * plausible-looking resumes under names that are no longer current,
- * in the exact directory you open when you need to attach one.
+ * The PDF is named after you, so the set of filenames a build occupies
+ * moves when `name.first` / `name.last` does — and it moved for
+ * everyone twice already: once when outputs stopped being called
+ * {DOC}-color.pdf, and again when the grayscale variant stopped being
+ * built at all. Left alone, dist/ accumulates complete,
+ * plausible-looking resumes under names that are no longer current, in
+ * the exact directory you open when you need to attach one.
  *
  * Runs after printPdfs, so `keep` is what actually landed on disk.
  * _output_name.pruneStale does the deleting and is scoped there; this
@@ -510,11 +459,6 @@ function pruneStaleOutputs(variant, keep) {
   let browser;
   let exitCode = 0;
   try {
-    // Validated first: a typo in RESUME_VARIANTS is known before any
-    // work starts, and used to surface only after the tests, the Sass
-    // compile, the measurement pass and the browser had all run.
-    const variants = selectedVariants();
-
     runTests();
 
     c.banner('Build (measurement)');
@@ -546,16 +490,8 @@ function pruneStaleOutputs(variant, keep) {
     await pipeline.verifyInvariants(page, placement.pages.length);
 
     c.banner('PDF');
-    if (!variants.grayscale) dropUnbuiltVariant(pipeline.paths.grayscalePdf, 'grayscale');
-    if (!variants.color) dropUnbuiltVariant(pipeline.paths.colorPdf, 'color');
-    await pipeline.printPdfs(page, {
-      color: variants.color ? pipeline.paths.colorPdf : null,
-      grayscale: variants.grayscale ? pipeline.paths.grayscalePdf : null,
-    });
-    pruneStaleOutputs('resume', [
-      ...(variants.color ? [pipeline.paths.colorPdf] : []),
-      ...(variants.grayscale ? [pipeline.paths.grayscalePdf] : []),
-    ]);
+    await pipeline.printPdfs(page, { output: pipeline.paths.pdf });
+    pruneStaleOutputs('resume', [pipeline.paths.pdf]);
 
     runSnapshot();
   } catch (err) {

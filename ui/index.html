@@ -223,12 +223,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 /* outputs tray */
 .tray{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--rule-soft);padding-top:9px}
 .tray-row{
-  display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;
+  display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;
   padding:5px 4px;border-radius:6px;
 }
 .tray-row:hover{background:var(--panel-2)}
-.tray-row.pick{grid-template-columns:14px 1fr auto;cursor:pointer}
-.tray-row.pick input{accent-color:var(--accent);width:13px;height:13px;margin:0;cursor:pointer}
 .tray-row.absent{opacity:.55}
 .doc-opt{
   display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);
@@ -239,17 +237,11 @@ button{font:inherit;color:inherit;cursor:pointer}
 .tray-row .s.link{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
 .tray-row .s.link:hover{color:var(--accent)}
 /* Was monospace with path-ellipsis, because it held the output's
-   filename. It holds a variant name now, so it takes
-   the UI font — mono is for paths and numbers, not for words. The
-   path moved to the row's tooltip. */
+   filename. It holds a plain label now, so it takes the UI font —
+   mono is for paths and numbers, not for words. The path moved to the
+   row's tooltip. */
 .tray-row .f{font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tray-row .s{font-size:10.5px;color:var(--muted-2);font-variant-numeric:tabular-nums}
-.tray-row .swatch{width:12px;height:14px;border-radius:2px;border:1px solid var(--rule)}
-/* Page-shaped chips: a sheet with the variant's tint in one corner.
-   Both stops come from tokens — a literal #fff here reads as a bright
-   white tile against the dark chrome. */
-.swatch.color{background:linear-gradient(160deg,var(--panel-2) 55%,var(--accent))}
-.swatch.gray{background:linear-gradient(160deg,var(--panel-2) 55%,var(--muted-2))}
 .tray-empty{font-size:11.5px;color:var(--muted-2);padding:4px 2px 2px}
 
 .rail-foot{margin-top:16px;display:flex;flex-direction:column;gap:7px}
@@ -627,10 +619,6 @@ details[open]>summary::before{content:"▾"}
     busy: {},     // per doc: 'render' | 'build' | null
     error: {},      // per doc: the render failed — YAML is not valid
     buildError: {}, // per doc: the render is fine, the CLI build failed
-    // Which variants a Build produces. Color only by default: the
-    // grayscale PDF is for printing on a mono printer and most builds
-    // never need it. Remembered per document, per browser.
-    variants: loadVariants(),
     // Off by default. The fixtures describe one version of one
     // document; a resume changes because the person changed jobs, so
     // checking every build against a frozen copy is noise most days.
@@ -649,22 +637,6 @@ details[open]>summary::before{content:"▾"}
 
   function saveFlag(key, value) {
     try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* ignore */ }
-  }
-
-  function loadVariants() {
-    var fallback = { resume: { color: true, grayscale: false },
-                     letter: { color: true, grayscale: false } };
-    try {
-      var saved = JSON.parse(localStorage.getItem('studio.variants') || 'null');
-      if (saved && saved.resume && saved.letter) return saved;
-    } catch { /* private window, blocked storage — the default is fine */ }
-    return fallback;
-  }
-
-  function saveVariants() {
-    try {
-      localStorage.setItem('studio.variants', JSON.stringify(state.variants));
-    } catch { /* a remembered checkbox is not worth failing over */ }
   }
 
   $('themeBtn').addEventListener('click', function () {
@@ -687,8 +659,8 @@ details[open]>summary::before{content:"▾"}
     if (state.buildError[id]) return { c: 'err', t: 'Build failed' };
     var m = docMeta(id);
     if (!m) return { c: 'idle', t: 'Unknown' };
-    if (!m.color.exists) return { c: 'idle', t: 'Not built' };
-    return { c: 'ok', t: 'Built · ' + ago(m.color.mtimeMs) };
+    if (!m.pdf.exists) return { c: 'idle', t: 'Not built' };
+    return { c: 'ok', t: 'Built · ' + ago(m.pdf.mtimeMs) };
   }
 
   function renderRail() {
@@ -812,10 +784,13 @@ details[open]>summary::before{content:"▾"}
         card.appendChild(be);
       }
 
+      // One row, one deliverable. This used to be two rows with a
+      // checkbox each, back when a Build could also write a grayscale
+      // PDF; there is nothing to choose any more, so the row is a plain
+      // label and its one action.
       var tray = el('div', 'tray');
-      [['color', 'color', 'Color'],
-       ['grayscale', 'gray', 'Grayscale']].forEach(function (v) {
-        var info = m[v[0]];
+      {
+        var info = m.pdf;
         // The path comes from the server. It used to be assembled here
         // from the document id and the variant, which worked only
         // while the outputs were named after the document; they are
@@ -823,27 +798,9 @@ details[open]>summary::before{content:"▾"}
         // lives in YAML this page never sees. pdfInfo sends it whether
         // or not the file exists, so the tooltip is right either way.
         var file = info.path || '';
-        var row = el('label', 'tray-row pick');
-
-        var cb = el('input');
-        cb.type = 'checkbox';
-        cb.checked = Boolean(state.variants[id] && state.variants[id][v[0]]);
-        cb.id = 'var-' + id + '-' + v[0];
-        cb.title = 'Include the ' + v[0] + ' variant when building';
-        cb.addEventListener('click', function (e) { e.stopPropagation(); });
-        cb.addEventListener('change', function () {
-          state.variants[id][v[0]] = cb.checked;
-          if (!state.variants[id].color && !state.variants[id].grayscale) {
-            // Never let a card reach a state where Build is impossible.
-            state.variants[id].color = true;
-            toast('At least one variant', 'color kept selected');
-          }
-          saveVariants();
-          renderRail();
-        });
-        row.appendChild(cb);
+        var row = el('div', 'tray-row');
         if (file) row.title = file;
-        row.appendChild(el('div', 'f', esc(v[2])));
+        row.appendChild(el('div', 'f', 'PDF'));
 
         // "Show (217 KB)" rather than a bare size.
         //
@@ -863,7 +820,7 @@ details[open]>summary::before{content:"▾"}
         row.appendChild(right);
         if (!info.exists) row.classList.add('absent');
         tray.appendChild(row);
-      });
+      }
       card.appendChild(tray);
 
       card.addEventListener('click', function () { select(id); });
@@ -917,6 +874,9 @@ details[open]>summary::before{content:"▾"}
     r.images.forEach(function (im, i) {
       var wrap = el('div', 'sheet-wrap');
       wrap.style.width = 'min(' + Math.round(560 * state.zoom / 100) + 'px, 100%)';
+      // Which page this sheet shows, for the IntersectionObserver that
+      // decides render order and for a streamed page arriving into it.
+      wrap.dataset.page = String(im.page);
 
       var sheet = el('div', 'sheet' + (state.error[id] ? ' held' : ''));
       var key = im.hash || im.png;
@@ -933,6 +893,63 @@ details[open]>summary::before{content:"▾"}
       s.appendChild(wrap);
     });
     pageImages = keep;
+    watchSheets();
+    // The canvas is rebuilt on every state change — a busy flag, a zoom
+    // step — and a render in flight has pages on screen that are not in
+    // state.render yet. Put them back, or they would blink back to the
+    // previous render's until the reply lands.
+    repaintStreamed(id);
+  }
+
+  /* ─── which pages are on screen ────────────────────────────────
+   *
+   * The pane lays pages out left to right and wraps, so a wide window
+   * shows several at once and a narrow one shows part of the first. The
+   * server can render them in any order, and the useful order is the one
+   * the eye is on: the pages actually visible, in the order they appear,
+   * then the rest.
+   *
+   * An IntersectionObserver is how that stays true without measuring
+   * anything on every render or scroll. When it is unavailable (it is
+   * not, in WebView2 or any browser this runs in, but the preview must
+   * not depend on it), `visiblePages` is empty and the server simply
+   * renders in page order — which is what it did before any of this.
+   */
+  var onScreen = new Set();
+  var sheetObserver = null;
+
+  function watchSheets() {
+    if (typeof IntersectionObserver !== 'function') return;
+    if (!sheetObserver) {
+      sheetObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          var page = Number(e.target.dataset.page);
+          if (!page) return;
+          if (e.isIntersecting) onScreen.add(page);
+          else onScreen.delete(page);
+        });
+      }, { root: $('scroller'), threshold: 0.01 });
+    }
+    // The set is NOT cleared: the sheets are new elements but they show
+    // the same pages, and the observer's callbacks do not run until
+    // after this returns. Clearing would leave "what is on screen"
+    // empty for exactly as long as it takes to ask, which is when it is
+    // asked. Pages that are no longer in the render are filtered out by
+    // visiblePages, and the observer corrects the rest a moment later.
+    sheetObserver.disconnect();
+    var wraps = $('scroller').querySelectorAll('.sheet-wrap[data-page]');
+    for (var i = 0; i < wraps.length; i++) sheetObserver.observe(wraps[i]);
+  }
+
+  /** The pages to render first: what is on screen, in page order. */
+  function visiblePages(id) {
+    var r = state.render[id];
+    if (!r || !r.images || id !== state.active) return null;
+    var all = r.images.map(function (im) { return im.page; });
+    var seen = all.filter(function (p) { return onScreen.has(p); });
+    if (!seen.length) return null;
+    var rest = all.filter(function (p) { return !onScreen.has(p); });
+    return seen.concat(rest);
   }
 
   // Decoded page images, by the pixel hash the engine sends. The canvas is
@@ -1033,7 +1050,7 @@ details[open]>summary::before{content:"▾"}
     var g0 = el('div', 'ins-group');
     g0.appendChild(el('p', 'eyebrow', 'Outputs'));
     var out = el('div', 'srcbox');
-    [['color', 'Color'], ['grayscale', 'Grayscale']].forEach(function (v) {
+    [['pdf', 'PDF']].forEach(function (v) {
       var info = m[v[0]];
       var line = el('div');
       line.style.cssText = 'display:flex;justify-content:space-between;gap:10px;align-items:baseline';
@@ -1142,6 +1159,61 @@ details[open]>summary::before{content:"▾"}
     return { known: known, byHash: byHash };
   }
 
+  /* ─── streamed pages ───────────────────────────────────────────
+   *
+   * A streaming render sends each page on the event stream as it is
+   * ready, ahead of the reply. Two things keep that honest:
+   *
+   *   • A render id. Each request carries one, each event repeats it,
+   *     and an event from anything but the render this document is
+   *     waiting for is dropped — a fast second save must not paint a
+   *     page of the render it superseded.
+   *   • The arriving pages are painted straight into the sheets on
+   *     screen but are NOT written into state.render, which stays the
+   *     last complete render until the reply lands. So a render that
+   *     fails halfway leaves the pane holding the last good render
+   *     (redrawn from state), not a mixture of two.
+   */
+  var streamRender = { resume: null, letter: null };
+
+  function newRenderId(id) {
+    var rid = id + ':' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
+    streamRender[id] = { id: rid, pages: {} };
+    return rid;
+  }
+
+  /** Put the pages of the render in flight back onto a rebuilt canvas. */
+  function repaintStreamed(doc) {
+    var cur = streamRender[doc];
+    if (!cur || state.busy[doc] !== 'render') return;
+    Object.keys(cur.pages).forEach(function (page) {
+      paintPage(doc, cur.pages[page]);
+    });
+  }
+
+  function applyStreamedPage(doc, rid, im) {
+    var cur = streamRender[doc];
+    if (!cur || cur.id !== rid) return;          // a superseded render
+    if (!im || !im.png || !im.page) return;
+    cur.pages[im.page] = im;
+    paintPage(doc, im);
+  }
+
+  /** Draw one page image into the sheet that is showing that page. */
+  function paintPage(doc, im) {
+    if (doc !== state.active || !im || !im.png) return;
+    var wrap = $('scroller').querySelector('.sheet-wrap[data-page="' + im.page + '"]');
+    if (!wrap) return;                           // no sheet for it yet; the reply will draw it
+    var sheet = wrap.querySelector('.sheet');
+    if (!sheet) return;
+    var existing = sheet.firstElementChild;
+    if (existing && existing.dataset && existing.dataset.hash === im.hash) return;
+    var img = pageImage(im, true);
+    img.dataset.hash = im.hash || '';
+    pageImages.set(im.hash || im.png, img);
+    sheet.replaceChildren(img);
+  }
+
   async function preview(id, opts) {
     id = id || state.active;
     opts = opts || {};
@@ -1151,28 +1223,53 @@ details[open]>summary::before{content:"▾"}
       pendingPreview = { id: id, fromChange: Boolean(opts.fromChange) };
       return;
     }
+    // Which pages are on screen, asked before the canvas is rebuilt for
+    // the busy state — the answer is about what the user is looking at
+    // now, not about the elements that are about to replace it.
+    var order = visiblePages(id);
     state.busy[id] = 'render';
     renderAll();
     try {
       // Unchanged pages come back as {hash, unchanged: true} with no PNG;
       // the image this page already has is put back in by hash.
       var held = heldImages(state.render[id]);
-      var r = await api('POST', '/api/preview', { doc: id, scale: 2, known: held.known });
+      var rid = newRenderId(id);
+      var r = await api('POST', '/api/preview', {
+        doc: id, scale: 2, known: held.known,
+        stream: true, renderId: rid, order: order,
+      });
       var missing = false;
+      var arrived = (streamRender[id] && streamRender[id].id === rid)
+        ? streamRender[id].pages : {};
       (r.images || []).forEach(function (im) {
+        if (im.sent) {
+          // Already delivered on the event stream.
+          if (arrived[im.page] && arrived[im.page].hash === im.hash) {
+            im.png = arrived[im.page].png;
+          } else {
+            missing = true;
+          }
+          delete im.sent;
+          return;
+        }
         if (!im.unchanged) return;
         if (held.byHash[im.hash]) im.png = held.byHash[im.hash];
         else missing = true;
         delete im.unchanged;
       });
-      // Cannot happen unless the held images changed under the request;
-      // if it does, ask again for every page rather than show a blank.
+      // Cannot happen unless the held images changed under the request,
+      // or an event was lost; if it does, ask again for every page — and
+      // without streaming, so the answer is complete in itself.
       if (missing) r = await api('POST', '/api/preview', { doc: id, scale: 2 });
       state.render[id] = r;
       delete state.error[id];
     } catch (err) {
       state.error[id] = err.message;
     } finally {
+      // This render is over: its streamed pages are either in
+      // state.render now or belong to a render that failed, and either
+      // way nothing should paint them again.
+      if (streamRender[id] && streamRender[id].id === rid) streamRender[id] = null;
       state.busy[id] = null;
       await refreshStatus();
       renderAll();
@@ -1202,7 +1299,7 @@ details[open]>summary::before{content:"▾"}
     renderAll();
     try {
       var r = await api('POST', '/api/build',
-        { doc: id, variants: state.variants[id], snapshot: state.snapshot,
+        { doc: id, snapshot: state.snapshot,
           tests: state.tests, scale: 2 });
 
       var drift = state.log.slice(mark)
@@ -1623,6 +1720,13 @@ details[open]>summary::before{content:"▾"}
       var m = docMeta(state.active);
       if (!m || !m.live) return;
       preview(null, { fromChange: true });
+    });
+
+    // One page of a streaming render, as soon as the server has it. See
+    // applyStreamedPage: events from a superseded render are dropped.
+    es.addEventListener('page', function (ev) {
+      var d = JSON.parse(ev.data);
+      applyStreamedPage(d.doc, d.renderId, d.image);
     });
 
     es.addEventListener('render', function (ev) {

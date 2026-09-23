@@ -39,104 +39,29 @@
   }
 }
 
-// Grayscale token overrides — shared by the (monochrome) media query
-// and the html.force-grayscale class below. Both paths must produce the
-// identical B&W rendering, so the four token values live in a single
-// mixin used at both sites. Per-token rationale (Y values, halftone
-// thresholds, dot-gain reasoning) lives in the long comment above the
-// @media block; this mixin is the mechanical "what to set" part only.
-@mixin grayscale-tokens {
-  --text-muted:      #333333;
-  --text-muted-soft: #333333;
-  --border-rule:     #777777;
-  --accent:          #1a1a1a;
-}
+/* NO MONOCHROME PATH. There used to be one: a @media print and
+   (monochrome) block plus an html.force-grayscale class, both pulling
+   in a @mixin grayscale-tokens that re-tinted four tokens for B&W
+   output, and a second PDF built with that class applied.
 
-/* B&W / monochrome print: token-only color overrides tuned for
-   what a 600dpi laser printer actually puts on paper, not just
-   what a screen-side luminance calculation would predict.
-   Rationale per token:
+   All of it is gone, because the base palette no longer needs
+   rescuing. The rules used to be #d8d8d8, which an office driver in
+   threshold mode binarizes away to nothing, and the accent was light
+   enough that converting it to gray put section headings lighter than
+   the captions beneath them. Both are fixed at the source in
+   _tokens.scss: the rules are #777777 (below the 127 cutoff, below the
+   halftone window) and the accent is #2a4436 (gray Y=62, between body
+   Y=26 and captions Y=74, so the ranking survives conversion). The one
+   file prints correctly in color and in black and white.
 
-     --text-muted:      #555 → #333
-                        Y=85 → Y=51. Below the halftone problem zone
-                        for thin/small elements; renders as solid
-                        toner at 9pt caption sizes. Dot gain on
-                        paper compresses the muted/body gap slightly
-                        (Δ_Y=25 on screen → effective Δ≈10 on paper),
-                        which is the unavoidable cost of monochrome.
+   A monochrome-only design could still be marginally crisper — folding
+   headings all the way into body black costs nothing when you know the
+   printer. It is not worth a second deliverable, a second fixture and a
+   second thing to keep in sync, and a recipient who prints your resume
+   is not going to pick the right file anyway.
 
-     --text-muted-soft: #666 → #333 (= --text-muted)
-                        Collapse intentionally. The gap-entry's
-                        distinctness is already carried by italic +
-                        no-bullets + smaller block height — all of
-                        which survive any printer. A mid-gray at
-                        Y=68 (#444) would sit inside the halftone
-                        problem zone for a one-line element and
-                        risk a visibly screened texture that reads
-                        as a printer artifact rather than design.
-
-     --border-rule:     #d8d8d8 → #777
-                        Y=216 → Y=119. At #999 (the old value, Y=153)
-                        a 1pt rule lands inside the halftone window
-                        and renders as a dotted/screened line on
-                        cheaper office printers; also doesn't
-                        survive 2+ photocopy generations. #777 sits
-                        just below that window — printer drivers
-                        render it as a solid density-reduced line,
-                        photocopies survive 2–3 generations, still
-                        reads as a delicate separator rather than
-                        a frame.
-
-     --accent:          #2d4a3e → #1a1a1a (= --text-primary)
-                        NOT a luminance match. Rec.709 luminance of
-                        the green is Y≈67 (#434343), which would
-                        place section headings LIGHTER than the
-                        meta captions below them (#333, Y=51) —
-                        hierarchy inversion. Worse on paper: dot
-                        gain compresses the dark end (#1a1a → near-
-                        solid black at 14pt body) and expands the
-                        light end (#434343 stays visibly gray), so
-                        the inversion is amplified, not mitigated.
-                        Collapse to body color instead; typography
-                        — Newsreader serif vs Manrope sans, 14pt vs
-                        10pt, all-caps with --ls-wide letter-spacing,
-                        surrounding whitespace — carries the heading
-                        rank without depending on tonal value.
-
-   Result: in the color version, recipients see four tonal layers
-   (accent green, body black, muted gray, rule whisper). In the
-   B&W variant, three (headings folded into body, no halftone risk,
-   photocopy-resilient). The two variants aim for the best version
-   of themselves on their respective output medium, not visual
-   equivalence between media.
-
-   This block applies ONLY when the printer reports as monochrome,
-   so color printers see the original lighter aesthetic.          */
-@media print and (monochrome) {
-  :root {
-    @include grayscale-tokens;
-  }
-}
-
-/* Force-grayscale variant: applied via `<html class="force-grayscale">`
-   by resume.js when producing the dedicated grayscale PDF. Browsers
-   can't activate the (monochrome) media query through Playwright's
-   emulateMedia API, so we replicate its rule cascade unconditionally
-   under a class selector.
-
-   CRUCIALLY does NOT use filter: grayscale(1). CSS filters require
-   pixel-level compositing, so Chromium rasterizes the entire page
-   into a bitmap and embeds the rasterized result in the PDF — the
-   grayscale.pdf ends up ~6× the size of the color version (e.g.
-   1.2 MB vs 204 KB) and sub-pixel text positions get snapped to
-   integer pixel coordinates with anti-aliasing, producing small
-   layout differences relative to the vector color PDF.
-
-   Token-only overrides keep the PDF as pure vector text and
-   strokes, with byte-identical layout geometry between the two
-   variants. Pixel values differ only for the four color tokens
-   above; everything else (page dimensions, glyph positions, line
-   widths, separator positions) is mathematically identical.        */
-html.force-grayscale {
-  @include grayscale-tokens;
-}
+   If you ever want that block back, note what made it necessary in the
+   first place: NOT filter: grayscale(1). A CSS filter forces Chromium
+   to rasterize the whole page and embed a bitmap — roughly 6x the file
+   size, with sub-pixel text positions snapped to integer pixels. Token
+   overrides keep the PDF pure vector. */

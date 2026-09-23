@@ -41,6 +41,100 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ---
 
+## [Unreleased]
+
+Nothing yet.
+
+---
+
+## [0.9.0] — 2026-09-23
+
+*Breaking: there is one PDF per document now, not two. It prints
+correctly in color and in black and white, so the grayscale variant and
+the `RESUME_VARIANTS` variable are gone. The window also opens sooner,
+and each page of the preview appears as soon as it is ready instead of
+waiting for the others.*
+
+### Upgrading from 0.8.x
+
+1. Build once. The old `<Your_Name>_Resume_Grayscale.pdf` and
+   `<Your_Name>_Cover_Letter_Grayscale.pdf` are deleted from `dist/`
+   for you, so you cannot attach one by mistake.
+2. If you set `RESUME_VARIANTS` in a script of your own, remove it. It
+   is no longer read, and a build writes the one PDF either way.
+3. If you attach the grayscale PDF when you know the printer is
+   black-and-white, attach the ordinary one instead — that is the
+   change this release is for.
+4. Snapshot fixtures are renamed. Delete
+   `tests/fixtures/expected_resume-color.pdf` and
+   `expected_resume-grayscale.pdf`; the next build writes
+   `expected_resume.pdf`, and `python build/snapshot_pdf.py --update`
+   accepts it as the baseline.
+
+### Changes
+
+- **Removed — Breaking.** The grayscale PDF. Every document built two
+  files, and choosing between them was your problem at the moment you
+  attached one. Now there is one, and it is right either way — see the
+  palette change below. Gone with it: the **Grayscale** checkbox on
+  each card in the Studio, the `force-grayscale` class and the
+  `@media print and (monochrome)` block in the stylesheet, and two of
+  the four snapshot fixtures. A build deletes
+  any `*_Grayscale.pdf` an older build left in `dist/`, so you will not
+  find yourself attaching one by mistake.
+- **Removed — Breaking.** `RESUME_VARIANTS`. It chose which of the two
+  PDFs a build wrote; with one PDF there is nothing to choose. A build
+  that still sets it is not refused — the variable is simply not read.
+- **Changed.** The palette, which is what makes the one file enough.
+  The separator rules were a very light gray that an office printer in
+  threshold mode drops entirely, and the green was light enough that
+  converting it to gray put section headings lighter than the captions
+  beneath them. The rules are now a gray dark enough to survive any
+  printer, the green is a shade deeper, and the two muted grays have
+  merged into one darker tone.
+- **Changed.** Separator rules are painted at half the thickness they
+  occupy. Making them darker would have made them heavier on screen, so
+  the rule's layout box stays at 1pt and only the inked band is scaled
+  down — a new `--rule-paint` token in `styles/_tokens.scss`, set to
+  `0.5`. Page breaks and spacing are unaffected, because nothing about
+  the layout changed. Set it to `1` for the old weight.
+- **Changed.** The Studio window opens before the engine has finished
+  starting, instead of after: the server answers as soon as it has a
+  port, and anything needing Chromium or the Python worker waits
+  behind the scenes. Chromium, the Python worker and Sass now start
+  together, the worker imports what the first preview needs while
+  Chromium is still launching, and Node's compile cache is used where
+  it exists (Node 22.8 and newer), in your user cache directory rather
+  than in the project. Time to the window was about 290 ms shorter in
+  testing.
+- **Changed.** Preview pages reach the window one at a time, in the
+  order they appear on screen, rather than together at the end. When
+  the window is narrow or scrolled, the page you are looking at is the
+  first to arrive.
+- **Changed.** While the resume's measurement pass runs, the final page
+  is built from the layout the last render solved and loaded in a second
+  Chromium page. If the solver produces the same layout — which a text
+  edit usually does — that page is printed; anything else falls back to
+  the normal path. `RESUME_SPECULATIVE=off` turns it off.
+- **Changed.** Snapshot fixtures are `expected_resume.pdf` and
+  `expected_resume.mine.pdf`, one per data source instead of two per
+  data source.
+- **Fixed.** The first step of `test_speculative_load.js` asserted that
+  the engine's guess at the final layout was used, while guessing
+  against whatever `dist/placement.json` happened to hold when the
+  suite started — so the suite passed after building this project's
+  own template and failed after building yours. It now clears the
+  placement first and expects no guess.
+- **Changed.** The README's screenshots are rebuilt: one PDF per
+  document in the figures, and one **PDF** row where the Studio used to
+  show a **Color** and a **Grayscale** checkbox.
+- **Added.** `test_preview_stream.js`, `test_speculative_load.js` and
+  `test_cold_start.js`, and a streamed preview section in the Studio
+  server tests. `test_print_parallel.js` is removed with the feature it
+  covered. The full suite now takes about a minute.
+
+---
+
 ## [0.8.1] — 2026-09-22
 
 *The preview shows a change about twice as fast, and a save that
@@ -896,7 +990,10 @@ the old names can still be followed.
 | 0.7.1 | — | a lost-save fix, faster previews, a security fix |
 | 0.8.0 | — | breaking: stricter data checks; Studio, build and security fixes |
 | 0.8.1 | — | a faster preview and faster builds, output unchanged |
+| 0.9.0 | — | breaking: one PDF per document, no grayscale variant |
 
+[Unreleased]: #unreleased
+[0.9.0]: #090--2026-09-23
 [0.8.1]: #081--2026-09-22
 [0.8.0]: #080--2026-09-21
 [0.7.1]: #071--2026-09-21

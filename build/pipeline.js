@@ -128,19 +128,16 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
     pdfMeta: path.join(root, 'dist', isLetter ? 'letter_meta.json' : 'pdf_meta.json'),
     placement: path.join(root, 'dist', 'placement.json'),
 
-    // The PDFs are named after you — Gaius_Caesar_Resume.pdf, not
+    // The PDF is named after you — Gaius_Caesar_Resume.pdf, not
     // resume-color.pdf — and the name lives in the YAML, which only
-    // Python reads. So these two are getters rather than strings:
-    // the stem arrives in dist/pdf_meta.json, which build.py writes
-    // during the measurement pass, and every read of these happens
-    // after that (printing, pruning, the app's tray). Reading one
-    // before any build has run yields 'Resume.pdf', which correctly
-    // does not exist. See _output_name.js.
-    get colorPdf() {
-      return outputPaths(this.dist, this.pdfMeta, variant).colorPdf;
-    },
-    get grayscalePdf() {
-      return outputPaths(this.dist, this.pdfMeta, variant).grayscalePdf;
+    // Python reads. So these are getters rather than strings: the stem
+    // arrives in dist/pdf_meta.json, which build.py writes during the
+    // measurement pass, and every read of them happens after that
+    // (printing, pruning, the app's tray). Reading one before any build
+    // has run yields 'Resume.pdf', which correctly does not exist. See
+    // _output_name.js.
+    get pdf() {
+      return outputPaths(this.dist, this.pdfMeta, variant).pdf;
     },
     get outputStem() {
       return outputPaths(this.dist, this.pdfMeta, variant).stem;
@@ -479,10 +476,16 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * (useful when invariants fire and you want to compare against what
    * the solver thought would fit).
    */
-  async function verifyInvariants(page, expectedPageCount, navOptions = {}) {
+  async function verifyInvariants(page, expectedPageCount, navOptions = {}, { loaded: already = null } = {}) {
     // Reload the page so the invariant check runs against the FINAL
     // HTML (not the measurement HTML still loaded from phase 3).
-    const loaded = await openDocument(page, navOptions);
+    //
+    // `loaded` (the engine's speculative path) says the caller has
+    // already loaded the final HTML into this page and has proved it is
+    // the final HTML — so the check runs against what is there instead
+    // of loading it again. The check itself is unchanged: it always runs
+    // on the page that is about to be printed.
+    const loaded = already || await openDocument(page, navOptions);
 
     const result = await checkLayoutInvariants(page, { expectedPageCount });
 
@@ -612,85 +615,52 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
   }
 
   /**
-   * Phases 8-9: Print the page to PDF(s), then crop each to true US
-   * Letter.
+   * Phases 8-9: Print the page to PDF, then crop it to true US Letter.
    *
    * Chromium's `page.pdf()` quantizes page dimensions to a 0.12-pt
    * grid, producing pages slightly oversized. Post-process via
-   * crop_pdf.py to get exact 8.5×11 in plus authoritative metadata
+   * crop_pdf.py to get exact 8.5x11 in plus authoritative metadata
    * (and /Lang catalog entry) from dist/pdf_meta.json.
    *
-   * Uses tmpdir-based intermediates so partially-written cropped PDFs
-   * never overwrite known-good outputs if the crop step fails. Temp
-   * files are unconditionally removed in the finally block — even when
-   * the crop step throws.
+   * Uses a tmpdir-based intermediate so a partially-written cropped PDF
+   * never overwrites a known-good output if the crop step fails. The
+   * temp file is unconditionally removed in the finally block — even
+   * when the crop step throws.
    *
-   * Grayscale variant: toggles `html.force-grayscale` on the page
-   * before the second render. The class applies token-only color
-   * overrides (--text-muted, --text-muted-soft, --border-rule, --accent
-   * → see _print.scss for per-token rationale) and crucially does NOT
-   * use `filter: grayscale(1)`: a CSS filter would force Chromium to
-   * rasterize the page, producing a ~6× larger PDF (image-backed) with
-   * sub-pixel layout drift relative to the color PDF. Token overrides
-   * keep the output as pure vector text + strokes with byte-identical
-   * layout geometry between the two variants. The class is removed
-   * after the second render so the page state is clean for any
-   * downstream consumers.
+   * ONE PDF. There used to be two prints here, the second with a
+   * `force-grayscale` class on <html> for a black-and-white variant,
+   * and a whole apparatus for taking them at the same time from two
+   * pages of the same document. The palette now prints correctly in
+   * color and in B&W from the one file (see styles/_tokens.scss), so
+   * the variant, the class and the parallel path are all gone.
    *
    * @param {object}   page
    * @param {object}   targets
-   * @param {?string}  targets.color     — where to write the color PDF, or null to skip
-   * @param {?string}  targets.grayscale — where to write the grayscale PDF, or null to skip
-   * @param {boolean}  targets.quiet     — suppress the "Wrote PDF" lines,
+   * @param {string}   targets.output — where to write the PDF
+   * @param {boolean}  targets.quiet  — suppress the "Wrote PDF" line,
    *   for a caller printing to a throwaway file, where announcing it on
    *   every run is noise that also reads like deliverables being written
    *   somewhere strange.
    *
-   * The CLI passes both real dist/ paths, which is the only way
-   * dist/*.pdf is ever written. The engine's live preview does not come
-   * through here at all: it prints with printPreviewPdf and leaves the
-   * crop to the rasterizer.
+   * The CLI passes a real dist/ path, which is the only way dist/*.pdf
+   * is ever written. The engine's live preview does not come through
+   * here at all: it prints with printPreviewPdf and leaves the crop to
+   * the rasterizer.
    */
   async function printPdfs(page, targets) {
-    const pdfOptions = PDF_OPTIONS;
+    const tmp = path.join(
+      os.tmpdir(), `resume-print-${process.pid}-${Date.now()}.tmp.pdf`);
 
-    let wroteOne = false;
-
-    if (targets.color) {
-      const tmp = path.join(os.tmpdir(), `resume-color-${process.pid}-${Date.now()}.tmp.pdf`);
-      await page.pdf({ path: tmp, ...pdfOptions });
-      try {
-        await python.cropPdf({
-          input: tmp, output: targets.color, meta: paths.pdfMeta, quiet: targets.quiet,
-        });
-      } finally {
-        fs.rmSync(tmp, { force: true });
-      }
-      if (!targets.quiet) c.ok_pair('Wrote PDF (color)', path.relative(root, targets.color));
-      wroteOne = true;
+    await page.pdf({ path: tmp, ...PDF_OPTIONS });
+    try {
+      await python.cropPdf({
+        input: tmp, output: targets.output, meta: paths.pdfMeta, quiet: targets.quiet,
+      });
+    } finally {
+      fs.rmSync(tmp, { force: true });
     }
-
-    if (targets.grayscale) {
-      await page.evaluate(() => document.documentElement.classList.add('force-grayscale'));
-      const tmp = path.join(os.tmpdir(), `resume-grayscale-${process.pid}-${Date.now()}.tmp.pdf`);
-      await page.pdf({ path: tmp, ...pdfOptions });
-      await page.evaluate(() => document.documentElement.classList.remove('force-grayscale'));
-      try {
-        // Suppress the "Cropped" and "Stamped metadata" summary lines on
-        // the second crop — they're identical to the first call's output
-        // and only add noise. Errors and warnings still print. When the
-        // color variant was skipped this is the only crop, so it prints
-        // normally.
-        await python.cropPdf({
-          input: tmp, output: targets.grayscale, meta: paths.pdfMeta,
-          quiet: targets.quiet || wroteOne,
-        });
-      } finally {
-        fs.rmSync(tmp, { force: true });
-      }
-      if (!targets.quiet) {
-        c.ok_pair('Wrote PDF (grayscale)', path.relative(root, targets.grayscale));
-      }
+    if (!targets.quiet) {
+      c.ok_pair('Wrote PDF', path.relative(root, targets.output));
     }
   }
 
@@ -774,7 +744,7 @@ const navigated = new WeakMap();
  *     stylesheet that is not loaded.
  *   • The <html>, <head> and <body> attributes are set to the new
  *     document's exactly — lang, classes, and removing any a previous
- *     step added (printPdfs' force-grayscale class).
+ *     step added.
  *   • It then forces a style and layout pass, so any font the new text
  *     needs has started loading, and waits for every stylesheet and for
  *     document.fonts.ready — the same wait a navigation gets.

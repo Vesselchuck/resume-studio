@@ -41,11 +41,25 @@ main.resume {
    horizontal vs vertical elements, producing visibly unequal
    weights from the same value. border is rendered as a PDF
    stroke operation — orientation-agnostic, consistent weight
-   in both directions guaranteed.                            */
+   in both directions guaranteed.
+
+   PAINT vs LAYOUT. Every rule below is a zero-size element whose
+   only visible substance is its border, so scaling it across its
+   thin axis changes what is painted and nothing else: the element
+   still occupies --rule of layout, the solver still measures the
+   same heights, and the section-rhythm formula still balances.
+   That separation is what --rule-paint buys. It exists because
+   Chromium snaps a sub-point border-width up to a full 1.0pt in
+   the emitted PDF, so `border-top: 0.5pt` yields a 1pt rule —
+   whereas a transform is written into the PDF as a matrix and is
+   honored exactly. Set --rule-paint to 1 to paint rules at their
+   full layout thickness; the geometry is identical either way. */
 .top-rule {
   block-size: 0;
   border: 0;
   border-top: var(--rule) solid var(--border-rule);
+  transform: scaleY(var(--rule-paint));
+  transform-origin: top;
   margin-block-end: 1.5rem;
 }
 
@@ -73,6 +87,12 @@ main.resume {
   block-size: 0;
   border: 0;
   border-top: var(--rule) solid var(--border-rule);
+  /* Paint-only thinning — see the note above .top-rule. The margin
+     formula below still subtracts the full --rule, because the rule
+     still occupies --rule of layout regardless of how much of it
+     gets inked.                                                    */
+  transform: scaleY(var(--rule-paint));
+  transform-origin: top;
   /* Single unified formula — works identically in sidebar and main-col
      because both columns now have gap: 0. No context override needed. */
   margin-block: calc((var(--section-rhythm) - var(--rule)) / 2);
@@ -136,6 +156,12 @@ main.resume {
      in --border-rule. Thickness tracks --rule to stay consistent
      across all three.                                                 */
   border-left: var(--rule) solid var(--border-rule);
+  /* Paint-only thinning on the inline axis — see the note above
+     .top-rule. transform-origin: left keeps the divider's left edge
+     pinned at the gap midpoint computed above, so the inline offset
+     needs no correction.                                           */
+  transform: scaleX(var(--rule-paint));
+  transform-origin: left;
   pointer-events: none;
 }
 

@@ -25,11 +25,16 @@
  *   GET  /api/status       engine + data-source state
  *   GET  /api/datafiles    what's in data/
  *   GET  /api/datafile     ?name= -> one file's contents
- *   GET  /api/events       SSE: log lines and render/build state
- *   POST /api/preview      {doc, scale, pages, from, known} -> rasterized
- *                          PDF pages; from:'built' reads the last Build's
- *                          PDF instead of re-rendering; known ({page:
- *                          hash}) returns unchanged pages without a PNG
+ *   GET  /api/events       SSE: log lines, render/build state, and the
+ *                          `page` events of a streamed render
+ *   POST /api/preview      {doc, scale, pages, from, known, stream,
+ *                          renderId, order} -> rasterized PDF pages;
+ *                          from:'built' reads the last Build's PDF
+ *                          instead of re-rendering; known ({page: hash})
+ *                          returns unchanged pages without a PNG;
+ *                          stream:true sends each page on /api/events as
+ *                          it is ready (most wanted first, per `order`)
+ *                          and leaves those PNGs out of the reply
  *   POST /api/build        {doc, variants, snapshot, tests} -> shells out to the
  *                          CLI, and returns the built PDF rasterized
  *   POST /api/datasource   {source: 'default'|'mine'}
@@ -45,6 +50,14 @@
  * Run standalone:  node build/studio_server.js [--port 4173] [--open]
  */
 
+// First, before anything heavy is required: V8 reuses the compiled form
+// of every module loaded after this line, which is most of what a cold
+// start spends its time on (playwright's require alone was ~290 ms).
+// Silently a no-op on Node < 22.8 or when the cache cannot be written.
+// See build/_compile_cache.js for where the cache lives.
+const compileCache = require('./_compile_cache');
+compileCache.enable();
+
 const http = require('http');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -53,10 +66,9 @@ const os = require('os');
 
 const { createEngine } = require('./engine');
 const {
-  outputPaths, outputPattern, GRAYSCALE_SUFFIX, DOC_SUFFIX, SEPARATOR,
+  outputPaths, outputPattern, RETIRED_GRAYSCALE_SUFFIXES, DOC_SUFFIX, SEPARATOR,
 } = require('./_output_name');
 const {
-  ENV_RESUME_VARIANTS,
   ENV_RESUME_SNAPSHOT,
   ENV_RESUME_TESTS,
   ENV_RESUME_DATA_SOURCE,
@@ -163,7 +175,7 @@ const DOCS = {
 };
 
 /*
- * `pdf` and `grayscalePdf` are the paths the last real Build wrote.
+ * `pdf` is the path the last real Build wrote.
  *
  * The built PDFs are named after you — Gaius_Caesar_Resume.pdf — so
  * their paths depend on data this server never parses. build.py writes
@@ -199,34 +211,29 @@ function readJson(file) {
  */
 function discoverBuilt(doc) {
   const fromMeta = outputPaths(DIST, doc.meta, doc.variant);
-  const found = (p) => fs.existsSync(p.colorPdf) || fs.existsSync(p.grayscalePdf);
   let chosen = fromMeta;
-  if (!found(fromMeta)) {
+  if (!fs.existsSync(fromMeta.pdf)) {
     // A current output's stem is the bare document suffix or ends in
     // "<separator><suffix>"; anything else the pattern admits (a
-    // retired grayscale spelling) is not something a Build writes now.
+    // retired grayscale spelling, from back when a second PDF was
+    // built) is not something a Build writes now.
     const suffix = DOC_SUFFIX[doc.variant];
     const isStem = (stem) => stem === suffix || stem.endsWith(`${SEPARATOR}${suffix}`);
-    const graySuffix = `${GRAYSCALE_SUFFIX}.pdf`;
+    const retired = RETIRED_GRAYSCALE_SUFFIXES.map(x => `${x}.pdf`);
     let newest = null;
     let entries = [];
     try { entries = fs.readdirSync(DIST); } catch { /* nothing built */ }
     for (const name of entries) {
       if (!outputPattern(doc.variant).test(name)) continue;
-      const stem = name.endsWith(graySuffix)
-        ? name.slice(0, -graySuffix.length)
-        : name.slice(0, -'.pdf'.length);
+      if (retired.some(x => name.endsWith(x))) continue;
+      const stem = name.slice(0, -'.pdf'.length);
       if (!isStem(stem)) continue;
       let mtime;
       try { mtime = fs.statSync(path.join(DIST, name)).mtimeMs; } catch { continue; }
       if (!newest || mtime > newest.mtime) newest = { mtime, stem };
     }
     if (newest) {
-      chosen = {
-        stem: newest.stem,
-        colorPdf: path.join(DIST, `${newest.stem}.pdf`),
-        grayscalePdf: path.join(DIST, `${newest.stem}${GRAYSCALE_SUFFIX}.pdf`),
-      };
+      chosen = { stem: newest.stem, pdf: path.join(DIST, `${newest.stem}.pdf`) };
     }
   }
   const meta = readJson(doc.meta);
@@ -248,10 +255,7 @@ function rememberBuilt(doc) {
 for (const doc of Object.values(DOCS)) {
   Object.defineProperties(doc, {
     pdf: {
-      get() { return builtPaths(this).colorPdf; },
-    },
-    grayscalePdf: {
-      get() { return builtPaths(this).grayscalePdf; },
+      get() { return builtPaths(this).pdf; },
     },
   });
 }
@@ -645,9 +649,30 @@ function pdfInfo(p) {
 async function start({ port = 0, host = '127.0.0.1' } = {}) {
   teeStdout();
 
-  // Warm: Python, Chromium and Sass start together now, so the first
-  // preview does not wait for each of them in turn.
-  const engine = await createEngine({ root: ROOT, warm: true });
+  /*
+   * The engine starts alongside the HTTP listener, not before it.
+   *
+   * Warm: Python, Chromium and Sass start together, so the first preview
+   * does not wait for each of them in turn. But they still take a few
+   * hundred milliseconds between them, and this used to be awaited
+   * before the socket was even opened — which meant the desktop shell,
+   * which waits for the READY line to create its window, could not so
+   * much as start loading the UI until Chromium was up.
+   *
+   * So the listener comes up first and READY is printed as soon as the
+   * port is known. The window, the page, its stylesheet and its fonts
+   * then load while Chromium and Sass are still starting. Every request
+   * that needs the engine waits for `engineReady` (see handle), so
+   * nothing can reach a half-built engine; the only difference is that
+   * the waiting now happens with the UI on screen instead of in front
+   * of a blank window.
+   */
+  let engine = null;
+  const engineReady = createEngine({ root: ROOT, warm: true })
+    .then((e) => { engine = e; return e; });
+  // A request or the awaits below report it; this only stops Node from
+  // treating an early failure as an unhandled rejection.
+  engineReady.catch(() => {});
 
   // Which YAML the next render reads. Mirrors RESUME_DATA_SOURCE:
   // null means build.py's own rule (local if present, else default).
@@ -698,19 +723,13 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
    *
    * This is also the only way to show a document with no live pipeline
    * (see DOCS[].live), and the fallback when a render is unavailable.
-   *
-   * Color first; grayscale only when that is the sole variant built —
-   * a grayscale-only build should show grayscale, and say why.
    */
   async function renderFromBuilt(id, { scale, pages } = {}) {
     const doc = DOCS[id];
     const started = Date.now();
     const built = builtPaths(doc);
 
-    const color = fs.existsSync(doc.pdf);
-    const pdfPath = color
-      ? doc.pdf
-      : (fs.existsSync(doc.grayscalePdf) ? doc.grayscalePdf : null);
+    const pdfPath = fs.existsSync(doc.pdf) ? doc.pdf : null;
 
     if (!pdfPath) {
       return {
@@ -745,9 +764,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       invariants: { ok: true },
       timings: { readBuilt },
       totalMs: readBuilt,
-      note: color
-        ? null
-        : 'Showing the grayscale variant — it is the only one this build produced.',
+      note: null,
     };
   }
 
@@ -762,8 +779,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       documents: Object.fromEntries(Object.entries(DOCS).map(([id, d]) => [id, {
         label: d.label,
         live: d.live,
-        color: pdfInfo(d.pdf),
-        grayscale: pdfInfo(d.grayscalePdf),
+        pdf: pdfInfo(d.pdf),
         hasMyData: fs.existsSync(d.myData),
         hasDefaultData: fs.existsSync(d.defaultData),
         dataFile: dataFileInfo(d, dataSource, picked[id]),
@@ -838,14 +854,51 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         // come back without their PNG. See renderPreview in engine.js.
         const known = body.known && typeof body.known === 'object' && !Array.isArray(body.known)
           ? body.known : undefined;
+
+        /*
+         * Streaming: the pages as they are ready, on the event stream.
+         *
+         * A render used to reach the UI in one JSON body, so page 1 —
+         * the one being looked at — waited for every page behind it to
+         * be rendered and encoded. A UI that asks for streaming tells us
+         * which pages are on screen and in what order (`order`), and
+         * each page is broadcast the moment the worker has it.
+         *
+         * The reply is still one JSON body listing every page, so the
+         * request/response shape callers rely on is unchanged; what is
+         * different is that pages already sent carry `sent: true` and no
+         * PNG, because the page has them. A UI that missed an event sees
+         * a page with neither a PNG nor `unchanged` and asks again
+         * without streaming. `renderId` is echoed back so a page can
+         * drop events from a render its request has already superseded.
+         */
+        const streaming = body.stream === true;
+        const renderId = typeof body.renderId === 'string'
+          ? body.renderId.slice(0, 64) : null;
+        const order = streaming && Array.isArray(body.order)
+          ? body.order.filter(n => Number.isInteger(n) && n > 0).slice(0, 64)
+          : null;
+        const sent = new Set();
+
         const result = await retryIfHalfWritten(() => engine.renderPreview({
           doc: id, scale: body.scale, pages: body.pages, env: envForRender(id), known,
+          order: streaming ? order : undefined,
+          onPage: streaming ? (im) => {
+            sent.add(im.page);
+            broadcast('page', { doc: id, renderId, image: im });
+          } : undefined,
         }), {
           changedAt: lastChangeAt,
           onRetry: () => console.log('  (the data file may have been caught mid-save; reading it again)'),
         });
         broadcast('render', { state: 'done', doc: id, ms: result.totalMs });
-        return { mode: 'live', ...result };
+        if (!streaming) return { mode: 'live', ...result };
+        const images = result.images.map((im) => {
+          if (!im.png || !sent.has(im.page)) return im;
+          const { png, ...rest } = im;
+          return { ...rest, sent: true };
+        });
+        return { mode: 'live', ...result, images, renderId, streamed: true };
       } finally {
         busy = false;
       }
@@ -854,14 +907,6 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     'POST /api/build': async (body) => {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const doc = DOCS[id];
-
-      // Which variants to produce. The CLI defaults to both when the
-      // variable is unset; Studio always states its choice explicitly so
-      // what the checkboxes say is what the build does.
-      const wanted = [];
-      if (body.variants?.color !== false) wanted.push('color');
-      if (body.variants?.grayscale) wanted.push('grayscale');
-      if (!wanted.length) throw new Error('select at least one variant');
 
       busy = true;
       broadcast('build', { state: 'start', doc: id });
@@ -872,7 +917,6 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         // has fixtures; letter.js has no snapshot phase at all.
         const buildEnv = {
           ...envForRender(id),
-          [ENV_RESUME_VARIANTS]: wanted.join(','),
           [ENV_RESUME_SNAPSHOT]: body.snapshot ? 'on' : 'off',
           // Off unless asked. The suites test the pipeline, which has
           // not changed between two saves of your resume; the checks
@@ -911,7 +955,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
           // failed. Keep what was remembered while it still exists;
           // otherwise look again.
           const known = builtOutputs[doc.variant];
-          if (known && !fs.existsSync(known.colorPdf) && !fs.existsSync(known.grayscalePdf)) {
+          if (known && !fs.existsSync(known.pdf)) {
             delete builtOutputs[doc.variant];
           }
           throw err;
@@ -922,8 +966,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         return {
           doc: id,
           ms: result.ms,
-          color: pdfInfo(doc.pdf),
-          grayscale: pdfInfo(doc.grayscalePdf),
+          pdf: pdfInfo(doc.pdf),
           render,
         };
       } catch (err) {
@@ -1332,7 +1375,15 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         return json(res, 500, { error: `UI missing at ${path.relative(ROOT, file)}` });
       }
       const html = fs.readFileSync(file);
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      // The header says whether the engine was up when the page was
+      // served. Nothing in the app reads it; it is how a test can show
+      // that the page does not wait for the engine without timing two
+      // requests against each other and hoping the machine cooperates.
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-studio-engine': engine ? 'ready' : 'starting',
+      });
       return res.end(html);
     }
 
@@ -1340,6 +1391,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     if (!handler) return json(res, 404, { error: `no route for ${key}` });
 
     try {
+      // Everything below this line reads or drives the engine, and the
+      // engine may still be starting. Waiting here rather than before
+      // the listener is what lets the UI load meanwhile; a failure to
+      // start is reported as this request's error.
+      if (!engine) await engineReady;
       const body = req.method === 'POST' ? await readBody(req) : {};
       const result = await handler(body, url);
       json(res, 200, result);
@@ -1393,7 +1449,10 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     try { server.close(); } catch { /* not listening */ }
     const forced = setTimeout(() => process.exit(0), 5000);
     forced.unref();
-    try { await engine.dispose(); } catch { /* best effort */ }
+    // A shutdown during startup: wait for the engine it is disposing of,
+    // so a Chromium or a worker that is still being born is not orphaned.
+    try { await engineReady; } catch { /* never started; nothing to dispose */ }
+    try { if (engine) await engine.dispose(); } catch { /* best effort */ }
     clearTimeout(forced);
     process.exit(0);
   }
@@ -1404,7 +1463,18 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   const url = `http://${host}:${actualPort}/`;
 
   // Framed so the Tauri shell can find it without parsing log text.
+  // Printed before the engine is up on purpose — see engineReady above.
   process.stdout.write(`${READY_PREFIX}${JSON.stringify({ url, port: actualPort })}\n`);
+
+  // The engine is still the thing this server exists to drive: if it
+  // cannot start, this is a failed start, exactly as it was when the
+  // listener came up second.
+  try {
+    await engineReady;
+  } catch (err) {
+    try { server.close(); } catch { /* not listening */ }
+    throw err;
+  }
 
   return { server, engine, url, port: actualPort, shutdown };
 }
@@ -1438,6 +1508,11 @@ if (require.main === module) {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     console.log(`Resume Studio → ${url}`);
+    // Where the compiled-code cache lives, said once: it is outside the
+    // project by design and a user who wants to clear it should not have
+    // to read the source to find it.
+    const cacheLine = compileCache.describe();
+    if (cacheLine) console.log(`  ${cacheLine}`);
     if (argv.includes('--open')) {
       const opener = process.platform === 'win32' ? 'explorer'
         : process.platform === 'darwin' ? 'open' : 'xdg-open';

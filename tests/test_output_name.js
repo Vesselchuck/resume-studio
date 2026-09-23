@@ -64,22 +64,18 @@ test('the stem comes from the build metadata, not from a guess', () => {
     const meta = writeMeta(dir, { output_stem: 'Gaius_Caesar_Resume' });
     const p = on.outputPaths(dir, meta, 'resume');
     assertEq(p.stem, 'Gaius_Caesar_Resume', 'stem');
-    assertEq(path.basename(p.colorPdf), 'Gaius_Caesar_Resume.pdf', 'color');
-    assertEq(path.basename(p.grayscalePdf),
-             'Gaius_Caesar_Resume_Grayscale.pdf', 'grayscale');
+    assertEq(path.basename(p.pdf), 'Gaius_Caesar_Resume.pdf', 'pdf');
   });
 });
 
-test('the color variant takes the bare stem', () => {
-  // The file you attach to an application gets the clean name; only
-  // the black-and-white one is suffixed. This is the user's choice
-  // and the reason the two paths are not symmetric.
+test('the PDF takes the bare stem, with nothing appended', () => {
+  // The file you attach to an application gets the clean name. It used
+  // to share the stem with a suffixed grayscale twin; there is no twin
+  // now, and no suffix is added for one.
   withTempDir((dir) => {
     const meta = writeMeta(dir, { output_stem: 'A_B_Cover_Letter' });
     const p = on.outputPaths(dir, meta, 'letter');
-    assertEq(path.basename(p.colorPdf), 'A_B_Cover_Letter.pdf', 'no suffix');
-    assertTrue(path.basename(p.grayscalePdf).endsWith(on.GRAYSCALE_SUFFIX + '.pdf'),
-               'grayscale suffixed');
+    assertEq(path.basename(p.pdf), 'A_B_Cover_Letter.pdf', 'no suffix');
   });
 });
 
@@ -107,8 +103,8 @@ test('the fallback names a file that correctly does not exist', () => {
   // absent fallback path produces.
   withTempDir((dir) => {
     const p = on.outputPaths(dir, path.join(dir, 'pdf_meta.json'), 'resume');
-    assertEq(path.basename(p.colorPdf), 'Resume.pdf', 'fallback name');
-    assertTrue(!fs.existsSync(p.colorPdf), 'and it is absent');
+    assertEq(path.basename(p.pdf), 'Resume.pdf', 'fallback name');
+    assertTrue(!fs.existsSync(p.pdf), 'and it is absent');
   });
 });
 
@@ -127,8 +123,9 @@ test('an unknown variant is refused rather than guessed at', () => {
 
 test('the pattern matches this document\'s outputs, named or not', () => {
   const re = on.outputPattern('resume');
-  assertTrue(re.test('Gaius_Caesar_Resume.pdf'), 'named color');
-  assertTrue(re.test('Gaius_Caesar_Resume_Grayscale.pdf'), 'named grayscale');
+  assertTrue(re.test('Gaius_Caesar_Resume.pdf'), 'named');
+  assertTrue(re.test('Gaius_Caesar_Resume_Grayscale.pdf'),
+             'the retired grayscale spelling, so it can be pruned');
   assertTrue(re.test('Resume.pdf'), 'the no-name fallback');
   assertTrue(re.test('Anne_Marie_Smith_Jones_Resume.pdf'), 'many parts');
 });
@@ -145,7 +142,7 @@ test('the pattern does not reach past its own document', () => {
   assertTrue(!resume.test('My_Resume_Draft.pdf'), 'suffix must be last');
 
   const letter = on.outputPattern('letter');
-  assertTrue(letter.test('Gaius_Caesar_Cover_Letter_Grayscale.pdf'), 'its own');
+  assertTrue(letter.test('Gaius_Caesar_Cover_Letter.pdf'), 'its own');
   assertTrue(!letter.test('Gaius_Caesar_Resume.pdf'), 'the other document');
 });
 
@@ -155,20 +152,15 @@ test('the pattern does not reach past its own document', () => {
 test('pruneStale removes the previous name and keeps the current one', () => {
   withTempDir((dir) => {
     touch(dir,
-      'Gaius_Caesar_Resume.pdf',            // this build
-      'Gaius_Caesar_Resume_Grayscale.pdf',  // this build
-      'Gaius_Julius_Resume.pdf');           // yesterday's spelling
+      'Gaius_Caesar_Resume.pdf',     // this build
+      'Gaius_Julius_Resume.pdf');    // yesterday's spelling
 
-    const keep = [
-      path.join(dir, 'Gaius_Caesar_Resume.pdf'),
-      path.join(dir, 'Gaius_Caesar_Resume_Grayscale.pdf'),
-    ];
+    const keep = [path.join(dir, 'Gaius_Caesar_Resume.pdf')];
     const removed = on.pruneStale(dir, 'resume', keep);
 
     assertEq(removed.join(','), 'Gaius_Julius_Resume.pdf', 'removed the stale one');
-    assertEq(listing(dir).join(','),
-             'Gaius_Caesar_Resume.pdf,Gaius_Caesar_Resume_Grayscale.pdf',
-             'the current pair survives');
+    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf',
+             'this build\'s file survives');
   });
 });
 
@@ -182,35 +174,36 @@ test('pruneStale removes the pre-rename legacy filenames', () => {
   });
 });
 
-test('pruneStale removes a variant written under the retired suffix', () => {
-  // The grayscale marker was respelled ('-grayscale' → '_Grayscale').
-  // A file written the old way is not the file this build wrote and
-  // is not overwritten by it, so if the pattern stopped matching it,
-  // it would stay in dist/ looking current forever.
+test('pruneStale removes the grayscale PDF this project no longer builds', () => {
+  // A second, black-and-white PDF used to be written beside each
+  // document, under '_Grayscale' and before that '-grayscale'. Neither
+  // is written now and neither is overwritten by anything, so if the
+  // pattern stopped matching them they would stay in dist/ looking
+  // current forever, next to a file they do not match.
   withTempDir((dir) => {
     touch(dir, 'Gaius_Caesar_Resume.pdf',
                'Gaius_Caesar_Resume_Grayscale.pdf',
-               'Gaius_Caesar_Resume-grayscale.pdf');   // yesterday's spelling
-    const keep = ['Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf']
-      .map(n => path.join(dir, n));
-    const removed = on.pruneStale(dir, 'resume', keep);
-    assertEq(removed.join(','), 'Gaius_Caesar_Resume-grayscale.pdf', 'the old one');
-    assertEq(listing(dir).length, 2, 'the current pair survives');
+               'Gaius_Caesar_Resume-grayscale.pdf');
+    const keep = [path.join(dir, 'Gaius_Caesar_Resume.pdf')];
+    const removed = on.pruneStale(dir, 'resume', keep).sort();
+    assertEq(removed.join(','),
+             'Gaius_Caesar_Resume-grayscale.pdf,Gaius_Caesar_Resume_Grayscale.pdf',
+             'both retired spellings');
+    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf', 'only this build');
   });
 });
 
 test('the retired suffixes widen the pattern and nothing else', () => {
-  // They must never reach outputPaths — a build writes the current
-  // spelling only.
+  // They must never reach outputPaths — a build writes the bare stem.
   withTempDir((dir) => {
     const meta = writeMeta(dir, { output_stem: 'A_B_Resume' });
-    assertEq(path.basename(on.outputPaths(dir, meta, 'resume').grayscalePdf),
-             'A_B_Resume' + on.GRAYSCALE_SUFFIX + '.pdf', 'writes the current spelling');
+    assertEq(path.basename(on.outputPaths(dir, meta, 'resume').pdf),
+             'A_B_Resume.pdf', 'writes the bare stem');
   });
   const re = on.outputPattern('resume');
+  assertTrue(on.RETIRED_GRAYSCALE_SUFFIXES.length > 0, 'there are some');
   for (const retired of on.RETIRED_GRAYSCALE_SUFFIXES) {
     assertTrue(re.test(`A_B_Resume${retired}.pdf`), `matches ${retired}`);
-    assertTrue(retired !== on.GRAYSCALE_SUFFIX, `${retired} is actually retired`);
   }
 });
 
@@ -238,18 +231,6 @@ test('pruneStale never touches anything outside its own pattern', () => {
       'notes.txt');
     on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
     assertEq(listing(dir).length, 8, 'everything survives');
-  });
-});
-
-test('a variant this build chose not to make is removed, not orphaned', () => {
-  // RESUME_VARIANTS=color leaves the grayscale file out of `keep`, so
-  // the previous run's grayscale PDF must go. Otherwise "the file
-  // exists" stops meaning "this build made it" — which the snapshot
-  // test and the app both rely on.
-  withTempDir((dir) => {
-    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf');
-    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
-    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf', 'grayscale gone');
   });
 });
 
@@ -387,20 +368,21 @@ test('the constants the two languages share are present and sane', () => {
   assertEq(on.DOC_SUFFIX.resume, 'Resume', 'resume suffix');
   assertEq(on.DOC_SUFFIX.letter, 'Cover_Letter', 'letter suffix');
   assertEq(on.SEPARATOR, '_', 'separator');
-  assertEq(on.GRAYSCALE_SUFFIX, '_Grayscale', 'grayscale suffix');
-  // The grayscale marker shares the separator with the name parts.
-  // That is safe only because DOC_SUFFIX always ends the stem, so the
-  // marker can only ever appear after it — never inside a name.
-  assertTrue(!on.DOC_SUFFIX.resume.includes(on.GRAYSCALE_SUFFIX),
-             'the suffixes do not overlap');
-  assertTrue(!on.DOC_SUFFIX.letter.includes(on.GRAYSCALE_SUFFIX),
-             'nor for the letter');
-  assertTrue(!on.RETIRED_GRAYSCALE_SUFFIXES.includes(on.GRAYSCALE_SUFFIX),
-             'the current spelling is not listed as retired');
+  assertEq(on.RETIRED_GRAYSCALE_SUFFIXES.join(','), '_Grayscale,-grayscale',
+           'both spellings the grayscale PDF ever had');
+  // The retired markers share the separator with the name parts. That
+  // is safe only because DOC_SUFFIX always ends the stem, so a marker
+  // can only ever appear after it — never inside a name.
+  for (const retired of on.RETIRED_GRAYSCALE_SUFFIXES) {
+    assertTrue(!on.DOC_SUFFIX.resume.includes(retired),
+               `the suffixes do not overlap (${retired})`);
+    assertTrue(!on.DOC_SUFFIX.letter.includes(retired),
+               `nor for the letter (${retired})`);
+  }
 });
 
 test('the pipeline hands back paths that match this module', () => {
-  // The integration point: pipeline.paths.colorPdf is a getter over
+  // The integration point: pipeline.paths.pdf is a getter over
   // outputPaths, and resume.js prunes with the result. If these two
   // ever disagreed, a build would delete the file it just wrote.
   const { createPipeline } = require(path.join(ROOT, 'build', 'pipeline.js'));
@@ -408,12 +390,9 @@ test('the pipeline hands back paths that match this module', () => {
   for (const variant of ['resume', 'letter']) {
     const p = createPipeline({ root: ROOT, python: noPython, variant }).paths;
     const expected = on.outputPaths(path.join(ROOT, 'dist'), p.pdfMeta, variant);
-    assertEq(p.colorPdf, expected.colorPdf, `${variant} color`);
-    assertEq(p.grayscalePdf, expected.grayscalePdf, `${variant} grayscale`);
-    assertTrue(on.outputPattern(variant).test(path.basename(p.colorPdf)),
-               `${variant} color matches the prune pattern`);
-    assertTrue(on.outputPattern(variant).test(path.basename(p.grayscalePdf)),
-               `${variant} grayscale matches the prune pattern`);
+    assertEq(p.pdf, expected.pdf, `${variant} pdf`);
+    assertTrue(on.outputPattern(variant).test(path.basename(p.pdf)),
+               `${variant} matches the prune pattern`);
   }
 });
 

@@ -30,14 +30,15 @@ data/**
 !data/letter_default.yml
 !data/_profile_default.yml
 
-# Snapshot fixtures built from your data. The committed ones
-# (expected_resume-color.pdf, expected_resume-grayscale.pdf) come from
-# the template and stay tracked.
+# Snapshot fixtures built from your data. The committed one
+# (expected_resume.pdf) comes from the template and stays tracked.
+tests/fixtures/expected_resume.mine.pdf
+# The same file under names this project used before: one per PDF
+# variant, back when a grayscale PDF was built too, and before that a
+# ".local" suffix. Nothing writes these any more, but a copy made
+# earlier is still a render of your real resume.
 tests/fixtures/expected_resume-color.mine.pdf
 tests/fixtures/expected_resume-grayscale.mine.pdf
-# The same two files under their pre-rename names. Nothing writes
-# these any more, but a copy made before the rename is a render of
-# your real resume.
 tests/fixtures/*.local.pdf
 
 # ─── Assistant output ───────────────────────────────────────────
@@ -50,7 +51,8 @@ Claude outputs/
 # ─── Test artifacts ─────────────────────────────────────────────
 # Diff images written when a snapshot test fails. They're useful
 # for debugging the failure but shouldn't pollute history.
-# Pattern matches diff_color_pageN.png and diff_grayscale_pageN.png.
+# Pattern matches diff_pageN.png, and the diff_color_pageN.png /
+# diff_grayscale_pageN.png this project used to write.
 tests/fixtures/diff_*.png
 
 # ─── Python ─────────────────────────────────────────────────────

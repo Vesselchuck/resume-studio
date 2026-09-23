@@ -40,12 +40,6 @@ ENV_RESUME_DATA_SOURCE = _env_constants["RESUME_DATA_SOURCE"]
 ENV_RESUME_DATA_FILE = _env_constants["RESUME_DATA_FILE"]
 ENV_LETTER_DATA_FILE = _env_constants["LETTER_DATA_FILE"]
 
-# Which PDF variants a build produces: a comma-separated subset of
-# 'color' and 'grayscale'. Unset means both. A variant left out has its
-# dist/ output removed, so snapshot_pdf.py can treat "the file exists"
-# as meaning "this run built it".
-ENV_RESUME_VARIANTS = _env_constants["RESUME_VARIANTS"]
-
 # Whether a build checks its PDFs against the committed fixtures:
 # 'off' (default) skips, 'on' reports without failing, 'strict' fails.
 ENV_RESUME_SNAPSHOT = _env_constants["RESUME_SNAPSHOT"]

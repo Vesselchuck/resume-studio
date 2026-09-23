@@ -417,6 +417,167 @@ def _rasterize_file_cropped(pdfium, snapshot_pdf, path, only):
             pass
 
 
+def _item_for(idx, img, entry, keys, previous):
+    """The response item and the cache entry for one page.
+
+    `entry` is a reusable entry from this slot's previous render, in
+    which case `img` is None and nothing is rendered or hashed again.
+    Otherwise `img` is the freshly rendered page.
+
+    Shared by the one-reply and the streaming paths below so the two
+    cannot describe the same page differently.
+    """
+    if entry is not None:
+        item = {"page": idx + 1, "width": entry["width"],
+                "height": entry["height"], "hash": entry["hash"]}
+        return item, dict(entry)
+
+    item = {"page": idx + 1, "width": img.width, "height": img.height,
+            "hash": _pixel_hash(img)}
+    cached = {"width": img.width, "height": img.height, "hash": item["hash"]}
+    prev = previous.get(keys[idx]) if keys is not None else None
+    if prev and prev["hash"] == item["hash"] and prev.get("png"):
+        cached["png"] = prev["png"]
+    return item, cached
+
+
+def _fill_png(item, cached, known, idx):
+    """Attach what the caller needs, or say a PNG must still be encoded.
+
+    A page whose pixels the caller already holds is marked unchanged and
+    carries nothing; a page this slot has already encoded carries that
+    PNG. Otherwise the caller encodes it and puts it in both.
+    """
+    if known.get(str(idx + 1)) == item["hash"]:
+        item["unchanged"] = True
+        return False
+    if cached.get("png"):
+        item["png"] = cached["png"]
+        return False
+    return True
+
+
+def _priority_order(page_count, wanted, order):
+    """Page indices to produce, the asked-for ones first.
+
+    `order` is 1-based page numbers, most wanted first — the UI sends
+    the pages that are on screen, in the order they appear there. Pages
+    it does not name follow in page order, so every wanted page is
+    produced exactly once however partial or strange the request is.
+    """
+    pages = [i for i in range(page_count) if not wanted or (i + 1) in wanted]
+    if not order:
+        return pages
+    allowed = set(pages)
+    first = []
+    seen = set()
+    for p in order:
+        idx = p - 1
+        if idx in allowed and idx not in seen:
+            seen.add(idx)
+            first.append(idx)
+    return first + [i for i in pages if i not in seen]
+
+
+def _raster_streamed(req, path, scale, crop, keys, previous, known, wanted, slot):
+    """op_raster, one page at a time, most wanted first.
+
+    Same pages, same pixels, same hashes as the one-reply path — the
+    difference is when they arrive. Each page is rendered and encoded on
+    its own and sent immediately as a partial frame, so the page the
+    user is looking at reaches the screen without waiting for the ones
+    behind it.
+
+    The reply that follows lists every page in page order, with the PNGs
+    left out of the ones already sent (marked "sent") so nothing crosses
+    the pipe twice. A caller that misses a partial frame sees a page with
+    neither a PNG nor `unchanged` and can ask again in full.
+
+    Only reached when the page count is known up front (the slot's page
+    keys), because rendering page by page means knowing how many there
+    are before the first one is opened.
+    """
+    rid = req.get("id")
+    page_count = len(keys)
+
+    # The keys come from the file's own bytes, but they are read by
+    # _pdf_page_keys rather than by pdfium, and the one-reply path below
+    # refuses to trust them when the two disagree about how many pages
+    # there are. This asks pdfium first — rendering nothing, which only
+    # opens the document — and hands the whole request back to that path
+    # if the count differs. Nothing is streamed before this is settled.
+    if len(_rasterize(path, scale, crop, set())) != page_count:
+        return None
+
+    out = []
+    current = {}
+    rendered = 0
+    items = {}
+    order = _priority_order(page_count, wanted, req.get("order"))
+
+    # Encoding happens beside the rendering, not after it.
+    #
+    # A page is rendered in this thread (pdfium is driven from one
+    # thread, as it is everywhere else here) and then handed to the pool
+    # to be turned into a PNG. zlib releases the GIL, so that encode runs
+    # while the next page is being rendered — which is how sending the
+    # pages one at a time costs no more in total than sending them
+    # together used to. The bytes are the same either way.
+    #
+    # `waiting` holds the pages in the order they are to be sent. A page
+    # is sent as soon as it and everything before it are done, so the
+    # first page the caller asked for goes out the moment it is ready
+    # rather than after the last one.
+    waiting = []
+
+    def emit(entry, block):
+        idx, item, cached, future = entry
+        if future is not None:
+            if not block and not future.done():
+                return False
+            png = future.result()
+            item["png"] = png
+            cached["png"] = png
+        current[keys[idx]] = cached
+        items[idx] = item
+        _send({"id": rid, "op": "raster", "partial": True,
+               "result": {"scale": scale, "pageCount": page_count, "image": item},
+               "log": [], "diagnostics": [], "ms": 0.0})
+        return True
+
+    with ThreadPoolExecutor(max_workers=max(1, min(len(order), os.cpu_count() or 1))) as pool:
+        for idx in order:
+            entry = previous.get(keys[idx]) if keys is not None else None
+            if entry is not None and not (known.get(str(idx + 1)) == entry["hash"]
+                                          or entry.get("png")):
+                entry = None  # the caller needs a PNG this slot never encoded
+            img = None
+            if entry is None:
+                img = _rasterize(path, scale, crop, {idx})[idx]
+                rendered += 1
+            item, cached = _item_for(idx, img, entry, keys, previous)
+            future = pool.submit(_encode_png, img) if _fill_png(item, cached, known, idx) else None
+            waiting.append((idx, item, cached, future))
+            while waiting and emit(waiting[0], False):
+                waiting.pop(0)
+        while waiting:
+            emit(waiting[0], True)
+            waiting.pop(0)
+
+    if slot is not None:
+        _RENDERED[slot] = current
+
+    for idx in sorted(items):
+        item = items[idx]
+        sent = dict(item)
+        if sent.pop("png", None) is not None:
+            sent["sent"] = True
+        out.append(sent)
+
+    return {"scale": scale, "pageCount": page_count, "images": out,
+            "rendered": rendered, "streamed": True}
+
+
 def op_raster(req):
     """Rasterize a PDF to PNGs for the preview pane.
 
@@ -475,6 +636,19 @@ def op_raster(req):
             return entry
         return None  # the caller needs a PNG this slot never encoded
 
+    # Streaming: each page sent as it is ready, most wanted first. Needs
+    # the page count before the first page is rendered, which is what the
+    # slot's keys give; without them this falls through to the one-reply
+    # path below, which is also what every caller that does not ask for
+    # streaming gets.
+    if req.get("stream") and keys is not None and req.get("id") is not None:
+        streamed = _raster_streamed(req, path, scale, crop, keys, previous,
+                                    known, wanted, slot)
+        # None: the keys do not describe this file after all. Nothing was
+        # sent, so the one-reply path below answers it in full.
+        if streamed is not None:
+            return streamed
+
     # Which pages to render: every wanted page that has no reusable entry.
     # With no keys this is every wanted page, as before.
     page_count = None
@@ -504,22 +678,8 @@ def op_raster(req):
             # Not rendered and nothing to stand in for it: cannot happen
             # unless the file changed under us. Render it now.
             img = _rasterize(path, scale, crop, {idx})[idx]
-        if entry is not None:
-            item = {"page": idx + 1, "width": entry["width"],
-                    "height": entry["height"], "hash": entry["hash"]}
-            cached = dict(entry)
-        else:
-            item = {"page": idx + 1, "width": img.width, "height": img.height,
-                    "hash": _pixel_hash(img)}
-            cached = {"width": img.width, "height": img.height, "hash": item["hash"]}
-            prev = previous.get(keys[idx]) if keys is not None else None
-            if prev and prev["hash"] == item["hash"] and prev.get("png"):
-                cached["png"] = prev["png"]
-        if known.get(str(idx + 1)) == item["hash"]:
-            item["unchanged"] = True
-        elif cached.get("png"):
-            item["png"] = cached["png"]
-        else:
+        item, cached = _item_for(idx, img, entry, keys, previous)
+        if _fill_png(item, cached, known, idx):
             to_encode.append((item, cached, img))
         if keys is not None:
             current[keys[idx]] = cached
@@ -733,6 +893,32 @@ def handle(req):
     return frame
 
 
+def _warm_imports():
+    """Import what the first preview will need, before it is asked for.
+
+    The rasterizer's modules — pypdfium2, Pillow, snapshot_pdf — are
+    imported lazily inside op_raster, deliberately: a worker that only
+    ever builds HTML should not fail to start because a preview-only
+    dependency is missing. That is still true. What was also true is
+    that the FIRST preview of every session paid for those imports,
+    while the caller sat there having just launched the app.
+
+    So they are imported here instead, after the handshake and before
+    the first request can be answered — which is exactly the window in
+    which the Node side is launching Chromium and starting Sass in other
+    processes. It costs nothing that was not already being spent, and if
+    anything is missing or broken this is silent and the lazy import
+    inside op_raster reports it, to the request that needed it, as
+    before.
+    """
+    try:
+        import pypdfium2  # noqa: F401
+        import snapshot_pdf  # noqa: F401
+        from PIL import ImageChops  # noqa: F401
+    except Exception:
+        pass  # op_raster's own import says what is wrong, when it matters
+
+
 def main():
     # Line-buffered utf-8 on both ends. Without the explicit encoding a
     # Windows console code page would mangle the console symbols the
@@ -745,6 +931,8 @@ def main():
 
     _send({"id": None, "op": "hello", "ok": True,
            "result": op_ping({}), "log": [], "diagnostics": [], "ms": 0.0})
+
+    _warm_imports()
 
     for line in sys.stdin:
         line = line.strip()

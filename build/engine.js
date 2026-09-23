@@ -76,6 +76,14 @@
  *   await engine.dispose();
  */
 
+// When this file *is* the process (the line-protocol server at the
+// bottom), reuse V8's compiled code between runs — the same thing
+// build/studio_server.js does as its first statement, and for the same
+// reason: most of a cold start is compiling JavaScript, playwright's
+// above all. As a required module this is left alone; whoever owns the
+// process decides. See build/_compile_cache.js.
+if (require.main === module) require('./_compile_cache').enable();
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -84,6 +92,7 @@ const crypto = require('crypto');
 
 const { createPipeline, disposeSass, warmUpSass } = require('./pipeline');
 const { detectPython } = require('./detect_python');
+const { ENV_RESUME_SPECULATIVE } = require('./_env_contract');
 const c = require('./_console');
 
 const FRAME_PREFIX = '\x1e';
@@ -177,6 +186,12 @@ class PythonWorker {
     this.lastLog = [];
     // Set by stop(): a worker being shut down on purpose is not restarted.
     this.stopping = false;
+    // While true, run() neither echoes the worker's log nor reports a
+    // failure. For work the user never asked for and must not be told
+    // about twice — the engine's speculative final build, whose lines
+    // the real build repeats a moment later, and whose failure is a
+    // reason to fall back rather than something to show. See silently().
+    this.silent = false;
   }
 
   /**
@@ -303,12 +318,27 @@ class PythonWorker {
       }
       const waiter = this.pending.get(frame.id);
       if (!waiter) continue;
+      // A partial frame is one instalment of an answer still in
+      // progress (the rasterizer's per-page frames). The request stays
+      // pending until the frame without the flag arrives, which is what
+      // keeps "one response per request" true for every caller that
+      // does not ask for instalments.
+      if (frame.partial) {
+        if (waiter.onPartial) {
+          try {
+            waiter.onPartial(frame);
+          } catch (err) {
+            c.detail(`(a streamed page could not be delivered: ${err.message})`);
+          }
+        }
+        continue;
+      }
       this.pending.delete(frame.id);
       waiter.resolve(frame);
     }
   }
 
-  call(req) {
+  call(req, onPartial = null) {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       if (!this.alive()) {
@@ -316,7 +346,7 @@ class PythonWorker {
         return;
       }
       const proc = this.proc;
-      this.pending.set(id, { resolve, reject, proc });
+      this.pending.set(id, { resolve, reject, proc, onPartial });
       try {
         proc.stdin.write(JSON.stringify({ ...req, id }) + '\n', (err) => {
           if (!err) return;
@@ -336,20 +366,39 @@ class PythonWorker {
    * worker's own explanation, already printed through _console so the
    * app's log shows what the CLI would have shown.
    */
-  async run(req) {
+  async run(req, onPartial = null) {
     await this.ensure();
-    const frame = await this.call(req);
+    const frame = await this.call(req, onPartial);
     this.lastLog = frame.log || [];
-    (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
+    if (!this.silent) (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
     if (!frame.ok) {
-      c.err(frame.error.message);
-      (frame.error.detail || []).forEach(line => c.detail(line));
+      if (!this.silent) {
+        c.err(frame.error.message);
+        (frame.error.detail || []).forEach(line => c.detail(line));
+      }
       const err = new Error(frame.error.message);
       err.alreadyReported = true;
       err.kind = frame.error.kind;
       throw err;
     }
     return frame;
+  }
+
+  /**
+   * Run `fn` with this worker's output suppressed.
+   *
+   * Only safe because every caller of this worker is serialized through
+   * the engine's queue, so nothing else's log can be swallowed while it
+   * is set. See renderPreview's speculative build, its one user.
+   */
+  async silently(fn) {
+    const was = this.silent;
+    this.silent = true;
+    try {
+      return await fn();
+    } finally {
+      this.silent = was;
+    }
   }
 
   // --- the adapter surface build/pipeline.js consumes ---
@@ -378,11 +427,25 @@ class PythonWorker {
     return frame.result;
   }
 
-  async raster({ pdfPath, scale, pages, known, crop, slot }) {
+  /**
+   * Rasterize, optionally a page at a time.
+   *
+   * With `onPage`, the worker is asked to send each page as it is ready
+   * (most wanted first, per `order`) and onPage is called with each one;
+   * the resolved result then lists every page in page order, with the
+   * PNGs left out of the ones already delivered (marked `sent`). Without
+   * it, nothing about the request or the reply changes.
+   */
+  async raster({ pdfPath, scale, pages, known, crop, slot, order, onPage }) {
+    const streaming = typeof onPage === 'function';
     const frame = await this.run({
       op: 'raster', path: pdfPath, scale, pages: pages || null, known: known || null,
       crop: crop || null, slot: slot || null,
-    });
+      stream: streaming || undefined, order: streaming ? (order || null) : undefined,
+    }, streaming ? (partial) => {
+      const im = partial.result && partial.result.image;
+      if (im) onPage(im);
+    } : null);
     return frame.result;
   }
 
@@ -409,13 +472,33 @@ class PythonWorker {
  *   right away and in parallel, instead of on first use: the Python
  *   worker, Chromium and the Sass compiler all boot at once. Studio sets
  *   it; a caller that only wants build() should not.
+ * @param {?boolean} opts.speculative — whether a preview may load the
+ *   final HTML speculatively (see "Speculative final load"). Null, the
+ *   default, follows RESUME_SPECULATIVE; a boolean overrides it. Only
+ *   the tests pass it, to compare the two paths in one process.
  */
-async function createEngine({ root, python, warm = false } = {}) {
+async function createEngine({ root, python, warm = false, speculative = null } = {}) {
   root = root || path.join(__dirname, '..');
   const interpreter = python || detectPython();
 
   const worker = new PythonWorker({ root, python: interpreter });
   const workerReady = worker.start();
+
+  // Chromium next, before anything else this function does.
+  //
+  // `require('playwright')` is a few hundred milliseconds of pure module
+  // loading and it blocks this thread while it runs, so the order of
+  // these two lines is the difference between the Python interpreter
+  // booting during that time and booting after it. The launch itself is
+  // another process again: it proceeds while this one goes on to Sass.
+  // A failure is left for the first preview to report, where it has
+  // somewhere to go.
+  let browser = null;
+  let page = null;
+  let pagePromise = null;
+  if (warm) {
+    browserPage().catch(() => { /* reported again by the first preview */ });
+  }
 
   // 'fonts' — load + document.fonts.ready, the same wait the CLI uses;
   // the fonts are vendored, so waiting for network silence on a file://
@@ -433,11 +516,8 @@ async function createEngine({ root, python, warm = false } = {}) {
 
   // Lazy so that a caller who only ever wants `build()` (which shells
   // out to the CLI) never pays for a browser it will not use — unless
-  // `warm` asks for it up front.
-  let browser = null;
-  let page = null;
-  let pagePromise = null;
-
+  // `warm` asks for it up front, which it does above.
+  //
   // One launch, however many callers ask at once: a warm start may still
   // be launching Chromium when the first preview arrives, and that
   // preview must wait for the same launch rather than start a second.
@@ -468,14 +548,32 @@ async function createEngine({ root, python, warm = false } = {}) {
     return page;
   }
 
-  // Warm start. The three are independent processes, so booting them
-  // side by side costs about as long as the slowest of them rather than
-  // their sum. Chromium's launch runs in the background; a failure is
-  // left for the first preview to report, where it has somewhere to go.
-  if (warm) {
-    browserPage().catch(() => { /* reported again by the first preview */ });
+  /* ── The speculative page ──────────────────────────────────────
+   *
+   * A second page in the same context, used only by the speculative
+   * final load below. It is a page rather than a second browser because
+   * the point is to reuse this browser's already-parsed stylesheet and
+   * decoded fonts — and because two pages of one context cost almost
+   * nothing to keep open.
+   */
+  let specPagePromise = null;
+  function speculativePage() {
+    if (!specPagePromise) {
+      specPagePromise = (async () => {
+        const main = await browserPage();
+        return main.context().newPage();
+      })().catch((err) => {
+        specPagePromise = null;
+        throw err;
+      });
+    }
+    return specPagePromise;
   }
 
+  // The three are independent processes, so booting them side by side
+  // costs about as long as the slowest of them rather than their sum:
+  // Python was spawned first, Chromium's require and launch came next
+  // while Python boots, and Sass follows below while Chromium launches.
   const hello = await workerReady;
 
   // Sass last: its API is synchronous and holds this thread while it
@@ -532,6 +630,7 @@ async function createEngine({ root, python, warm = false } = {}) {
       for (const k of Object.keys(m)) delete m[k];
     }
     nav.assets = null;
+    specNav.assets = null;
   }
 
   /* ── Real navigations versus in-place loads ────────────────────
@@ -547,6 +646,10 @@ async function createEngine({ root, python, warm = false } = {}) {
    * file it last navigated to (switching between resume and letter).
    */
   const nav = { assets: null, sinceGoto: 0 };
+  // The same bookkeeping for the speculative page, which loads its own
+  // copy of the final HTML and must decide goto-versus-swap on its own
+  // history rather than the main page's.
+  const specNav = { assets: null, sinceGoto: 0 };
 
   function renderInputs(pl) {
     return {
@@ -570,6 +673,125 @@ async function createEngine({ root, python, warm = false } = {}) {
         }
       },
     };
+  }
+
+  /* ── Speculative final load ────────────────────────────────────
+   *
+   * WHAT IT DOES
+   * ------------
+   * A preview's second half — build the final HTML, load it, check the
+   * invariants, print — cannot start until the solver has run. But the
+   * solver's answer is almost always the answer it gave last time: in a
+   * measured run of twenty consecutive text edits, the placement was
+   * unchanged for all twenty. Layout changes when content crosses a page
+   * boundary, which is rare; changing a word is not that.
+   *
+   * So while the measurement pass is being measured in Chromium, this
+   * builds the final HTML against the placement already on disk (the
+   * previous render's) and loads it into a second page. When the solver
+   * finishes, if that guess was right, the page is already loaded and
+   * the print can start immediately.
+   *
+   * WHY IT CANNOT PRINT THE WRONG DOCUMENT
+   * --------------------------------------
+   * The guess is never trusted. After the solver runs, the real final
+   * build runs exactly as it always did — dist/index.html is written by
+   * the ordinary path, with the ordinary placement, and is what the CLI
+   * and the equivalence tests compare. The speculative page is used only
+   * if all three of these hold:
+   *
+   *   • the placement the guess was built from is byte-for-byte the
+   *     placement the solver just produced (deep equality, on the
+   *     canonical JSON solveAndWritePlacement itself writes);
+   *   • the HTML the guess produced is byte-for-byte the final HTML now
+   *     on disk — which also covers the data having changed under it,
+   *     the template having changed, anything at all;
+   *   • the page still carries the token stamped into it when that HTML
+   *     was loaded, so it is that load and not some later navigation.
+   *
+   * Any of them failing, or anything throwing anywhere in here, and the
+   * render proceeds exactly as it would have without speculation. The
+   * layout-invariant check runs on whichever page is about to be
+   * printed, as before — it is the same check on the same final HTML.
+   *
+   * WHEN IT RUNS
+   * ------------
+   * Only for the resume (the letter has no solver), only when there is a
+   * placement to guess from, and only when the measurement pass was NOT
+   * answered from the memo: a render whose measurement HTML is unchanged
+   * is already on the fast path to the early cutoff, and a speculative
+   * build would be work added to the shortest path there is.
+   */
+  const speculationOn = speculative === null
+    ? !/^(off|0|false|no)$/i.test(String(process.env[ENV_RESUME_SPECULATIVE] || '').trim())
+    : Boolean(speculative);
+
+  function specNavOptions(inputs, record) {
+    const assets = `${inputs.css}:${inputs.fonts}`;
+    return {
+      inPlace: specNav.assets === assets && specNav.sinceGoto < GOTO_EVERY,
+      onLoad: (how) => {
+        record.how = how;
+        if (how === 'goto') {
+          specNav.assets = assets;
+          specNav.sinceGoto = 0;
+        } else {
+          specNav.sinceGoto += 1;
+        }
+      },
+    };
+  }
+
+  /**
+   * Start a speculative final build and load. Returns a promise for
+   * { placement, html, page, token, how, ms } — or for { failed } — and
+   * never rejects. The caller MUST await it before anything writes
+   * dist/placement.json or dist/index.html again.
+   */
+  function startSpeculation(pl, inputs) {
+    if (!speculationOn) return null;
+    const placement = readOrMissing(pl.paths.placement);
+    if (!placement) return null;
+    const t0 = Date.now();
+    const record = {};
+    return (async () => {
+      try {
+        // Silently: the real final build repeats these lines a moment
+        // later, and a guess that fails (a placement solved for other
+        // data makes the template raise) is a reason to fall back, not
+        // something to put in front of the user.
+        await worker.silently(() => pl.buildFinal());
+        const html = readOrMissing(pl.paths.html);
+        if (!html) return { failed: 'the speculative build wrote no HTML' };
+        const token = digestOf([html, String(t0), String(++specSeq)]);
+        const pg = await speculativePage();
+        await pl.openDocument(pg, specNavOptions(inputs, record));
+        await pg.evaluate((t) => { window.__studioSpeculation = t; }, token);
+        return { placement, html, page: pg, token, how: record.how, ms: Date.now() - t0 };
+      } catch (err) {
+        return { failed: String(err.message || err).split('\n')[0], ms: Date.now() - t0 };
+      }
+    })();
+  }
+  let specSeq = 0;
+
+  /**
+   * The speculative page, if it is provably showing the final HTML that
+   * is on disk right now; otherwise null.
+   */
+  async function usableSpeculation(spec, placement, pl) {
+    if (!spec || spec.failed || !spec.page) return null;
+    const solved = Buffer.from(JSON.stringify(placement, null, 2) + '\n', 'utf-8');
+    if (!spec.placement.equals(solved)) return null;
+    const finalHtml = readOrMissing(pl.paths.html);
+    if (!finalHtml || !spec.html.equals(finalHtml)) return null;
+    try {
+      const token = await spec.page.evaluate(() => window.__studioSpeculation);
+      if (token !== spec.token) return null;
+    } catch {
+      return null;
+    }
+    return spec.page;
   }
 
   /**
@@ -623,6 +845,16 @@ async function createEngine({ root, python, warm = false } = {}) {
    * @param {boolean} opts.recompileStyles — force a Sass rebuild
    * @param {?object} opts.env — env overrides for the Python build,
    *   e.g. { RESUME_DATA_SOURCE: 'default' }; a null value unsets one
+   * @param {?function} opts.onPage — called with each page image as the
+   *   worker finishes it, instead of only with the whole set at the end.
+   *   The result is unchanged either way: every page is in `images`, in
+   *   page order, settled the same way. Pages that reached onPage are
+   *   the same objects, so a caller that has already used them can skip
+   *   them (they are marked `sent` in the worker's own reply).
+   * @param {?number[]} opts.order — 1-based page numbers, most wanted
+   *   first: which pages onPage should be called with soonest. The UI
+   *   sends what is on screen, in the order it appears there. Pages left
+   *   out follow in page order. Ignored without onPage.
    * @param {?object} opts.known — {page: hash} of page images the caller
    *   already holds. When given, a page whose pixels hash the same comes
    *   back as {hash, unchanged: true} with no PNG, and the caller reuses
@@ -689,10 +921,12 @@ async function createEngine({ root, python, warm = false } = {}) {
       };
 
       let finalKey;
+      let speculated = null;
       if (doc === 'resume') {
         t = Date.now();
         const measureKey = keyOf('measurement');
         let measurements;
+        let speculating = null;
         if (m.measureKey === measureKey && m.measurements) {
           // A copy: nothing downstream may alter the remembered one.
           measurements = structuredClone(m.measurements);
@@ -702,11 +936,22 @@ async function createEngine({ root, python, warm = false } = {}) {
           t = Date.now();
           m.measureKey = null;
           await pl.openDocument(p, navOptions(inputs, timings));
+          // The measurement HTML is in the page now, so dist/index.html
+          // is free to be rewritten. Guess the final HTML while Chromium
+          // measures this one. See "Speculative final load" above.
+          speculating = startSpeculation(pl, inputs);
           measurements = await pl.getMeasurements(p);
           m.measureKey = measureKey;
           m.measurements = structuredClone(measurements);
         }
         mark('measure', t);
+
+        // Before the solver writes dist/placement.json: the guess reads
+        // it, and the two must not overlap.
+        if (speculating) {
+          speculated = await speculating;
+          if (speculated.ms !== undefined) timings.speculateMs = speculated.ms;
+        }
 
         t = Date.now();
         placement = pl.solveAndWritePlacement(measurements);
@@ -744,7 +989,19 @@ async function createEngine({ root, python, warm = false } = {}) {
       m.result = null;
 
       const p = await needPage();
+      // The page this render prints from: the speculative one when it is
+      // provably showing the final HTML, else the main page, loaded as
+      // usual. Everything after this point — the invariant check and the
+      // print — happens on that one page.
+      let printFrom = p;
       if (doc === 'resume') {
+        const ready = await usableSpeculation(speculated, placement, pl);
+        if (ready) printFrom = ready;
+        if (speculated) {
+          timings.speculative = ready ? 'used' : (speculated.failed ? 'failed' : 'missed');
+          if (speculated.how) timings.specLoad = speculated.how;
+        }
+
         // Invariants are a real check, not a formality — they catch
         // content overflowing its page. In a live preview a violation is
         // information rather than a reason to show nothing, so report it
@@ -752,7 +1009,10 @@ async function createEngine({ root, python, warm = false } = {}) {
         // CLI) treats the same violation as fatal.
         t = Date.now();
         try {
-          await pl.verifyInvariants(p, placement.pages.length, navOptions(inputs, timings));
+          await pl.verifyInvariants(printFrom, placement.pages.length,
+            navOptions(inputs, timings),
+            // Already loaded, and proved to be the final HTML.
+            printFrom === p ? {} : { loaded: speculated.how || 'goto' });
         } catch (err) {
           invariants = { ok: false, message: err.message };
         }
@@ -769,7 +1029,7 @@ async function createEngine({ root, python, warm = false } = {}) {
       // printPreviewPdf in build/pipeline.js.
       const tmpPdf = path.join(os.tmpdir(), `studio-preview-${doc}-${process.pid}.pdf`);
       t = Date.now();
-      await pl.printPreviewPdf(p, tmpPdf);
+      await pl.printPreviewPdf(printFrom, tmpPdf);
       mark('print', t);
 
       // Pages whose pixels did not change since this document's last
@@ -791,11 +1051,40 @@ async function createEngine({ root, python, warm = false } = {}) {
         for (const [pageNo, im] of Object.entries(previous)) known[pageNo] = im.hash;
       }
 
+      /*
+       * One page at a time, when the caller wants them that way.
+       *
+       * `onPage` (the Studio server, for a UI that has told us which
+       * pages are on screen) gets each page as the worker finishes it,
+       * in the order `pages`/`order` asked for; the result that follows
+       * is exactly the result a caller without onPage would have got.
+       * `settle` is what makes that true: each page passes through it
+       * once, whether it arrived early or with the reply.
+       */
+      const settle = (im) => {
+        if (!im.unchanged) return im;
+        timings.reusedPages = (timings.reusedPages || 0) + 1;
+        if (callerKnows) return im;   // sent as {hash, unchanged}; the caller has the PNG
+        const prev = previous[im.page];
+        if (!prev) return im;         // no copy to fill it in from; left for the caller
+        im.png = prev.png;
+        delete im.unchanged;
+        return im;
+      };
+      const streamed = new Map();
+      const wantsStream = typeof opts.onPage === 'function';
+
       t = Date.now();
       let raster;
       try {
         raster = await worker.raster({
           pdfPath: tmpPdf, scale, pages: opts.pages, known, crop: 'letter', slot: doc,
+          order: opts.order,
+          onPage: wantsStream ? (im) => {
+            const done = settle(im);
+            streamed.set(done.page, done);
+            opts.onPage(done);
+          } : undefined,
         });
       } finally {
         // Best-effort. On Windows a rasterizer that still holds the file
@@ -810,16 +1099,10 @@ async function createEngine({ root, python, warm = false } = {}) {
         }
       }
       if (typeof raster.rendered === 'number') timings.renderedPages = raster.rendered;
-      for (const im of raster.images) {
-        if (!im.unchanged) continue;
-        timings.reusedPages = (timings.reusedPages || 0) + 1;
-        if (callerKnows) {
-          // Sent as {hash, unchanged: true}; the caller has the PNG.
-          continue;
-        }
-        im.png = previous[im.page].png;
-        delete im.unchanged;
-      }
+      if (raster.streamed) timings.streamedPages = streamed.size;
+      // A page that was streamed is already settled and already carries
+      // its PNG; the reply's copy of it carries `sent` and no PNG.
+      raster.images = raster.images.map(im => streamed.get(im.page) || settle(im));
       // Kept for callers that do not track their own images, and for the
       // early cutoff; a page the caller reused has no PNG here, so it is
       // carried over from the previous entry when that one had the same
@@ -973,6 +1256,12 @@ async function createEngine({ root, python, warm = false } = {}) {
     // browser it produces is closed rather than orphaned.
     if (pagePromise) {
       try { await pagePromise; } catch { /* never launched */ }
+    }
+    // Likewise a speculative page still being opened: closing the
+    // browser under it would leave the promise rejecting into nothing.
+    if (specPagePromise) {
+      try { await specPagePromise; } catch { /* never opened */ }
+      specPagePromise = null;
     }
     if (browser) {
       try { await browser.close(); } catch { /* already gone */ }

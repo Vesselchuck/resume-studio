@@ -52,21 +52,12 @@ class TestTheConvention(unittest.TestCase):
         self.assertEqual(stem("Gaius", "Caesar", "letter"),
                          "Gaius_Caesar_Cover_Letter")
 
-    def test_color_takes_the_bare_stem(self):
-        # The color PDF is the one that gets attached to applications,
-        # so it gets the clean name; only grayscale is suffixed.
-        self.assertEqual(on.color_pdf("dist", "Gaius_Caesar_Resume").name,
+    def test_the_pdf_takes_the_bare_stem(self):
+        # The PDF is the file that gets attached to applications, so it
+        # gets the clean name, with nothing appended. It used to share
+        # the stem with a suffixed grayscale twin; there is no twin now.
+        self.assertEqual(on.output_pdf("dist", "Gaius_Caesar_Resume").name,
                          "Gaius_Caesar_Resume.pdf")
-        self.assertEqual(on.grayscale_pdf("dist", "Gaius_Caesar_Resume").name,
-                         "Gaius_Caesar_Resume_Grayscale.pdf")
-
-    def test_both_variants_share_one_stem(self):
-        # Not decoration: the app pairs them by stem, and pruneStale
-        # in _output_name.js keeps whichever two the build produced.
-        s = stem("Gaius", "Caesar")
-        color = on.color_pdf("dist", s).name
-        gray = on.grayscale_pdf("dist", s).name
-        self.assertTrue(gray.startswith(color[:-len(".pdf")]))
 
     def test_unknown_variant_is_refused(self):
         with self.assertRaises(ValueError):
@@ -128,18 +119,20 @@ class TestPunctuationInNames(unittest.TestCase):
         self.assertEqual(on.slug_part("  --Gaius--  "), "Gaius")
         self.assertEqual(on.slug_part("A....B"), "A_B")
 
-    def test_a_name_cannot_impersonate_the_variant_suffix(self):
-        # GRAYSCALE_SUFFIX is '_Grayscale' — the same separator the name
-        # parts use. That is only safe because DOC_SUFFIX always ends
-        # the stem, so the marker can never be mistaken for part of a
-        # name, however the name is spelled.
+    def test_a_name_cannot_impersonate_a_retired_variant_suffix(self):
+        # The grayscale PDF this project used to build was marked with
+        # '_Grayscale' — the same separator the name parts use — and
+        # _output_name.js still PRUNES that name. A stem that ended in
+        # it would be deleted by the next build. It cannot: DOC_SUFFIX
+        # always ends the stem, however the name is spelled.
         for surname in ("Grayscale", "Smith-Jones", "Grayscale Jones"):
             with self.subTest(surname=surname):
                 s = stem("Anne", surname)
                 self.assertTrue(s.endswith("_Resume"),
                                 f"{s!r} does not end with the document suffix")
-                self.assertFalse(s.endswith(on.GRAYSCALE_SUFFIX),
-                                 f"{s!r} looks like a grayscale filename")
+                for retired in ("_Grayscale", "-grayscale"):
+                    self.assertFalse(s.endswith(retired),
+                                     f"{s!r} looks like a pruned filename")
 
 
 class TestFilesystemSafety(unittest.TestCase):

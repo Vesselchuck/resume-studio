@@ -340,18 +340,20 @@
    de-emphasizing the entry one tier below regular jobs.
 
    Title color is already set above via `.job--gap .entry-title`
-   using --text-muted (#555555, 7.46:1 on white). Meta uses
-   --text-muted-soft, one tier lighter, to widen the visual gap
-   from regular meta.
+   using --text-muted. Meta uses --text-muted-soft.
 
-     title  → --text-muted      → #555555 → 7.46:1 (AA + AAA)
-     meta   → --text-muted-soft → #666666 → 5.74:1 (AA)
+     title  → --text-muted      → #4a4a4a → 8.86:1 (AA + AAA)
+     meta   → --text-muted-soft → #4a4a4a → 8.86:1 (AA + AAA)
 
-   Both tokens collapse to #333333 under @media print and
-   (monochrome) and on html.force-grayscale (see _print.scss):
-   the entry's italic title + no-bullets layout + smaller block
-   height carry the rank on paper without a tonal step, which
-   at this size would risk visible halftone on B&W laser. */
+   The two tokens are currently the SAME value, so there is no tonal
+   step between title and meta here — deliberately. A tier-lighter
+   gray at 9pt sits inside laser-printer halftone territory and can
+   come out as a screened texture that reads as a printer fault
+   rather than as design. The entry's italic title, no-bullets
+   layout and smaller block height already carry the rank one tier
+   below a regular job, on screen and on paper alike. The tokens
+   stay separate so a future design can reintroduce the step in one
+   place; see _tokens.scss. */
 .job--gap .entry-meta {
   color: var(--text-muted-soft);
 }

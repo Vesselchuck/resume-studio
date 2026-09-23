@@ -29,12 +29,12 @@
     "SKIP_SNAPSHOT": "SKIP_SNAPSHOT",
     "_comment_suffix": "Free-form label appended to resume.js's first phase banner so the user sees 'Tests (default data)' / 'Tests (my data)' at the top of each pass during a multi-source rebuild. Set by snapshot_pdf.py --update-all; unset in normal builds.",
     "RESUME_PIPELINE_SUFFIX": "RESUME_PIPELINE_SUFFIX",
-    "_comment_variants": "Which PDF variants a build produces. Comma-separated, from 'color' and 'grayscale'. Unset means both, which is what the CLI has always done and what the snapshot fixtures assume. Studio sets it from its per-document checkboxes. A variant that is not built has its dist/ file REMOVED, so a stale PDF from an earlier both-variant build can never be mistaken for a fresh one by the snapshot test or the app.",
-    "RESUME_VARIANTS": "RESUME_VARIANTS",
     "_comment_snapshot": "Whether a build checks its PDFs against the committed fixtures. 'off' (the default) skips the check entirely. 'on' runs it and REPORTS a difference without failing — the PDFs are written before the snapshot runs, so a difference is news about the document, not a reason to withhold it. 'strict' restores the original behavior of failing the build, for anyone wiring this into CI. SKIP_SNAPSHOT=1 still forces a skip regardless.",
     "RESUME_SNAPSHOT": "RESUME_SNAPSHOT",
     "_comment_tests": "Whether a build runs the unit suites before producing anything. 'on' (the default) keeps `node resume.js` honest, because from a terminal you may have just changed code. 'off' skips straight to the build, which is what Studio asks for: editing a bullet does not change the layout solver, and ~9s of proving that it still works is a tax on every save. The checks that validate YOUR data — validate_data, the layout invariants, the maxPages ceiling — live in the build itself and always run.",
-    "RESUME_TESTS": "RESUME_TESTS"
+    "RESUME_TESTS": "RESUME_TESTS",
+    "_comment_speculative": "Whether the warm engine's live preview may load the final HTML speculatively while the measurement pass runs (build/engine.js). 'off' (also '0', 'false', 'no') turns it off; anything else, including unset, leaves it on. Read only by the Node engine — the speculative page is never printed unless its HTML is byte-for-byte the final HTML, so this is a switch for diagnosing, not a correctness control.",
+    "RESUME_SPECULATIVE": "RESUME_SPECULATIVE"
   },
   "output_name": {
     "_comment": "What the finished PDFs in dist/ are called. Read by build/_output_name.{py,js}. The name is derived from the profile's name.first / name.last, so it is the one part of the build whose output filenames depend on your data — see _output_name.py for the derivation and why only Python performs it.",
@@ -45,10 +45,8 @@
     },
     "_comment_separator": "Joins name parts to each other and to DOC_SUFFIX. Stripped out of the name parts themselves, so it cannot appear inside one and the stem's structure stays unambiguous.",
     "SEPARATOR": "_",
-    "_comment_grayscale": "Appended to the stem for the black-and-white variant. The color variant takes the bare stem, because it is the file you send out most often and deserves the clean name. It sits after DOC_SUFFIX, which always ends the stem, so it can share the separator without becoming ambiguous.",
-    "GRAYSCALE_SUFFIX": "_Grayscale",
-    "_comment_retired_grayscale": "Grayscale suffixes this project has used before. Only _output_name.js reads them, and only to widen the prune pattern, so a PDF written under an older spelling is cleaned up by the next build instead of being stranded in dist/ under a name nothing recognizes.",
-    "RETIRED_GRAYSCALE_SUFFIXES": ["-grayscale"],
+    "_comment_retired_grayscale": "Suffixes of the black-and-white variant this project used to build. It is not built any more — the one PDF prints correctly in color and in B&W — and these names are read ONLY by _output_name.js, and only to widen the prune pattern, so that a PDF left in dist/ by an older build (or under the older spelling of the suffix, which changed once) is cleaned up by the next build instead of being stranded there looking like a current deliverable.",
+    "RETIRED_GRAYSCALE_SUFFIXES": ["_Grayscale", "-grayscale"],
     "_comment_max_part": "Per-name-part character cap. Windows' 260-char path limit is the real constraint; two parts plus a suffix plus the dist/ prefix stays far inside it at 64 each.",
     "MAX_PART": 64,
     "_comment_legacy": "Filenames this project used before outputs were named after you. Pruned from dist/ after a successful build so an old resume-color.pdf cannot be mistaken for today's output — by you, by the Studio tray, or by anything that globs the directory.",

@@ -6,9 +6,10 @@
 
 A desktop app for your resume and cover letter. You write both in YAML,
 in whatever editor you like; the Studio shows the **real printed PDF**
-every time you save, and builds pixel-faithful US Letter PDFs in color
-and grayscale. Page breaks are worked out for you, and the cover letter
-reuses the resume's header so the two read as a set.
+every time you save, and builds a pixel-faithful US Letter PDF that
+prints correctly in color and in black and white. Page breaks are
+worked out for you, and the cover letter reuses the resume's header so
+the two read as a set.
 
 What changed and when — including anything that makes an old data file
 stop working — is in [CHANGELOG.md](CHANGELOG.md).
@@ -117,12 +118,11 @@ sets the boxes in memory instead of rewriting the file (the rewrite
 took longer than printing); a Build still crops the file itself and
 stamps its metadata, and a test checks the two give the same pixels.
 
-**Build** writes the finished PDFs to `dist/`. It runs the same build
+**Build** writes the finished PDF to `dist/`. It runs the same build
 scripts (`resume.js`, `letter.js`) that the command line uses for
 debugging, so there is exactly one way to produce a PDF worth sending,
-and building the resume cannot touch the cover letter's files. Tick
-**Color** and **Grayscale** to choose which PDFs a build writes; color
-alone is the default.
+and building the resume cannot touch the cover letter's files. There is
+nothing to choose: each document builds one PDF.
 
 Each card chooses its own data file. The cover letter reads the file
 picked on its card, or else `data/letter.yml`, or else
@@ -136,7 +136,7 @@ Two checkboxes on the resume card:
 | Checkbox | Default | Effect |
 |----------|---------|--------|
 | Compare against snapshot | off | Runs the pixel diff and reports differences. Never blocks. |
-| Run unit tests first     | off | Runs the full suite before building — about 30 seconds. See "Why the tests can be skipped". |
+| Run unit tests first     | off | Runs the full suite before building — about a minute. See "Why the tests can be skipped". |
 
 **Dropping a file** works out which document it is by reading it, not
 by its name: the two builders require disjoint top-level keys
@@ -291,8 +291,7 @@ A `salutation:`, `closing:` or `signature:` left in an old file is
 rejected with the line to write instead — silently ignoring one would
 drop the greeting off the letter without a word.
 
-Output: `dist/Gaius_Caesar_Cover_Letter.pdf` and
-`dist/Gaius_Caesar_Cover_Letter_Grayscale.pdf`.
+Output: `dist/Gaius_Caesar_Cover_Letter.pdf`.
 
 ### The build refuses a letter that does not fit
 
@@ -458,12 +457,10 @@ A resume build writes everything to `dist/`:
 - `dist/styles.css` — compiled from `styles/styles.scss` via Sass
 - `dist/pdf_meta.json` — derived PDF metadata + data source identifier
 - `dist/placement.json` — the solver's per-page placement decisions
-- `dist/Gaius_Caesar_Resume.pdf` — final color PDF (US Letter)
-- `dist/Gaius_Caesar_Resume_Grayscale.pdf` — final grayscale PDF
+- `dist/Gaius_Caesar_Resume.pdf` — the final PDF (US Letter)
 
 A cover letter build similarly writes `dist/letter.html`,
-`dist/letter_meta.json`, `dist/Gaius_Caesar_Cover_Letter.pdf` and
-`dist/Gaius_Caesar_Cover_Letter_Grayscale.pdf`.
+`dist/letter_meta.json` and `dist/Gaius_Caesar_Cover_Letter.pdf`.
 
 ### How the PDFs get their names
 
@@ -493,28 +490,33 @@ never a second, plausible-looking resume sitting next to the current
 one under an old name. Only files matching this project's own output
 pattern are touched.
 
-The snapshot **fixtures** keep their fixed names
-(`expected_resume-color.pdf`). They are committed reference images;
+The snapshot **fixture** keeps its fixed name
+(`expected_resume.pdf`). It is a committed reference image;
 naming them after whoever last built would churn `tests/fixtures/` on
 every edit and put a real name into the repository that the placeholder
 data exists to keep it out of.
 
-The Studio builds only the color variant until you tick Grayscale.
-(From the command line, both are built unless `RESUME_VARIANTS` says
-otherwise — see "Debugging from the command line".)
+### One PDF, not two
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/color-and-grayscale-dark.png">
-  <img alt="Page 1 in color and in grayscale" src="docs/screenshots/color-and-grayscale.png">
-</picture>
+There used to be a second, black-and-white PDF beside each document,
+for printing on a mono printer. There isn't any more, and nothing is
+lost by that: the palette is chosen so the one file prints correctly
+either way. The separator rules are dark enough to survive a driver in
+threshold mode (which binarizes at 50% and would drop a lighter gray
+entirely), and the accent green converts to a gray that stays darker
+than the captions beneath it, so the heading hierarchy holds. See
+`styles/_tokens.scss`, which records the numbers.
+
+A build deletes any `*_Grayscale.pdf` an older build left in `dist/`,
+so you do not end up attaching the wrong one.
 
 All of `dist/` is gitignored.
 
 ## How a build works
 
 A Build runs these steps. A live preview runs the same ones, but
-prints only the color PDF, to a scratch file, and never runs the tests
-or the snapshot check.
+prints to a scratch file, and never runs the tests or the snapshot
+check.
 
 1. Reads resume content from `data/resume.yml`, falling back to the
    shipped `data/resume_default.yml`, and merges `data/_profile.yml`
@@ -529,13 +531,11 @@ or the snapshot check.
 5. Renders the final paginated HTML against the solved placement.
 6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
    (8.5×11 in), stamps PDF metadata and language for accessibility.
-7. Optionally pixel-diffs each variant against a committed snapshot to
+7. Optionally pixel-diffs the result against a committed snapshot to
    catch accidental visual changes (`RESUME_SNAPSHOT=on`).
 
-The outputs are named after you, from `name.first` and `name.last` in
-your profile: `dist/Gaius_Caesar_Resume.pdf` and
-`dist/Gaius_Caesar_Resume_Grayscale.pdf`. The color one takes the plain
-name because it is the file you attach to an application.
+The output is named after you, from `name.first` and `name.last` in
+your profile: `dist/Gaius_Caesar_Resume.pdf`.
 
 ### Pipeline steps
 
@@ -548,8 +548,8 @@ name because it is the file you attach to an application.
 5.  Build final HTML against the placement
 6.  Reload the final HTML
 7.  Check layout invariants (page count, divider, rhythm, overflow)
-8.  Print the PDFs — color, then grayscale
-9.  Crop each to US Letter, stamp metadata + /Lang
+8.  Print the PDF
+9.  Crop it to US Letter, stamp metadata + /Lang
 10. Snapshot test                      — Studio: "Compare against snapshot"
 ```
 
@@ -567,7 +567,7 @@ clip content under `overflow: hidden`).
 
 The unit suites test the *pipeline* — the solver, the loader, the warm
 engine's equivalence to the cold CLI. None of that changes when you
-edit a bullet, and they cost about 30 seconds. What validates *your data* is not in them and always runs:
+edit a bullet, and they cost about a minute. What validates *your data* is not in them and always runs:
 `validate_data`, the layout invariants, the `maxPages` ceiling. So
 skipping them can leave the pipeline unchecked, but it cannot produce
 a wrong document. The Studio passes `off` unless you tick "Run unit
@@ -617,6 +617,24 @@ A save starts a render after 20 ms of quiet. If the file can't be read
 as YAML within a second of the save — the editor may still be writing
 it — the preview reads it once more, 50 ms later, before showing the
 error.
+
+Each page reaches the window as soon as it is rasterized, in the order
+the pages appear on screen, rather than all of them together at the
+end. On a narrow window, or scrolled in, that means the page you are
+looking at arrives first.
+
+While the resume's measurement pass runs, the final page is built and
+loaded from the layout the last render solved. If the solver produces
+the same layout again — which a text edit usually does — that page is
+printed instead of loading it a second time; if anything differs, the
+normal path runs. `RESUME_SPECULATIVE=off` turns it off.
+
+The window opens before the engine has finished starting: the server
+answers as soon as it has a port, and anything that needs Chromium or
+the Python worker waits behind the scenes. Node's compile cache is
+kept out of the project, in your user cache directory
+(`%LOCALAPPDATA%\resume-studio\node-compile-cache` on Windows), and
+is skipped on Node older than 22.8.
 
 If the Python worker dies, the request in flight fails with an error
 and the next one starts a fresh worker, instead of every later preview
@@ -743,7 +761,7 @@ slow visual-regression snapshot test for the rendered PDFs.
 ### Unit tests
 
 Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; three launch Chromium.
+pure-logic tests; seven launch Chromium.
 
 | Test                          | What it covers                              |
 |-------------------------------|---------------------------------------------|
@@ -769,6 +787,9 @@ pure-logic tests; three launch Chromium.
 | `test_engine_equivalence.js`  | Warm engine == cold CLI, pixel for pixel    |
 | `test_studio_server.js`       | The Studio server: data choice per card, worker restart, request checks, drops, saves caught mid-write |
 | `test_cli_navigation.js`      | The build scripts don't wait for `networkidle` |
+| `test_preview_stream.js`      | Pages stream in the order the window asks for |
+| `test_speculative_load.js`    | The speculative final page is used, or correctly discarded |
+| `test_cold_start.js`          | Startup order and where the compile cache lives |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON`, `NO_COLOR` / `FORCE_COLOR` parsing |
 
@@ -824,20 +845,17 @@ the time it runs — a difference is news about the document, not a
 reason to withhold it. `RESUME_SNAPSHOT=strict` makes it fail the
 build instead, which is what you want in CI.
 
-#### Four fixtures: two variants × two data sources
+#### Two fixtures: one per data source
 
-Render produces up to two PDFs per build (color and grayscale). The
-build can use either of two data files (`resume.yml` or
-`resume_default.yml`). The snapshot tool reads `dist/pdf_meta.json`
-(written by `build.py`) to learn which file backed the most recent
-build, and picks the matching fixture for each variant:
+Render produces one PDF per build. The build can use either of two data
+files (`resume.yml` or `resume_default.yml`). The snapshot tool reads
+`dist/pdf_meta.json` (written by `build.py`) to learn which file backed
+the most recent build, and picks the matching fixture:
 
-| Data source | Variant   | Fixture                                             | In git? |
-|-------------|-----------|-----------------------------------------------------|---------|
-| `default`   | color    | `tests/fixtures/expected_resume-color.pdf`          | yes     |
-| `default`   | grayscale | `tests/fixtures/expected_resume-grayscale.pdf`      | yes     |
-| `mine`      | color    | `tests/fixtures/expected_resume-color.mine.pdf`     | no      |
-| `mine`      | grayscale | `tests/fixtures/expected_resume-grayscale.mine.pdf` | no      |
+| Data source | Fixture                                      | In git? |
+|-------------|----------------------------------------------|---------|
+| `default`   | `tests/fixtures/expected_resume.pdf`         | yes     |
+| `mine`      | `tests/fixtures/expected_resume.mine.pdf`    | no      |
 
 Each fixture matches the data file that produced it. There is no
 "shared" fixture — that would mean comparing one data set's render
@@ -877,10 +895,10 @@ py build\snapshot_pdf.py --update              :: current data source only
 py build\snapshot_pdf.py --update-all          :: both template and yours
 ```
 
-`--update` refreshes BOTH variants (color + grayscale) of the fixture
-matching the current data source. `--update-all` runs the full build
-pipeline twice (once with the template, once with your data if
-`data/resume.yml` exists), refreshing all four fixtures. The
+`--update` refreshes the fixture matching the current data source.
+`--update-all` runs the full build pipeline twice (once with the
+template, once with your data if `data/resume.yml` exists), refreshing
+both fixtures. The
 intermediate snapshot checks are skipped via `SKIP_SNAPSHOT=1` so the
 existing about-to-be-replaced fixtures don't fail the build. Both
 passes clear `RESUME_DATA_FILE` and `LETTER_DATA_FILE`, and each copy
@@ -888,10 +906,9 @@ is refused unless the build really read the data source that pass is
 for — so a variable left set in your shell can't put your own resume
 into the committed fixtures.
 
-Commit the refreshed `expected_resume-color.pdf` and
-`expected_resume-grayscale.pdf` alongside whatever change caused them.
-The `.mine.pdf` fixtures stay gitignored — they live only on your
-machine.
+Commit the refreshed `expected_resume.pdf` alongside whatever change
+caused it. The `.mine.pdf` fixture stays gitignored — it lives only on
+your machine.
 
 #### Running snapshot test on its own
 
@@ -915,10 +932,9 @@ node letter.js     # build the cover letter
 npm run ui:serve   # the Studio's server alone, without opening a window
 ```
 
-A terminal build differs from a Studio build in two defaults:
+A terminal build differs from a Studio build in one default:
 `node resume.js` runs the full test suite first (`RESUME_TESTS=off`
-skips it; `letter.js` never runs it), and both scripts write the color
-and the grayscale PDF (`RESUME_VARIANTS=color` for color only).
+skips it; `letter.js` never runs it).
 
 To force a particular Python interpreter:
 
@@ -951,9 +967,8 @@ ones it needs itself, from its checkboxes and data-source menu.
 |                            | unit suites first. The app passes `off`.               |
 | `RESUME_SNAPSHOT`          | `off` (default), `on` (check and report), or `strict`  |
 |                            | (check and fail). See "Snapshot test".                 |
-| `RESUME_VARIANTS`          | Comma-separated: `color`, `grayscale`, or both.        |
-|                            | Defaults to both from the command line; the Studio     |
-|                            | states its choice explicitly.                          |
+| `RESUME_SPECULATIVE`       | `off` turns off building the resume's final page from  |
+|                            | the previous layout while the measurement pass runs.   |
 | `STRICT_TESTS=1`           | Convert SKIP'd test suites into hard failures. Without |
 |                            | it, a skipped suite (e.g. `test_check_layout` when the |
 |                            | Playwright browser binary is missing, or any suite     |
@@ -1049,6 +1064,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── crop_pdf.py           Trim Chromium's PDF to true US Letter.
 │   ├── _pdf_page_keys.py     Per-page keys so the preview skips unchanged pages.
 │   ├── _png.py               The preview's PNG writer.
+│   ├── _compile_cache.js     Node's compile cache, kept out of the project.
 │   ├── snapshot_pdf.py       Visual regression test.
 │   ├── solve_layout.js       Pure-function layout solver.
 │   ├── measure_dom.js        Playwright DOM measurement extractor.
@@ -1085,16 +1101,17 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
     ├── test_cli_navigation.js           Build scripts don't wait for networkidle.
+    ├── test_preview_stream.js           Streamed, prioritized preview pages.
+    ├── test_speculative_load.js         The speculative final page.
+    ├── test_cold_start.js               Startup order and the compile cache.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.
-    └── fixtures/                        Snapshot fixtures. The two template ones
-                                         are committed; yours are created by the
-                                         first build that compares against them.
-        ├── expected_resume-color.pdf            Snapshot (template data).
-        ├── expected_resume-grayscale.pdf        Snapshot (template data).
-        ├── expected_resume-color.mine.pdf       Snapshot (your data, gitignored).
-        ├── expected_resume-grayscale.mine.pdf   Snapshot (your data, gitignored).
-        └── diff_*_pageN.png                     Generated on failure (gitignored).
+    └── fixtures/                        Snapshot fixtures. The template one is
+                                         committed; yours is created by the
+                                         first build that compares against it.
+        ├── expected_resume.pdf                  Snapshot (template data).
+        ├── expected_resume.mine.pdf             Snapshot (your data, gitignored).
+        └── diff_pageN.png                       Generated on failure (gitignored).
 ```
 
 ## FAQ / common gotchas
@@ -1125,13 +1142,12 @@ change is intentional, refresh the fixtures with
 `python build/snapshot_pdf.py --update` (or `--update-all` for both
 data sources).
 
-**`--update` only updates two fixtures, not all four.**
+**`--update` only updates one fixture, not both.**
 By design. The snapshot tool reads `dist/pdf_meta.json` to learn which
 data file (`resume.yml` or `resume_default.yml`) drove the most recent
-build, and updates both variant fixtures (color + grayscale) for that
-data source. If you want all four refreshed in one go, use
-`--update-all` — it runs the full pipeline twice with each data source
-forced.
+build, and updates the fixture for that data source. If you want both
+refreshed in one go, use `--update-all` — it runs the full pipeline
+twice with each data source forced.
 
 **The build fails with "content-overflow" on a page.**
 The solver produced a placement that doesn't actually fit. This usually
@@ -1175,8 +1191,9 @@ one by one. So a new file you drop in there is private by default
 rather than exposed until someone remembers to add a line for it, and
 renaming a data file cannot expose it.
 
-Your private snapshot fixtures (`expected_resume-*.mine.pdf`) are
-covered too.
+Your private snapshot fixture (`expected_resume.mine.pdf`) is covered
+too, under that name and under the two it had when this project still
+built a separate grayscale PDF.
 
 **VS Code shows three "Property not allowed" errors on `resume.yml`.**
 Your `.vscode/settings.json` is missing `"yaml.schemaStore.enable":
