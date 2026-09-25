@@ -554,7 +554,7 @@ your profile: `dist/Gaius_Caesar_Resume.pdf`.
 ```
 
 Step 7 is a gate — the build stops if it fails. Step 0 is a gate when
-it runs. Step 10 reports and does not block: the PDFs are written
+it runs. Step 10 reports and does not block: the PDF is written
 before it runs, so a difference is news about the document rather than
 a reason to withhold it. `RESUME_SNAPSHOT=strict` restores blocking,
 for CI.
@@ -761,7 +761,7 @@ slow visual-regression snapshot test for the rendered PDFs.
 ### Unit tests
 
 Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; seven launch Chromium.
+pure-logic tests; six launch Chromium.
 
 | Test                          | What it covers                              |
 |-------------------------------|---------------------------------------------|
@@ -835,12 +835,12 @@ treats the argument as a Python `unittest` dotted path.
 doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
 It is **off by default**; tick "Compare against snapshot" in the
 Studio, or set `RESUME_SNAPSHOT=on` on the command line. It rasterizes
-the freshly built resume PDFs (`dist/<First>_<Last>_Resume*.pdf`,
-found through `dist/pdf_meta.json`), compares each page-by-page to a
-committed fixture, and reports any variant whose visible pixels
-changed beyond the configured tolerance.
+the freshly built resume PDF (`dist/<First>_<Last>_Resume.pdf`,
+found through `dist/pdf_meta.json`), compares it page by page to a
+committed fixture, and reports whether its visible pixels changed
+beyond the configured tolerance.
 
-It reports rather than fails, because the PDFs are already written by
+It reports rather than fails, because the PDF is already written by
 the time it runs — a difference is news about the document, not a
 reason to withhold it. `RESUME_SNAPSHOT=strict` makes it fail the
 build instead, which is what you want in CI.
@@ -874,9 +874,10 @@ silently compared your resume against the template.
 #### First build (no fixtures yet)
 
 Build with "Compare against snapshot" ticked. The snapshot step
-auto-bootstraps any missing fixture from the resume PDFs just built
-in `dist/` and prints a notice. Subsequent builds diff against
-the fixtures. Inspect the PDFs visually before committing them.
+bootstraps the fixture for the current data source from the resume
+PDF just built in `dist/`, if it is missing, and prints a notice.
+Subsequent builds diff against it. Inspect the fixture visually
+before committing it.
 
 #### Refreshing after an intentional change
 
@@ -917,7 +918,7 @@ py build/snapshot_pdf.py
 ```
 
 Useful when iterating on tolerances or inspecting a regression without
-rebuilding. Requires both built PDFs to already exist; it finds them
+rebuilding. Requires the built resume PDF to already exist; it finds it
 through `dist/pdf_meta.json` rather than by name.
 
 ## Debugging from the command line
@@ -1137,7 +1138,7 @@ starting the Studio: `set "PYTHON=py" && npm run studio` in cmd, or
 
 **The snapshot reports a difference after a CSS edit and the diff image looks correct.**
 That's it doing its job — any visible change, intentional or not, fires
-it. Note that it *reports*; your PDFs were written before it ran. If the
+it. Note that it *reports*; your PDF was written before it ran. If the
 change is intentional, refresh the fixtures with
 `python build/snapshot_pdf.py --update` (or `--update-all` for both
 data sources).
