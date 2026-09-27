@@ -30,6 +30,12 @@
  * abandoned render arrives after a newer one has started, keeps the
  * newer render's pages and drops the older ones.
  *
+ * ISOLATION
+ * ---------
+ * The engine runs in a throwaway copy of the project (tests/_project.js)
+ * and writes its dist/, never this checkout's, which is fingerprinted
+ * before and after and must be untouched.
+ *
  * REQUIREMENTS
  * ------------
  * Playwright's Chromium; without it this prints the runner's SKIP
@@ -40,36 +46,14 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { assertEq, assertTrue, fail, report } = require('./_framework');
+const { tempProject, realDistFingerprint } = require('./_project');
 
 const ROOT = path.join(__dirname, '..');
-const DIST = path.join(ROOT, 'dist');
 const SUITE = 'test_preview_stream';
-
-const SCRATCH = [
-  path.join(DIST, 'styles.css'),
-  path.join(DIST, 'index.html'),
-  path.join(DIST, 'placement.json'),
-  path.join(DIST, 'pdf_meta.json'),
-  path.join(DIST, 'letter.html'),
-  path.join(DIST, 'letter_meta.json'),
-];
 
 function skip(reason) {
   console.log(`SKIP ${SUITE}: ${reason}`);
   process.exitCode = 0;
-}
-
-function snapshot(paths) {
-  return paths.map(p => [p, fs.existsSync(p) ? fs.readFileSync(p) : null]);
-}
-
-function restore(saved) {
-  for (const [p, data] of saved) {
-    try {
-      if (data === null) fs.rmSync(p, { force: true });
-      else fs.writeFileSync(p, data);
-    } catch { /* cleanup, not an assertion */ }
-  }
 }
 
 function edit(file, from, to) {
@@ -99,23 +83,26 @@ function applyIfCurrent(held, current, event) {
     return skip(`chromium unavailable (${String(err.message).split('\n')[0]})`);
   }
 
+  const before = realDistFingerprint();
+  const project = tempProject('preview-stream-test');
   let createEngine;
   try {
-    ({ createEngine } = require('../build/engine'));
+    ({ createEngine } = project.require('build/engine'));
   } catch (err) {
+    project.remove();
     fail('the engine module loads', { error: err.stack || err.message });
     return report();
   }
 
   let engine;
   try {
-    engine = await createEngine({ root: ROOT });
+    engine = await createEngine({ root: project.root });
   } catch (err) {
+    project.remove();
     fail('the engine starts (Python worker boots)', { error: err.stack || err.message });
     return report();
   }
 
-  const saved = snapshot(SCRATCH);
   const dataFile = path.join(os.tmpdir(), `stream-${process.pid}.yml`);
   fs.copyFileSync(path.join(ROOT, 'data', 'resume_default.yml'), dataFile);
   const env = { RESUME_DATA_FILE: dataFile, RESUME_DATA_SOURCE: null };
@@ -238,9 +225,10 @@ function applyIfCurrent(held, current, event) {
     fail('preview streaming run', { error: err.stack || err.message });
   } finally {
     try { fs.rmSync(dataFile, { force: true }); } catch { /* best effort */ }
-    restore(saved);
     await engine.dispose();
+    project.remove();
   }
+  assertEq(realDistFingerprint(), before, "isolation: nothing was written to this checkout's dist/");
 
   report();
 })();

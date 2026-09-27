@@ -43,7 +43,31 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
-Nothing yet.
+- **Added.** `tests/test_anonymized.py` reads committed images. A
+  screenshot of your real résumé in `docs/screenshots/` used to pass,
+  because images were skipped. Their embedded metadata is now always
+  checked, and what they show is read with Tesseract OCR when it is
+  installed; without Tesseract that one check skips and says why.
+  Images are enlarged 2× first: at the size `documents.png` shows a
+  page, OCR missed 3 of the 25 details on a real résumé, and at 2× it
+  found all 25.
+- **Added.** A GitHub workflow, `attribution.yml`, that fails when a
+  commit message, a tag message, a pull request's title or description,
+  or a release's notes contains a `Co-Authored-By` or similar line, a
+  chat or session link, or a "Generated with …" line. Pull requests
+  opened by Dependabot are exempt from the title and description check,
+  since those quote other projects' release notes.
+- **Fixed.** The tests that build no longer share your `dist/`.
+  `test_cold_start.js`, `test_speculative_load.js`,
+  `test_engine_equivalence.js` and `test_preview_stream.js` each ran
+  the engine in this checkout and saved and restored their own list of
+  `dist/` files. Two of them had already been caught passing or failing
+  according to what an earlier build left there, `favicon.svg` was on
+  no list and was left with whichever initials the last suite built,
+  and `test_cold_start.js` previewed your own `data/letter.yml`. They
+  now run in a throwaway copy of the project, as `test_studio_server.js`
+  already did (the helper is `tests/_project.js`), and each one checks
+  that nothing in your `dist/` was written.
 
 ---
 

@@ -778,7 +778,7 @@ pure-logic tests; six launch Chromium.
 | `test_snapshot_guard.py`      | The snapshot tool never writes a fixture from the wrong data |
 | `test_console_encoding.py`    | Log output on a Windows code page; color settings |
 | `test_output_name.py`         | How your name becomes the PDF file names    |
-| `test_anonymized.py`          | No personal details in committable files    |
+| `test_anonymized.py`          | No personal details in committable files, screenshots included |
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
 | `test_check_layout.js`        | Layout invariants in a real browser         |
@@ -803,6 +803,18 @@ a skip too, never as passed.
 `test_yaml_typing.py` skips its schema-agreement checks unless
 `jsonschema` is installed — it is in `requirements.txt`, marked
 test-only, and nothing in the build imports it.
+
+`test_anonymized.py` runs only where your own data files are (it looks
+for their details everywhere else). It reads committed images with
+[Tesseract OCR](https://tesseract-ocr.github.io/tessdoc/Installation.html)
+when it is on `PATH` or in its default Windows folder, and otherwise
+skips that one check and says so. Images' embedded metadata is checked
+either way.
+
+The suites that build — the engine, the preview, the Studio server —
+each run in a throwaway copy of the project in the system temp
+directory, so they never read or write your `dist/`, and each checks
+that it didn't.
 
 Run all of them with:
 
@@ -993,9 +1005,12 @@ ones it needs itself, from its checkboxes and data-source menu.
 ```
 .
 ├── .github/workflows/
-│   └── tests.yml             Builds both documents from the templates and
-│                             runs npm test on GitHub for every push to
-│                             main and every pull request.
+│   ├── tests.yml             Builds both documents from the templates and
+│   │                         runs npm test on GitHub for every push to
+│   │                         main and every pull request.
+│   └── attribution.yml       Fails on Co-Authored-By and similar lines in
+│                             commit and tag messages, pull requests and
+│                             release notes.
 ├── .gitattributes            Line endings: LF, CRLF for .bat, binaries untouched.
 ├── .gitignore                Ignores dist/, node_modules/, __pycache__/,
 │                             tests/fixtures/diff_*.png, everything in data/
@@ -1080,6 +1095,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │                            dist/pdf_meta.json.
 └── tests/                    Unit tests + visual regression fixtures.
     ├── _framework.js                    Tiny JS test harness.
+    ├── _project.js                      Throwaway project copy for suites that build.
     ├── test_validate_data.py            YAML schema validation.
     ├── test_load_data.py                Data loader + env-var precedence.
     ├── test_markdown_filter.py          Bullet markdown filter.
@@ -1094,7 +1110,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_profile_merge.py            The shared profile's merge rules.
     ├── test_output_name.py              PDF file names from your profile.
     ├── test_output_name.js              PDF names read back in Node; stale-PDF cleanup.
-    ├── test_anonymized.py               No personal details in committable files.
+    ├── test_anonymized.py               No personal details in committable files or screenshots.
     ├── test_snapshot_guard.py           Fixtures are never written from the wrong data.
     ├── test_console_encoding.py         Log output on a Windows code page; color settings.
     ├── test_detect_doc.js               Which document a dropped file is.

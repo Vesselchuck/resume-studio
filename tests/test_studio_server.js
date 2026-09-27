@@ -45,6 +45,7 @@ const ROOT = path.join(__dirname, '..');
 const READY_PREFIX = '\x1eSTUDIO_READY ';
 
 const server = require('../build/studio_server');
+const { copyProject, realDistFingerprint } = require('./_project');
 
 
 /* ─── Pure helpers ────────────────────────────────────────────── */
@@ -166,35 +167,6 @@ async function unitTests(tmp) {
 }
 
 
-
-/* ─── The isolated project ────────────────────────────────────── */
-
-function copyProject(dest) {
-  const copyDir = (from, to) => {
-    fs.mkdirSync(to, { recursive: true });
-    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-      if (entry.name === '__pycache__') continue;
-      const src = path.join(from, entry.name);
-      const dst = path.join(to, entry.name);
-      if (entry.isDirectory()) copyDir(src, dst);
-      else if (entry.isFile()) fs.copyFileSync(src, dst);
-    }
-  };
-  for (const dir of ['build', 'styles', 'templates', 'fonts', 'ui', 'schemas']) {
-    if (fs.existsSync(path.join(ROOT, dir))) copyDir(path.join(ROOT, dir), path.join(dest, dir));
-  }
-  for (const file of ['resume.js', 'letter.js', 'package.json']) {
-    fs.copyFileSync(path.join(ROOT, file), path.join(dest, file));
-  }
-  fs.mkdirSync(path.join(dest, 'data'), { recursive: true });
-  for (const file of fs.readdirSync(path.join(ROOT, 'data'))) {
-    if (/_default\.ya?ml$/.test(file)) {
-      fs.copyFileSync(path.join(ROOT, 'data', file), path.join(dest, 'data', file));
-    }
-  }
-  fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(dest, 'node_modules'),
-    process.platform === 'win32' ? 'junction' : 'dir');
-}
 
 function startServer(projectDir) {
   const env = { ...process.env };
@@ -582,6 +554,7 @@ async function httpTests(project, srv) {
     process.exit(0);
   }
 
+  const before = realDistFingerprint();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-server-test-'));
   const project = path.join(tmp, 'project');
   let srv = null;
@@ -607,5 +580,6 @@ async function httpTests(project, srv) {
     if (srv) { try { srv.child.kill('SIGKILL'); } catch { /* gone */ } }
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }
+  assertEq(realDistFingerprint(), before, "isolation: nothing was written to this checkout's dist/");
   report();
 })();

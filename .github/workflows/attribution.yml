@@ -1,0 +1,136 @@
+# Fails when a commit message, a tag message, a pull request's title or
+# description, or a release's notes carries an attribution line: a
+# Co-Authored-By or similar trailer, a chat or session link, or a
+# "Generated with <tool>" line. The work in this repository is
+# unattributed on purpose.
+#
+# Local commit-msg and pre-push hooks catch the same lines before they
+# leave the machine, but a hook is skipped by --no-verify, is missing on
+# a machine that never installed it, and never sees text typed on
+# GitHub. This is the backstop, not the first line: a release's notes
+# are checked after they are published, so a failure here means "edit
+# the release now", not "it was stopped".
+#
+# The pattern is the hooks' pattern, character for character. Change
+# one and change the others.
+#
+# What each event checks:
+#   push to main    the commits the push added
+#   push of a tag   the tag's own message, and commits on no branch
+#   pull request    its commits, its title and its description
+#   release         its title and its notes
+# Pull requests opened by bots (Dependabot) are exempt from the title
+# and description check: those quote upstream release notes, which are
+# someone else's text. Their commits are still checked.
+
+name: Attribution
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the repository with its full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Everything reaches the script through env, never through ${{ }}
+      # inside it: a pull request's title and description are anyone's
+      # text, and interpolated into the script they would run as shell.
+      - name: Look for attribution lines
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BY_BOT: ${{ github.event.pull_request.user.type == 'Bot' }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          pattern='co-authored-by:|assisted-by:|made-with:|generated-by:|ai-(assisted|generated)(-by)?:|claude-session:|claude\.ai/(code|share)|chatgpt\.com/share|chat\.openai\.com/share|generated (with|by|using) \[?(claude|chatgpt|openai|codex|copilot|cursor|gemini|an? ai)|^[^[:alnum:]]*generated (with|by|using) \[?[[:alpha:]]'
+          zero=0000000000000000000000000000000000000000
+          fail=0
+
+          # Text typed on GitHub arrives with CRLF line endings.
+          check_text() {
+            hits=$(printf '%s\n' "$2" | tr -d '\r' | grep -Ein "$pattern") || return 0
+            echo "::error::Attribution in $1:"
+            while IFS= read -r hit; do echo "  line $hit"; done <<< "$hits"
+            fail=1
+          }
+
+          # Not grep -q: it exits at the first match, git log can die of
+          # SIGPIPE, and under the runner's pipefail that reads as no match.
+          check_commits() {
+            for rev in $(git rev-list "$@"); do
+              if git log -1 --format=%B "$rev" | grep -Ei "$pattern" >/dev/null; then
+                echo "::error::Attribution in commit $(git log -1 --format='%h %s' "$rev")"
+                fail=1
+              fi
+            done
+          }
+
+          case "$EVENT" in
+            push)
+              case "$REF" in
+                refs/tags/*)
+                  # Fetch the tag object itself. The checkout can leave a
+                  # lightweight ref in its place, which has no message.
+                  git fetch --quiet --force origin "+$REF:$REF"
+                  if [ "$(git cat-file -t "$REF")" = tag ]; then
+                    # Skip the header, up to the first blank line.
+                    check_text "the message of tag ${REF#refs/tags/}" \
+                      "$(git cat-file -p "$REF" | sed '1,/^$/d')"
+                  fi
+                  check_commits "$SHA" --not --remotes=origin
+                  ;;
+                *)
+                  if [ "$BEFORE" != "$zero" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                    check_commits "$BEFORE..$SHA"
+                  else
+                    # A new branch, or a force push that dropped the old
+                    # tip: every commit on it.
+                    check_commits "$SHA"
+                  fi
+                  ;;
+              esac
+              ;;
+            pull_request)
+              check_commits "$PR_BASE..$PR_HEAD"
+              if [ "$PR_BY_BOT" != true ]; then
+                check_text "the pull request title" "$PR_TITLE"
+                check_text "the pull request description" "$PR_BODY"
+              fi
+              ;;
+            release)
+              check_text "the release title" "$RELEASE_NAME"
+              check_text "the release notes" "$RELEASE_BODY"
+              ;;
+          esac
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Remove the lines above. For a commit: git commit --amend or"
+            echo "git rebase -i, then push. For a tag: recreate it with"
+            echo "git tag -f -a and push it again. For a pull request or"
+            echo "a release: edit its text on GitHub."
+            exit 1
+          fi
+          echo "No attribution lines found."

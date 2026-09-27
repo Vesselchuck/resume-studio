@@ -33,6 +33,12 @@
  * else. The data is a temporary copy of data/resume_default.yml named
  * through RESUME_DATA_FILE, so nothing in data/ is touched.
  *
+ * ISOLATION
+ * ---------
+ * Both engines run in one throwaway copy of the project
+ * (tests/_project.js) and write its dist/, never this checkout's, which
+ * is fingerprinted before and after and must be untouched.
+ *
  * REQUIREMENTS
  * ------------
  * Playwright's Chromium; without it this prints the runner's SKIP
@@ -44,34 +50,14 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { assertEq, assertTrue, fail, report } = require('./_framework');
+const { tempProject, realDistFingerprint } = require('./_project');
 
 const ROOT = path.join(__dirname, '..');
-const DIST = path.join(ROOT, 'dist');
 const SUITE = 'test_speculative_load';
-
-const SCRATCH = [
-  path.join(DIST, 'styles.css'),
-  path.join(DIST, 'index.html'),
-  path.join(DIST, 'placement.json'),
-  path.join(DIST, 'pdf_meta.json'),
-];
 
 function skip(reason) {
   console.log(`SKIP ${SUITE}: ${reason}`);
   process.exitCode = 0;
-}
-
-function snapshot(paths) {
-  return paths.map(p => [p, fs.existsSync(p) ? fs.readFileSync(p) : null]);
-}
-
-function restore(saved) {
-  for (const [p, data] of saved) {
-    try {
-      if (data === null) fs.rmSync(p, { force: true });
-      else fs.writeFileSync(p, data);
-    } catch { /* cleanup, not an assertion */ }
-  }
 }
 
 function sha(file) {
@@ -120,9 +106,11 @@ const NEW_JOB = `
  * That is deliberate and load-bearing. This step used to expect 'used',
  * which made the suite's result depend on whatever happened to be in
  * dist/ when it started — 'used' after a build of this same data,
- * 'failed' after a build of yours, null on a clean checkout. The guess
- * itself is measured by the nine edits below, each of which starts from
- * a placement this sequence wrote.
+ * 'failed' after a build of yours, null on a clean checkout. The suite
+ * now runs in a copy whose dist/ starts empty, but the second engine
+ * still starts from the placement the first one left, so the clearing
+ * stays. The guess itself is measured by the nine edits below, each of
+ * which starts from a placement this sequence wrote.
  */
 const STEPS = [
   ['the first render', null, null],
@@ -141,14 +129,13 @@ const STEPS = [
 ];
 
 /** Run the whole sequence on one engine, collecting what it produced. */
-async function runSequence(engine, dataFile, htmlPath) {
+async function runSequence(engine, dataFile, dist) {
   const env = { RESUME_DATA_FILE: dataFile, RESUME_DATA_SOURCE: null };
   const out = [];
   fs.copyFileSync(path.join(ROOT, 'data', 'resume_default.yml'), dataFile);
   // Start from no placement, so the first render has nothing to guess
-  // from no matter what ran before this suite — see STEPS. The file is
-  // restored with the rest of SCRATCH when the suite finishes.
-  fs.rmSync(path.join(DIST, 'placement.json'), { force: true });
+  // from, whichever engine ran before this one — see STEPS.
+  fs.rmSync(path.join(dist, 'placement.json'), { force: true });
   for (const [label, apply] of STEPS) {
     if (apply) apply(dataFile);
     const r = await engine.renderPreview({ doc: 'resume', env });
@@ -158,8 +145,8 @@ async function runSequence(engine, dataFile, htmlPath) {
       hashes: r.images.map(im => im.hash),
       pages: r.pages,
       invariants: r.invariants,
-      html: sha(htmlPath),
-      placement: sha(path.join(DIST, 'placement.json')),
+      html: sha(path.join(dist, 'index.html')),
+      placement: sha(path.join(dist, 'placement.json')),
       cached: r.timings.cached || null,
     });
   }
@@ -181,28 +168,29 @@ async function runSequence(engine, dataFile, htmlPath) {
     return skip(`chromium launch failed (${err.message.split('\n')[0]})`);
   }
 
+  const before = realDistFingerprint();
+  const project = tempProject('speculative-test');
   let createEngine;
   try {
-    ({ createEngine } = require('../build/engine'));
+    ({ createEngine } = project.require('build/engine'));
   } catch (err) {
+    project.remove();
     fail('the engine module loads', { error: err.stack || err.message });
     return report();
   }
 
-  const saved = snapshot(SCRATCH);
   const dataFile = path.join(os.tmpdir(), `speculative-${process.pid}.yml`);
-  const htmlPath = path.join(DIST, 'index.html');
   let engine = null;
 
   try {
     // With speculation, then without: the same engine code, the same
     // data, the same order, one switch different.
-    engine = await createEngine({ root: ROOT, speculative: true });
-    const fast = await runSequence(engine, dataFile, htmlPath);
+    engine = await createEngine({ root: project.root, speculative: true });
+    const fast = await runSequence(engine, dataFile, project.dist);
     await engine.dispose();
 
-    engine = await createEngine({ root: ROOT, speculative: false });
-    const plain = await runSequence(engine, dataFile, htmlPath);
+    engine = await createEngine({ root: project.root, speculative: false });
+    const plain = await runSequence(engine, dataFile, project.dist);
     await engine.dispose();
     engine = null;
 
@@ -243,8 +231,9 @@ async function runSequence(engine, dataFile, htmlPath) {
   } finally {
     if (engine) { try { await engine.dispose(); } catch { /* best effort */ } }
     try { fs.rmSync(dataFile, { force: true }); } catch { /* best effort */ }
-    restore(saved);
+    project.remove();
   }
+  assertEq(realDistFingerprint(), before, "isolation: nothing was written to this checkout's dist/");
 
   report();
 })();

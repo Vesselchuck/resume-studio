@@ -24,6 +24,13 @@
  *     served without waiting for the engine, while anything that needs
  *     the engine waits for it.
  *
+ * ISOLATION
+ * ---------
+ * The engine and the server run in a throwaway copy of the project
+ * (tests/_project.js), so they build the shipped templates into a dist/
+ * of their own. This checkout's dist/ is fingerprinted before and after,
+ * and must be untouched.
+ *
  * REQUIREMENTS
  * ------------
  * Playwright's Chromium (the warm-start check launches one); without it
@@ -31,13 +38,12 @@
  */
 
 const path = require('path');
-const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 const { assertEq, assertTrue, fail, report } = require('./_framework');
+const { tempProject, realDistFingerprint } = require('./_project');
 
 const ROOT = path.join(__dirname, '..');
-const DIST = path.join(ROOT, 'dist');
 const SUITE = 'test_cold_start';
 const READY_PREFIX = '\x1eSTUDIO_READY ';
 
@@ -46,19 +52,6 @@ const compileCache = require('../build/_compile_cache');
 function skip(reason) {
   console.log(`SKIP ${SUITE}: ${reason}`);
   process.exitCode = 0;
-}
-
-function snapshot(paths) {
-  return paths.map(p => [p, fs.existsSync(p) ? fs.readFileSync(p) : null]);
-}
-
-function restore(saved) {
-  for (const [p, data] of saved) {
-    try {
-      if (data === null) fs.rmSync(p, { force: true });
-      else fs.writeFileSync(p, data);
-    } catch { /* cleanup, not an assertion */ }
-  }
 }
 
 /** A GET, with the time it took. */
@@ -118,8 +111,8 @@ function cacheTests() {
 
 /* ─── Warm start ──────────────────────────────────────────────── */
 
-async function warmTests(createEngine) {
-  const engine = await createEngine({ root: ROOT, warm: true });
+async function warmTests(createEngine, root) {
+  const engine = await createEngine({ root, warm: true });
   try {
     // The launch was started before this function got the engine back;
     // it does not have to have finished, so give it a moment — without
@@ -139,7 +132,7 @@ async function warmTests(createEngine) {
   }
 
   // Without `warm`, nothing is launched until something needs it.
-  const cold = await createEngine({ root: ROOT });
+  const cold = await createEngine({ root });
   try {
     assertEq(cold.status().browserOpen, false,
       'cold: a plain engine does not launch a browser it may never use');
@@ -151,10 +144,10 @@ async function warmTests(createEngine) {
 
 /* ─── The server announces itself early ───────────────────────── */
 
-async function readyTests() {
+async function readyTests(root) {
   const child = spawn(process.execPath,
-    [path.join(ROOT, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent'],
-    { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+    [path.join(root, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent'],
+    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
   const log = [];
   child.stderr.setEncoding('utf-8');
   child.stderr.on('data', c => log.push(...String(c).split('\n')));
@@ -225,21 +218,18 @@ async function readyTests() {
     return report();
   }
 
-  const saved = snapshot([
-    path.join(DIST, 'styles.css'),
-    path.join(DIST, 'letter.html'),
-    path.join(DIST, 'letter_meta.json'),
-  ]);
-
+  const before = realDistFingerprint();
+  const project = tempProject('cold-start-test');
   try {
-    const { createEngine } = require('../build/engine');
-    await warmTests(createEngine);
-    await readyTests();
+    const { createEngine } = project.require('build/engine');
+    await warmTests(createEngine, project.root);
+    await readyTests(project.root);
   } catch (err) {
     fail('cold start run', { error: err.stack || err.message });
   } finally {
-    restore(saved);
+    project.remove();
   }
+  assertEq(realDistFingerprint(), before, "isolation: nothing was written to this checkout's dist/");
 
   report();
 })();

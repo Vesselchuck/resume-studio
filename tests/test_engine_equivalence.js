@@ -79,29 +79,24 @@
  * missing), as does engine.renderPreview(). The resume data used by the
  * later checks is a temporary copy of data/resume_default.yml, named
  * through RESUME_DATA_FILE, so nothing in data/ is touched.
+ *
+ * ISOLATION
+ * ---------
+ * Everything runs in a throwaway copy of the project (tests/_project.js):
+ * the stylesheet the cutoff checks rewrite, the font whose time they
+ * move, and the dist/ every render writes are the copy's. This
+ * checkout's dist/ is fingerprinted before and after and must be
+ * untouched.
  */
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { assertEq, assertTrue, fail, report } = require('./_framework');
+const { tempProject, realDistFingerprint } = require('./_project');
 
 const ROOT = path.join(__dirname, '..');
-const DIST = path.join(ROOT, 'dist');
 const RASTER_SCALE = 2.0;
-
-// dist/ intermediates both passes overwrite. The PDFs are never touched
-// — renders here print to the system temp directory — but index.html
-// and placement.json are shared scratch, and a test should hand them
-// back as it found them.
-const SCRATCH = [
-  path.join(DIST, 'styles.css'),
-  path.join(DIST, 'index.html'),
-  path.join(DIST, 'placement.json'),
-  path.join(DIST, 'pdf_meta.json'),
-  path.join(DIST, 'letter.html'),
-  path.join(DIST, 'letter_meta.json'),
-];
 
 
 const SUITE = 'test_engine_equivalence';
@@ -110,19 +105,6 @@ const SUITE = 'test_engine_equivalence';
 function skip(reason) {
   console.log(`SKIP ${SUITE}: ${reason}`);
   process.exitCode = 0;
-}
-
-function snapshot(paths) {
-  return paths.map(p => [p, fs.existsSync(p) ? fs.readFileSync(p) : null]);
-}
-
-function restore(saved) {
-  for (const [p, data] of saved) {
-    try {
-      if (data === null) fs.rmSync(p, { force: true });
-      else fs.writeFileSync(p, data);
-    } catch { /* cleanup, not an assertion */ }
-  }
 }
 
 /**
@@ -273,7 +255,7 @@ async function pageKeysOnRealEdits(pipeline, page, worker, dataFile, temps) {
 }
 
 /** The early cutoff answers only a render whose inputs did not change. */
-async function earlyCutoff(engine, dataFile) {
+async function earlyCutoff(engine, dataFile, root) {
   const env = { RESUME_DATA_FILE: dataFile, RESUME_DATA_SOURCE: null };
   const render = () => engine.renderPreview({ doc: 'resume', env });
   const hashesOf = r => r.images.map(im => im.hash);
@@ -297,7 +279,7 @@ async function earlyCutoff(engine, dataFile) {
   assertEq(hashesOf(back), hashesOf(first), 'cutoff: reverting the edit gives the first pages back');
 
   // The stylesheet changes under the engine (a Build recompiles it, say).
-  const css = path.join(DIST, 'styles.css');
+  const css = path.join(root, 'dist', 'styles.css');
   const cssBefore = fs.readFileSync(css);
   fs.writeFileSync(css, Buffer.concat([cssBefore, Buffer.from('\n.cutoff-test { color: red; }\n')]));
   const styled = await render();
@@ -309,8 +291,8 @@ async function earlyCutoff(engine, dataFile) {
   assertEq(hashesOf(unstyled), hashesOf(first), 'cutoff: ...and matches the first render');
 
   // A font file replaced (same name, new time): a real navigation.
-  const font = fs.readdirSync(path.join(ROOT, 'fonts')).find(f => f.endsWith('.woff2'));
-  const fontPath = path.join(ROOT, 'fonts', font);
+  const font = fs.readdirSync(path.join(root, 'fonts')).find(f => f.endsWith('.woff2'));
+  const fontPath = path.join(root, 'fonts', font);
   const st = fs.statSync(fontPath);
   try {
     // Seconds as numbers, not Dates, so the restore below keeps the
@@ -356,26 +338,29 @@ async function earlyCutoff(engine, dataFile) {
   }
 
   // From here on, anything that goes wrong is a failure.
+  const before = realDistFingerprint();
+  const project = tempProject('engine-equivalence-test');
   let createEngine, createPipeline;
   try {
-    ({ createEngine } = require('../build/engine'));
-    ({ createPipeline } = require('../build/pipeline'));
+    ({ createEngine } = project.require('build/engine'));
+    ({ createPipeline } = project.require('build/pipeline'));
   } catch (err) {
     fail('the engine and pipeline modules load', { error: err.stack || err.message });
     try { await browser.close(); } catch { /* already gone */ }
+    project.remove();
     return report();
   }
 
   let engine;
   try {
-    engine = await createEngine({ root: ROOT });
+    engine = await createEngine({ root: project.root });
   } catch (err) {
     fail('the engine starts (Python worker boots)', { error: err.stack || err.message });
     try { await browser.close(); } catch { /* already gone */ }
+    project.remove();
     return report();
   }
 
-  const saved = snapshot(SCRATCH);
   const temps = [];
 
   try {
@@ -394,7 +379,7 @@ async function earlyCutoff(engine, dataFile) {
       // CLI and the engine both use 'fonts' (the default) now;
       // 'networkidle' is the wait they both used to rely on.
       const slowPipeline = createPipeline({
-        root: ROOT, python: worker, variant, navWait: 'networkidle',
+        root: project.root, python: worker, variant, navWait: 'networkidle',
       });
 
       await renderTo(engine.pipelines[variant], page, fastPdf, variant);
@@ -449,7 +434,7 @@ async function earlyCutoff(engine, dataFile) {
     await inMemoryCropMatchesFile(engine.pipelines.letter, page, resumeWorker, temps);
 
     fs.copyFileSync(path.join(ROOT, 'data', 'resume_default.yml'), dataFile);
-    await earlyCutoff(engine, dataFile);
+    await earlyCutoff(engine, dataFile, project.root);
 
     // An unchanged page is not re-encoded: a second preview of the same
     // document reuses the first one's image, byte for byte.
@@ -465,10 +450,11 @@ async function earlyCutoff(engine, dataFile) {
     for (const t of temps) {
       try { fs.rmSync(t, { force: true }); } catch { /* best effort */ }
     }
-    restore(saved);
     try { await browser.close(); } catch { /* already gone */ }
     await engine.dispose();
+    project.remove();
   }
+  assertEq(realDistFingerprint(), before, "isolation: nothing was written to this checkout's dist/");
 
   report();
 })();
