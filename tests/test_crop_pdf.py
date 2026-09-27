@@ -6,6 +6,10 @@ Tests for crop_pdf.py — round-trip a synthetic PDF and verify:
     Subject, Keywords), without overriding /Creator or /Producer
   • apply_language writes /Lang onto the document catalog root, using
     the manifest's lang field or defaulting to en-US
+  • crop_pages keeps the catalog: the structure tree a tagged print
+    carries (/StructTreeRoot, /MarkInfo, each page's /StructParents)
+    and /ViewerPreferences
+  • apply_xmp writes an XMP packet that says what /Info says, no more
 
 These tests originally motivated audit-H7: production code accessed
 pypdf's private `_root_object` to set /Lang, which a pypdf version
@@ -111,6 +115,75 @@ class TestCropPages(unittest.TestCase):
         mb = writer.pages[0].mediabox
         self.assertAlmostEqual(float(mb.width), 612.0, places=3)
         self.assertAlmostEqual(float(mb.height), 792.0, places=3)
+
+
+def make_tagged_pdf() -> io.BytesIO:
+    """A two-page, oversized PDF with the catalog a tagged Chromium
+    print has: a structure tree whose elements point at the pages,
+    /MarkInfo, /ViewerPreferences, and /StructParents on each page."""
+    from pypdf.generic import (ArrayObject, BooleanObject, DictionaryObject,
+                               NameObject, NumberObject, TextStringObject)
+    w = PdfWriter()
+    pages = [w.add_blank_page(width=612.12, height=792.24) for _ in range(2)]
+    kids = ArrayObject()
+    for i, page in enumerate(pages):
+        page[NameObject("/StructParents")] = NumberObject(i)
+        kids.append(w._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/StructElem"),
+            NameObject("/S"): NameObject("/P"),
+            NameObject("/Pg"): page.indirect_reference,
+            NameObject("/K"): NumberObject(0),
+        })))
+    root = w.root_object
+    root[NameObject("/StructTreeRoot")] = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/StructTreeRoot"),
+        NameObject("/K"): kids,
+    }))
+    root[NameObject("/MarkInfo")] = DictionaryObject({
+        NameObject("/Marked"): BooleanObject(True),
+    })
+    root[NameObject("/ViewerPreferences")] = DictionaryObject({
+        NameObject("/DisplayDocTitle"): BooleanObject(True),
+    })
+    w.add_metadata({"/Title": "T", "/Producer": "Skia/PDF m141",
+                    "/CreationDate": TextStringObject("D:20260927174004+00'00'")})
+    buf = io.BytesIO()
+    w.write(buf)
+    buf.seek(0)
+    return buf
+
+
+class TestCropKeepsTheCatalog(unittest.TestCase):
+    """Copying pages into an empty writer dropped all of this; the crop
+    clones the document instead (crop_pdf.py, WHAT THE CROP KEEPS)."""
+
+    def setUp(self):
+        writer = PdfWriter()
+        crop_pdf.crop_pages(PdfReader(make_tagged_pdf()), writer)
+        self.out = round_trip(writer)
+        self.catalog = self.out.trailer["/Root"]
+
+    def test_structure_tree_and_mark_info_survive(self):
+        self.assertIn("/StructTreeRoot", self.catalog)
+        self.assertTrue(self.catalog["/MarkInfo"]["/Marked"])
+
+    def test_structure_elements_point_at_the_output_pages(self):
+        pages = [p.indirect_reference.idnum for p in self.out.pages]
+        kids = self.catalog["/StructTreeRoot"]["/K"]
+        self.assertEqual(len(kids), 2)
+        for i, kid in enumerate(kids):
+            self.assertEqual(kid.get_object().raw_get("/Pg").idnum, pages[i],
+                             f"element {i} points at page {i + 1}")
+
+    def test_pages_keep_struct_parents_and_are_cropped(self):
+        self.assertEqual(len(self.out.pages), 2)
+        for i, page in enumerate(self.out.pages):
+            self.assertEqual(page["/StructParents"], i)
+            self.assertAlmostEqual(float(page.mediabox.width), 612.0, places=3)
+            self.assertAlmostEqual(float(page.mediabox.height), 792.0, places=3)
+
+    def test_display_doc_title_survives(self):
+        self.assertTrue(self.catalog["/ViewerPreferences"]["/DisplayDocTitle"])
 
 
 class TestApplyMetadata(unittest.TestCase):
@@ -304,6 +377,89 @@ class TestApplyLanguage(unittest.TestCase):
         buf.seek(0)
         r = PdfReader(buf)
         self.assertEqual(str(r.trailer["/Root"]["/Lang"]), "en-US")
+
+
+class TestApplyXmp(unittest.TestCase):
+    def _xmp(self, info: dict, lang: str = "en-US"):
+        w = PdfWriter()
+        w.add_blank_page(width=612, height=792)
+        w.add_metadata(info)
+        crop_pdf.apply_xmp(w, lang)
+        return round_trip(w).xmp_metadata
+
+    def test_mirrors_info(self):
+        xmp = self._xmp({
+            "/Title": "Gaius Caesar — Resume", "/Author": "Gaius Caesar",
+            "/Subject": "S", "/Keywords": "a, b",
+            "/Producer": "Skia/PDF m141", "/Creator": "Chromium",
+            "/CreationDate": "D:20260927174004+00'00'",
+            "/ModDate": "D:20260927104004-07'00'",
+        }, lang="en-GB")
+        self.assertEqual(xmp.dc_title, {"x-default": "Gaius Caesar — Resume"})
+        self.assertEqual(xmp.dc_creator, ["Gaius Caesar"])
+        self.assertEqual(xmp.dc_description, {"x-default": "S"})
+        self.assertEqual(xmp.pdf_keywords, "a, b")
+        self.assertEqual(xmp.pdf_producer, "Skia/PDF m141")
+        self.assertEqual(xmp.xmp_creator_tool, "Chromium")
+        self.assertEqual(xmp.dc_language, ["en-GB"])
+        # pypdf reads XMP dates back as naive UTC; both are 17:40:04 UTC.
+        self.assertEqual(xmp.xmp_create_date.isoformat(), "2026-09-27T17:40:04")
+        self.assertEqual(xmp.xmp_modify_date.isoformat(), "2026-09-27T17:40:04")
+
+    def test_absent_or_empty_info_is_absent_from_xmp(self):
+        xmp = self._xmp({"/Title": "T", "/Author": ""})
+        self.assertEqual(xmp.dc_title, {"x-default": "T"})
+        self.assertEqual(xmp.dc_creator, [])
+        self.assertIsNone(xmp.pdf_keywords)
+        self.assertIsNone(xmp.xmp_create_date)
+
+    def test_claims_no_conformance(self):
+        xmp = self._xmp({"/Title": "T"})
+        self.assertIsNone(xmp.pdfaid_part)
+        packet = xmp.stream.get_data().decode("utf-8")
+        self.assertNotIn("pdfaid:part", packet)
+        self.assertNotIn("pdfuaid:", packet)
+
+    def test_the_cli_writes_it(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            src, out, meta = tmp / "in.pdf", tmp / "out.pdf", tmp / "meta.json"
+            src.write_bytes(make_tagged_pdf().getvalue())
+            meta.write_text(json.dumps({"title": "From manifest", "lang": "fr-FR"}),
+                            encoding="utf-8")
+            argv = sys.argv
+            sys.argv = ["crop_pdf.py", str(src), str(out), "--meta", str(meta), "--quiet"]
+            try:
+                self.assertEqual(crop_pdf.main(), 0)
+            finally:
+                sys.argv = argv
+            r = PdfReader(str(out))
+            self.assertEqual(r.xmp_metadata.dc_title, {"x-default": "From manifest"})
+            self.assertEqual(r.xmp_metadata.dc_language, ["fr-FR"])
+            self.assertEqual(str(r.trailer["/Root"]["/Lang"]), "fr-FR")
+            self.assertIn("/StructTreeRoot", r.trailer["/Root"])
+        finally:
+            for f in tmp.iterdir():
+                f.unlink()
+            tmp.rmdir()
+
+
+class TestPdfDate(unittest.TestCase):
+    def test_forms(self):
+        from datetime import datetime, timedelta, timezone
+        d = crop_pdf.pdf_date_to_datetime
+        self.assertEqual(d("D:20260927174004+00'00'"),
+                         datetime(2026, 9, 27, 17, 40, 4, tzinfo=timezone.utc))
+        self.assertEqual(d("D:20260927104004-07'00'"),
+                         datetime(2026, 9, 27, 10, 40, 4, tzinfo=timezone(timedelta(hours=-7))))
+        self.assertEqual(d("D:20260927174004Z"),
+                         datetime(2026, 9, 27, 17, 40, 4, tzinfo=timezone.utc))
+        self.assertEqual(d("D:2026"), datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    def test_unreadable_is_none(self):
+        d = crop_pdf.pdf_date_to_datetime
+        for bad in (None, "", "2026-09-27", "D:20261327000000Z", "D:x"):
+            self.assertIsNone(d(bad), repr(bad))
 
 
 # ── The preview's in-memory crop ─────────────────────────────────

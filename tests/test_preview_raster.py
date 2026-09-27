@@ -7,8 +7,9 @@ WHAT THIS GUARDS
 The preview's rasterize step takes three shortcuts, and each one is
 only acceptable if it never changes what is shown:
 
-  • PNGs are written by build/_png.py (filter 0, zlib level 1) instead
-    of Pillow. The decoded pixels must be exactly the source pixels.
+  • PNGs are written by build/_png.py (filter 0, deflate level 1, with
+    ISA-L when installed and zlib otherwise) instead of Pillow. The
+    decoded pixels must be exactly the source pixels, on either backend.
   • Pages whose PDF-level key did not change are not rendered again.
     A page whose pixels changed must never be skipped: every raster
     with skipping is checked here against a full render of the same
@@ -146,6 +147,19 @@ class TestPngWriter(unittest.TestCase):
             path.unlink()
             path.parent.rmdir()
         self.assertEqual(self._round_trip(img).tobytes(), img.tobytes())
+
+
+@unittest.skipUnless(HAVE_RASTER, "Pillow not installed")
+class TestPngWriterWithoutIsal(TestPngWriter):
+    """The same round trips through the standard zlib, as they run on a
+    machine without isal. TestPngWriter covers whichever backend this
+    interpreter has; this pins the fallback."""
+
+    def setUp(self):
+        import zlib
+        saved = _png._deflate
+        _png._deflate = zlib
+        self.addCleanup(setattr, _png, "_deflate", saved)
 
 
 # ── Page keys ────────────────────────────────────────────────────

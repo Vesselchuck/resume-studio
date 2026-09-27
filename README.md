@@ -529,8 +529,9 @@ check.
    on which page, including bridging (a job's bullets split across
    pages, or a sidebar list split across pages).
 5. Renders the final paginated HTML against the solved placement.
-6. Prints to PDF via Playwright/Chromium, crops to exact US Letter
-   (8.5×11 in), stamps PDF metadata and language for accessibility.
+6. Prints to PDF via Playwright/Chromium, tagged (a structure tree
+   screen readers follow), crops to exact US Letter (8.5×11 in), and
+   stamps PDF metadata, XMP and language for accessibility.
 7. Optionally pixel-diffs the result against a committed snapshot to
    catch accidental visual changes (`RESUME_SNAPSHOT=on`).
 
@@ -548,8 +549,8 @@ your profile: `dist/Gaius_Caesar_Resume.pdf`.
 5.  Build final HTML against the placement
 6.  Reload the final HTML
 7.  Check layout invariants (page count, divider, rhythm, overflow)
-8.  Print the PDF
-9.  Crop it to US Letter, stamp metadata + /Lang
+8.  Print the PDF (tagged)
+9.  Crop it to US Letter, stamp metadata + XMP + /Lang
 10. Snapshot test                      — Studio: "Compare against snapshot"
 ```
 
@@ -770,7 +771,7 @@ pure-logic tests; six launch Chromium.
 | `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
 | `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
 | `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
-| `test_crop_pdf.py`            | PDF cropping, metadata, and `/Lang`; the preview's in-memory crop gives the same pixels |
+| `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; the preview's in-memory crop gives the same pixels |
 | `test_preview_raster.py`      | The preview's PNG writer and per-page keys  |
 | `test_letter_data.py`         | The cover letter's data layer               |
 | `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
@@ -1101,7 +1102,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_markdown_filter.py          Bullet markdown filter.
     ├── test_derive_pdf_metadata.py      PDF metadata derivation.
     ├── test_read_accent.py              Accent-color extractor.
-    ├── test_crop_pdf.py                 PDF cropping + /Lang stamping.
+    ├── test_crop_pdf.py                 PDF cropping + metadata, XMP, /Lang.
     ├── test_preview_raster.py           Preview PNG writer and page keys.
     ├── test_solve_layout.js             Layout solver.
     ├── test_check_layout.js             Layout invariants (Playwright).

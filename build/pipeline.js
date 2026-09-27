@@ -646,12 +646,23 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * is ever written. The engine's live preview does not come through
    * here at all: it prints with printPreviewPdf and leaves the crop to
    * the rasterizer.
+   *
+   * TAGGED. The deliverable is printed with `tagged: true`, which makes
+   * Chromium write a structure tree (/StructTreeRoot, /MarkInfo) built
+   * from the HTML: headings, lists, paragraphs, reading order. That is
+   * what a screen reader follows. crop_pdf.py clones the document so
+   * the tree survives the crop. It draws nothing: the pages rasterize
+   * to identical pixels with it and without it (checked on the template
+   * résumé at the preview and snapshot scales). It costs ~3 ms a print
+   * (40.6 → 43.9 ms median, n=40, Linux sandbox), which is why the
+   * preview, which prints on every keystroke and only shows pixels,
+   * leaves it off.
    */
   async function printPdfs(page, targets) {
     const tmp = path.join(
       os.tmpdir(), `resume-print-${process.pid}-${Date.now()}.tmp.pdf`);
 
-    await page.pdf({ path: tmp, ...PDF_OPTIONS });
+    await page.pdf({ path: tmp, ...PDF_OPTIONS, tagged: true });
     try {
       await python.cropPdf({
         input: tmp, output: targets.output, meta: paths.pdfMeta, quiet: targets.quiet,
@@ -673,8 +684,9 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * same crop in memory (crop_pdf.crop_pdfium_page_to_letter, which
    * shares crop_pages' geometry) as it rasterizes, so this skips a pypdf
    * parse and rewrite of the whole document on every keystroke. The
-   * metadata stamps do not change a pixel. Deliverables still go through
-   * printPdfs, and only there.
+   * metadata stamps do not change a pixel, and neither does the
+   * structure tree, so this prints untagged (see TAGGED on printPdfs).
+   * Deliverables still go through printPdfs, and only there.
    */
   async function printPreviewPdf(page, outPath) {
     await page.pdf({ path: outPath, ...PDF_OPTIONS });
