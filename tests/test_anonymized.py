@@ -24,13 +24,23 @@ and it skips: there is nothing of yours to leak.
 It deliberately does NOT look for generic words that also appear in
 your data ("Summary", "Hiring Team", "Sincerely"): only values that
 point at a person, and only ones the shipped templates do not also use.
+
+Images are read too, because docs/screenshots/ is the likeliest place
+a picture of your real résumé would land. Their embedded metadata is
+always searched. What they show is read with Tesseract OCR when it is
+installed; without it that one test skips and says so. It is not a
+Python package and not in requirements.txt, because only a machine
+with your real files ever runs this.
 """
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -73,6 +83,19 @@ ALLOWED = {"LICENSE"}
 
 # Content that cannot be searched as text.
 BINARY = (".png", ".ico", ".woff2", ".woff", ".ttf", ".jpg", ".jpeg", ".gif")
+# The part of BINARY that can show text: searched by the image tests.
+# Icons are left out; at icon size there is nothing legible to read.
+IMAGES = (".png", ".jpg", ".jpeg", ".gif")
+
+# Where the Windows installer (UB Mannheim's build, the one tessdoc
+# points to) puts Tesseract. It does not add itself to PATH by default.
+WINDOWS_TESSERACT = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+
+# Images are enlarged before OCR. docs/screenshots/documents*.png shows
+# whole pages at about 85 dpi, where 9pt type is too small for Tesseract:
+# on a render of a real résumé at that size it missed 3 of the 25 details
+# printed on the page, and at 2× it found all 25.
+OCR_UPSCALE = 2
 
 
 def _load(path):
@@ -184,12 +207,12 @@ def _git_committable():
     return [p for p in out.decode("utf-8").split("\0") if p]
 
 
-def _committable_files():
+def _all_committable():
     listed = _git_committable()
     if listed is not None:
         for rel in listed:
             path = ROOT / rel
-            if path.is_file() and path.suffix.lower() not in BINARY:
+            if path.is_file():
                 yield rel, path
         return
     # Not a git checkout yet: approximate .gitignore by hand.
@@ -202,9 +225,77 @@ def _committable_files():
             rel = path.relative_to(ROOT).as_posix()
             if any(p.search(rel) for p in PRIVATE_PATTERNS):
                 continue
-            if path.suffix.lower() in BINARY:
-                continue
             yield rel, path
+
+
+def _committable_files():
+    """Committable files that can be searched as text."""
+    for rel, path in _all_committable():
+        if path.suffix.lower() not in BINARY:
+            yield rel, path
+
+
+def _committable_images():
+    for rel, path in _all_committable():
+        if path.suffix.lower() in IMAGES and rel not in ALLOWED:
+            yield rel, path
+
+
+def _matches(text, needles):
+    """The needles that occur in `text`, ignoring case.
+
+    PDF text extraction drops the space between name parts
+    ("GaiusCaesar"), and OCR drops or adds spaces around letter-spaced
+    type, so each needle is also compared with all whitespace removed.
+    """
+    low, squashed = text.lower(), re.sub(r"\s+", "", text.lower())
+    return sorted(n for n in needles
+                  if n.lower() in low or re.sub(r"\s+", "", n.lower()) in squashed)
+
+
+def _image_metadata(path):
+    """The text an image carries besides its pixels (PNG text chunks,
+    EXIF, comments), which a screenshot tool can fill with a window
+    title, a file path or a user name."""
+    from PIL import Image
+    with Image.open(path) as im:
+        parts = [str(v) for v in im.info.values() if isinstance(v, (str, bytes))]
+        parts += [str(v) for v in getattr(im, "text", {}).values()]
+        parts += [str(v) for v in im.getexif().values()]
+    return "\n".join(p.decode("utf-8", "replace") if isinstance(p, bytes) else p
+                     for p in parts)
+
+
+def _find_tesseract():
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    if os.name == "nt" and WINDOWS_TESSERACT.is_file():
+        return str(WINDOWS_TESSERACT)
+    return None
+
+
+def _ocr(tesseract, path, workdir):
+    """What Tesseract reads in one image, enlarged by OCR_UPSCALE.
+
+    Tesseract is told to use one thread. It runs one process per image
+    instead, and its own threading made it slower, not faster: 15.4 s
+    for one screenshot against 2.6 s single-threaded, same text (Linux,
+    2 cores).
+    """
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im = im.resize((im.width * OCR_UPSCALE, im.height * OCR_UPSCALE),
+                       Image.LANCZOS)
+        scaled = Path(workdir) / f"{path.stem}.{os.getpid()}.{id(im)}.png"
+        im.save(scaled, compress_level=1)
+    r = subprocess.run([tesseract, str(scaled), "-"], capture_output=True,
+                       env={**os.environ, "OMP_THREAD_LIMIT": "1"})
+    if r.returncode != 0:
+        raise RuntimeError(f"tesseract failed on {path.name} (exit {r.returncode}): "
+                           + r.stderr.decode("utf-8", "replace").strip()[-300:])
+    return r.stdout.decode("utf-8", "replace")
 
 
 def _text_of(path):
@@ -240,18 +331,61 @@ class TestNothingCommittableCarriesYou(unittest.TestCase):
             text = _text_of(path)
             if text is None:
                 continue
-            # PDF text extraction drops the space between name parts
-            # ("GaiusCaesar"), so compare with whitespace removed too.
-            low, squashed = text.lower(), re.sub(r"\s+", "", text.lower())
-            for needle in self.needles:
-                n = needle.lower()
-                if n in low or re.sub(r"\s+", "", n) in squashed:
-                    found.append(f"{rel}: {needle!r}")
+            found += [f"{rel}: {n!r}" for n in _matches(text, self.needles)]
 
         self.assertEqual(
             found, [],
             "Files that would be committed contain details from your real "
             "data files. Replace them with placeholders:\n  "
+            + "\n  ".join(sorted(found)))
+
+    def test_no_committable_image_carries_your_details_in_metadata(self):
+        if not self.needles:
+            self.skipTest("no real data files in data/ — nothing of yours to leak")
+        found = []
+        for rel, path in _committable_images():
+            found += [f"{rel}: {n!r}"
+                      for n in _matches(_image_metadata(path), self.needles)]
+        self.assertEqual(
+            found, [],
+            "Images that would be committed carry details from your real "
+            "data files in their metadata. Strip it or retake them:\n  "
+            + "\n  ".join(sorted(found)))
+
+    def test_no_committable_image_shows_your_details(self):
+        """Screenshots show no details from your real data files (OCR)."""
+        if not self.needles:
+            self.skipTest("no real data files in data/ — nothing of yours to leak")
+        tesseract = _find_tesseract()
+        if not tesseract:
+            self.skipTest("Tesseract OCR not found on PATH or in its default "
+                          "Windows folder — screenshots are not read")
+        images = list(_committable_images())
+
+        with tempfile.TemporaryDirectory() as work:
+            # Guard against passing by reading nothing: a broken install
+            # or a missing language file returns no text, and every image
+            # would come back clean.
+            from PIL import Image, ImageDraw, ImageFont
+            canary = Path(work) / "canary.png"
+            im = Image.new("RGB", (900, 120), "white")
+            ImageDraw.Draw(im).text((20, 30), "Gaius Julius Caesar",
+                                    fill="black", font=ImageFont.load_default(48))
+            im.save(canary)
+            self.assertIn("gaius julius caesar", _ocr(tesseract, canary, work).lower(),
+                          "Tesseract ran but could not read a line of plain text")
+
+            with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+                texts = list(pool.map(lambda item: _ocr(tesseract, item[1], work),
+                                      images))
+
+        found = []
+        for (rel, _), text in zip(images, texts):
+            found += [f"{rel}: {n!r}" for n in _matches(text, self.needles)]
+        self.assertEqual(
+            found, [],
+            "Images that would be committed show details from your real "
+            "data files. Retake them from the shipped template data:\n  "
             + "\n  ".join(sorted(found)))
 
     def test_the_needles_are_real(self):
