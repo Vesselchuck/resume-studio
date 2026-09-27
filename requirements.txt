@@ -21,6 +21,10 @@ pypdf==6.16.1
 pypdfium2==5.7.1
 Pillow==12.3.0
 
+# Studio preview only: faster deflate for the preview PNGs (build/_png.py).
+# Optional — without it the preview falls back to the standard zlib.
+isal==1.8.0
+
 # Test only. tests/test_yaml_typing.py uses it to check that the
 # editor schemas in schemas/ accept exactly the files build.py's
 # validate_data() accepts — an advisory schema that disagrees with

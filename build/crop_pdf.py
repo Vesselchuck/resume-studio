@@ -42,9 +42,22 @@ present on the input PDF is preserved as-is.
 
 The manifest's `lang` field (default 'en-US' if absent) is stamped
 onto the PDF catalog's /Lang entry — this is what assistive tech
-reads for pronunciation. Note: /Lang alone is a Level 1 a11y win;
-full screen-reader support requires PDF tagging (a structure tree),
-which Chromium's page.pdf() does not produce. See L4 in the audit.
+reads for pronunciation.
+
+The same values, with Chromium's /Producer, /Creator and dates, are
+also written as an XMP metadata packet (the catalog's /Metadata), the
+place PDF/UA and most document-management tools read them from.
+
+WHAT THE CROP KEEPS
+───────────────────
+The crop works on a clone of the whole document, not on its pages
+copied into an empty file. Copying pages keeps the pages and loses the
+catalog: the structure tree that `page.pdf({ tagged: true })` writes
+(/StructTreeRoot, /MarkInfo, and each page's /StructParents, which is
+what makes the PDF readable by a screen reader), and Chromium's
+/ViewerPreferences /DisplayDocTitle, which tells a viewer to show the
+title rather than the file name (WCAG technique PDF18). Cloning keeps
+all of it, and the crop only moves each page's boxes.
 
 Usage:
     python3 build/crop_pdf.py <input.pdf> <output.pdf>
@@ -63,9 +76,12 @@ sys.dont_write_bytecode = True
 
 import argparse
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import NameObject, TextStringObject
+from pypdf.xmp import XmpInformation
 
 # Local console helper.
 sys.path.insert(0, str(Path(__file__).parent))
@@ -108,7 +124,12 @@ def _warn_smaller_than_letter(width: float, height: float) -> None:
 
 
 def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
-    """Copy reader's pages to writer with MediaBox/CropBox cropped to Letter.
+    """Clone reader's document into writer, with every page's
+    MediaBox/CropBox cropped to Letter.
+
+    The whole document is cloned, catalog included, so the structure
+    tree and the viewer preferences survive (see WHAT THE CROP KEEPS in
+    the module docstring). `writer` is expected to be empty.
 
     Chromium anchors content at the lower-left of the page and parks
     the (small) width and height excess as empty space at the
@@ -116,7 +137,8 @@ def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
     inward — the lower-left stays where it is. The geometry itself is
     letter_upper_right()'s.
     """
-    for page in reader.pages:
+    writer.clone_document_from_reader(reader)
+    for page in writer.pages:
         box = page.mediabox
         corner = letter_upper_right(
             float(box.left), float(box.bottom),
@@ -124,15 +146,12 @@ def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
         )
         if corner is None:
             _warn_smaller_than_letter(float(box.width), float(box.height))
-            writer.add_page(page)
             continue
 
         # Lower-left stays put; pull the upper-right inward by the excess.
         page.mediabox.upper_right = corner
         # Also align CropBox so readers that honor it agree with MediaBox.
         page.cropbox.upper_right = corner
-
-        writer.add_page(page)
 
 
 class NoOwnMediaBox(ValueError):
@@ -247,11 +266,24 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
     since untagged language is treated as "unspecified" by AT and
     can produce wrong-language pronunciation.
 
-    Note: this is a Level 1 accessibility improvement only. Without a
-    /StructTreeRoot (i.e. proper PDF tagging), reading order and
-    semantic structure are still inaccessible to AT. /Lang alone helps
-    pronunciation but does not make the PDF screen-reader-friendly.
+    /Lang only sets the language. Reading order and structure come from
+    the structure tree Chromium writes when printing with
+    `tagged: true`, which crop_pages() carries through.
+
+    Returns the language it stamped, for apply_xmp().
     """
+    lang = read_lang(meta_path)
+    # `writer.root_object` is pypdf's public accessor for the document
+    # catalog (verified in pypdf 6.16.1, the pinned version). The
+    # leading-underscore `_root_object` works too but is private and
+    # subject to rename across versions; the public name is the
+    # forward-compatible choice.
+    writer.root_object[NameObject('/Lang')] = TextStringObject(lang)
+    return lang
+
+
+def read_lang(meta_path: Path | None) -> str:
+    """The manifest's `lang`, stripped, or 'en-US' when there is none."""
     lang = 'en-US'
     if meta_path is not None:
         try:
@@ -262,12 +294,103 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
         except (OSError, json.JSONDecodeError):
             # Manifest unreadable — keep the default rather than fail.
             pass
-    # `writer.root_object` is pypdf's public accessor for the document
-    # catalog (verified in pypdf 6.16.1, the pinned version). The
-    # leading-underscore `_root_object` works too but is private and
-    # subject to rename across versions; the public name is the
-    # forward-compatible choice.
-    writer.root_object[NameObject('/Lang')] = TextStringObject(lang)
+    return lang
+
+
+_PDF_DATE = re.compile(
+    r"^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?"
+    r"(?:(Z)|([+-])(\d{2})'?(\d{2})?'?)?$"
+)
+
+
+def pdf_date_to_datetime(value) -> datetime | None:
+    """A PDF date string (`D:20260927174004+00'00'`) as a datetime.
+
+    None when it is missing or not in that form: an XMP date that
+    disagrees with /Info is worse than none, so an unreadable one is
+    left out rather than guessed. A date without a zone is read as UTC.
+    """
+    if value is None:
+        return None
+    m = _PDF_DATE.match(str(value).strip())
+    if not m:
+        return None
+    year, month, day, hour, minute, second, z, sign, tzh, tzm = m.groups()
+    offset = timedelta(0)
+    if sign:
+        offset = timedelta(hours=int(tzh), minutes=int(tzm or 0))
+        if sign == '-':
+            offset = -offset
+    try:
+        return datetime(
+            int(year), int(month or 1), int(day or 1),
+            int(hour or 0), int(minute or 0), int(second or 0),
+            tzinfo=timezone(offset),
+        )
+    except ValueError:
+        return None
+
+
+def apply_xmp(writer: PdfWriter, lang: str) -> None:
+    """Write an XMP metadata packet that mirrors the final /Info.
+
+    Call it after apply_metadata(), so it copies the values actually
+    stamped — the manifest's over Chromium's. Each /Info key goes to its
+    standard XMP property, and a key that is absent or empty in /Info is
+    absent here too, so the two never disagree:
+
+      /Title    → dc:title         /Author   → dc:creator
+      /Subject  → dc:description   /Keywords → pdf:Keywords
+      /Producer → pdf:Producer     /Creator  → xmp:CreatorTool
+      /CreationDate → xmp:CreateDate   /ModDate → xmp:ModifyDate
+
+    plus dc:language from the catalog's /Lang. It claims no conformance
+    level (no pdfaid or pdfuaid): the file is not validated against
+    PDF/A or PDF/UA, and saying so would be a false statement a
+    validator would catch.
+    """
+    info = writer.metadata or {}
+
+    def text(key):
+        value = info.get(key)
+        return str(value) if value else None
+
+    xmp = XmpInformation.create()
+    if text('/Title'):
+        xmp.dc_title = {'x-default': text('/Title')}
+    if text('/Author'):
+        xmp.dc_creator = [text('/Author')]
+    if text('/Subject'):
+        xmp.dc_description = {'x-default': text('/Subject')}
+    if text('/Keywords'):
+        xmp.pdf_keywords = text('/Keywords')
+    if text('/Producer'):
+        xmp.pdf_producer = text('/Producer')
+    if text('/Creator'):
+        xmp.xmp_creator_tool = text('/Creator')
+    created = pdf_date_to_datetime(info.get('/CreationDate'))
+    if created is not None:
+        xmp.xmp_create_date = created
+    modified = pdf_date_to_datetime(info.get('/ModDate'))
+    if modified is not None:
+        xmp.xmp_modify_date = modified
+    xmp.dc_language = [lang]
+    writer.xmp_metadata = xmp
+
+
+def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
+    """The whole post-process, in its one order: crop, /Info, /Lang, XMP.
+
+    Both callers go through this — main() below and the Studio worker's
+    crop op (build/worker.py) — so a step added here reaches both. They
+    used to spell the sequence out separately.
+    """
+    writer = PdfWriter()
+    crop_pages(reader, writer)
+    apply_metadata(writer, reader, meta_path)
+    lang = apply_language(writer, meta_path)
+    apply_xmp(writer, lang)
+    return writer
 
 
 def main() -> int:
@@ -294,12 +417,7 @@ def main() -> int:
         c.err(f"--meta file not found: {args.meta}")
         return 2
 
-    reader = PdfReader(args.input)
-    writer = PdfWriter()
-
-    crop_pages(reader, writer)
-    apply_metadata(writer, reader, args.meta)
-    apply_language(writer, args.meta)
+    writer = crop_and_stamp(PdfReader(args.input), args.meta)
 
     try:
         with open(args.output, 'wb') as f:

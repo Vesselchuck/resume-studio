@@ -21,7 +21,7 @@ call:
 
     build        -> build.build(mode=...)         (build.py's own main() calls this)
     build_letter -> build_letter.build_letter()
-    crop    -> crop_pdf.crop_pages / apply_metadata / apply_language
+    crop    -> crop_pdf.crop_and_stamp
     raster  -> snapshot_pdf.render_pdf_pages      (the snapshot test's own rasterizer,
                with crop_pdf's crop applied in memory for a live preview)
 
@@ -273,12 +273,11 @@ def op_build_letter(req):
 def op_crop(req):
     """Crop a printed PDF to true US Letter and stamp metadata.
 
-    Mirrors crop_pdf.main()'s body exactly — crop_pages, then
-    apply_metadata, then apply_language, then write — but takes its
-    arguments from the request instead of argparse, and returns the
-    final page box instead of printing it.
+    Runs crop_pdf.crop_and_stamp(), the same call crop_pdf.main()
+    makes, but takes its arguments from the request instead of argparse,
+    and returns the final page box instead of printing it.
     """
-    from pypdf import PdfReader, PdfWriter
+    from pypdf import PdfReader
 
     src = Path(req["input"])
     dst = Path(req["output"])
@@ -287,12 +286,7 @@ def op_crop(req):
     if meta is not None and not meta.exists():
         raise FileNotFoundError(f"--meta file not found: {meta}")
 
-    reader = PdfReader(str(src))
-    writer = PdfWriter()
-
-    crop_mod.crop_pages(reader, writer)
-    crop_mod.apply_metadata(writer, reader, meta)
-    crop_mod.apply_language(writer, meta)
+    writer = crop_mod.crop_and_stamp(PdfReader(str(src)), meta)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "wb") as f:

@@ -30,6 +30,10 @@
  *     to the data, the stylesheet or the fonts must never be answered
  *     from it.
  *
+ * It also checks that the printed deliverables carry their structure
+ * tree, viewer preferences and XMP packet after the crop, since this is
+ * the suite that prints them through the real pipeline.
+ *
  * HOW THE CLAIM IS DECOMPOSED
  * ---------------------------
  * "The engine renders what the CLI prints" is two independent claims:
@@ -387,6 +391,15 @@ async function earlyCutoff(engine, dataFile, root) {
 
       assertTrue(fs.existsSync(fastPdf), `${label}: fonts-ready render produced a PDF`);
       assertTrue(fs.existsSync(slowPdf), `${label}: networkidle render produced a PDF`);
+
+      // The deliverable is printed tagged and the crop keeps the tree
+      // (pipeline.js printPdfs, TAGGED; crop_pdf.py, WHAT THE CROP
+      // KEEPS). A text search is enough to see the catalog keys: pypdf
+      // writes the catalog as a plain object, not into an object stream.
+      const catalog = fs.readFileSync(fastPdf, 'latin1');
+      for (const key of ['/StructTreeRoot', '/MarkInfo', '/DisplayDocTitle', '/Metadata']) {
+        assertTrue(catalog.includes(key), `${label}: the built PDF carries ${key}`);
+      }
 
       const cmp = await worker.compare({ a: fastPdf, b: slowPdf, scale: RASTER_SCALE });
 

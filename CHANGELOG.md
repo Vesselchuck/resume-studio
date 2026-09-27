@@ -57,6 +57,29 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   chat or session link, or a "Generated with …" line. Pull requests
   opened by Dependabot are exempt from the title and description check,
   since those quote other projects' release notes.
+- **Added.** The PDFs are tagged. Chromium now prints them with a
+  structure tree built from the page (headings, lists, paragraphs,
+  reading order), which is what a screen reader follows, and they carry
+  an XMP metadata packet with the same title, author, subject, keywords,
+  language and dates as the document info. Nothing on the page changes:
+  both pages of the template résumé rasterize to identical pixels, so
+  the snapshot fixtures stay as they are. The template résumé's PDF
+  grows from about 186 KB to 213 KB. The live preview prints untagged,
+  since it only shows pixels and tagging costs about 3 ms a print.
+- **Fixed.** The crop to US Letter dropped part of what Chromium wrote.
+  It copied the pages into a new file and left the rest behind,
+  including the setting that makes a PDF viewer show the document's
+  title instead of its file name. The crop now works on a copy of the
+  whole document, so that setting and the new structure tree survive.
+- **Changed.** The live preview encodes its page images with ISA-L
+  (the `isal` package, now in `requirements.txt`) instead of Python's
+  zlib: about 18 → 3 ms a page in a Linux sandbox, same pixels, a
+  somewhat larger image that never leaves your machine. Run
+  `py -m pip install -r requirements.txt` to get it. Without it the
+  preview works as before.
+- **Changed.** The layout measurement reads the page in one round trip
+  to Chromium instead of three: about 6.1 → 3.7 ms a render in a Linux
+  sandbox, with identical measurements.
 - **Fixed.** The tests that build no longer share your `dist/`.
   `test_cold_start.js`, `test_speculative_load.js`,
   `test_engine_equivalence.js` and `test_preview_stream.js` each ran

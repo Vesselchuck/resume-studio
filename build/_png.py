@@ -10,15 +10,33 @@ loopback socket to be decoded once and thrown away. Encoding was most
 of the rasterize step of a live preview.
 
 This writer emits every row with filter 0 ("None") and compresses the
-result with zlib at level 1. The file is a standard 8-bit, non-
-interlaced PNG any browser decodes, and it decodes to exactly the pixels it
-was given (PNG is lossless whatever the filter). Measured on a resume
-page at the preview's scale it took about half as long as Pillow at
+result at level 1. The file is a standard 8-bit, non-interlaced PNG any
+browser decodes, and it decodes to exactly the pixels it was given (PNG
+is lossless whatever the filter). Measured on a resume page at the
+preview's scale it took about half as long as Pillow at
 compress_level=1, and the file came out no larger — a page of mostly
 white paper compresses well without per-row filtering.
 
-Standard library only: zlib, struct. No numpy; the rows are prefixed
-with their filter byte by slicing Pillow's raw buffer.
+WHY ISA-L
+─────────
+With the filtering gone, what remained was deflate itself. Intel's
+ISA-L (the `isal` package) writes the same zlib stream format several
+times faster than CPython's zlib. Measured on page 1 of the template
+résumé at scale 2 (1224 × 1584 RGB), in a Linux sandbox whose CPython
+links zlib 1.3: 18.4 → 3.3 ms median (n=40, interleaved), for a stream
+22% larger (392 → 477 KB). The PNG crosses a loopback socket once, so
+the bytes are the cheap side of that trade. The pixels are identical:
+it is the same lossless format, and any zlib inflates it.
+
+Expect less on Windows from Python 3.14, whose CPython links zlib-ng
+instead of zlib (CPython PR #131438) and is already faster than zlib.
+
+isal is optional. Without it this falls back to the standard library's
+zlib at the same level and produces a valid, somewhat smaller, slower
+PNG; nothing else changes.
+
+No numpy; the rows are prefixed with their filter byte by slicing
+Pillow's raw buffer.
 
 Not used for anything written to disk. The deliverables are PDFs, and
 the snapshot test's diff images still go through Pillow.
@@ -26,6 +44,12 @@ the snapshot test's diff images still go through Pillow.
 
 import struct
 import zlib
+
+try:
+    # Same compress() signature and output format as zlib; see WHY ISA-L.
+    from isal import isal_zlib as _deflate
+except ImportError:
+    _deflate = zlib
 
 _SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -36,8 +60,10 @@ _COLOR_TYPES = {
     "RGBA": (6, 4),
 }
 
-#: zlib level. 1 is the fastest that still compresses a page of mostly
-#: white paper to a small fraction of its raw size.
+#: Deflate level. 1 is the fastest that still compresses a page of mostly
+#: white paper to a small fraction of its raw size. Valid for both
+#: backends: ISA-L takes 0-3, zlib 0-9. ISA-L's 0 measured about the
+#: same as its 1 (3.2 vs 3.3 ms) for a stream 18% larger.
 COMPRESS_LEVEL = 1
 
 
@@ -73,6 +99,6 @@ def encode(img) -> bytes:
     return b"".join((
         _SIGNATURE,
         _chunk(b"IHDR", ihdr),
-        _chunk(b"IDAT", zlib.compress(rows, COMPRESS_LEVEL)),
+        _chunk(b"IDAT", _deflate.compress(rows, COMPRESS_LEVEL)),
         _chunk(b"IEND", b""),
     ))
