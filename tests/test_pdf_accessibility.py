@@ -20,8 +20,8 @@ fixed together (CHANGELOG, "PDF/UA"):
     (mark_untagged_as_artifacts);
   • the XMP stream had no /Type /Metadata /Subtype /XML (apply_xmp).
 
-After the fix veraPDF passes every PDF/UA-1 rule on both documents
-but one: the documents do not claim PDF/UA in their XMP, on purpose.
+After the fix veraPDF passes every PDF/UA-1 rule on both documents, and
+the documents declare PDF/UA-1 in their XMP (pdfuaid:part 1).
 veraPDF is not a project dependency, so this suite checks the same
 things directly, on both documents built from the templates in a
 throwaway copy of the project (tests/_project.py).
@@ -233,6 +233,15 @@ class TestPdfAccessibility(unittest.TestCase):
                 stream = _reader(doc).trailer["/Root"]["/Metadata"].get_object()
                 self.assertEqual(stream.get("/Type"), "/Metadata")
                 self.assertEqual(stream.get("/Subtype"), "/XML")
+
+    def test_declares_pdfua_1(self):
+        # Declared because the rest of this suite holds; see crop_pdf.apply_xmp.
+        for doc, _ in DOCS:
+            with self.subTest(document=doc):
+                xmp = _reader(doc).xmp_metadata
+                nodes = list(xmp.get_nodes_in_namespace("", "http://www.aiim.org/pdfua/ns/id/"))
+                self.assertEqual([(n.localName, n.firstChild.data) for n in nodes], [("part", "1")])
+                self.assertIsNone(xmp.pdfaid_part, "PDF/A is not claimed")
 
 
 if __name__ == "__main__":

@@ -418,12 +418,36 @@ class TestApplyXmp(unittest.TestCase):
         self.assertIsNone(xmp.pdf_keywords)
         self.assertIsNone(xmp.xmp_create_date)
 
-    def test_claims_no_conformance(self):
+    def test_claims_no_conformance_by_default(self):
         xmp = self._xmp({"/Title": "T"})
         self.assertIsNone(xmp.pdfaid_part)
         packet = xmp.stream.get_data().decode("utf-8")
         self.assertNotIn("pdfaid:part", packet)
         self.assertNotIn("pdfuaid:", packet)
+
+    def test_declares_pdfua_when_asked_and_never_pdfa(self):
+        w = PdfWriter()
+        w.add_blank_page(width=612, height=792)
+        w.add_metadata({"/Title": "T"})
+        crop_pdf.apply_xmp(w, "en-US", pdfua=True)
+        xmp = round_trip(w).xmp_metadata
+        self.assertEqual(xmp.dc_title, {"x-default": "T"}, "the rest of the packet still reads")
+        nodes = list(xmp.get_nodes_in_namespace("", crop_pdf.PDFUA_NS))
+        self.assertEqual([n.localName for n in nodes], ["part"])
+        self.assertEqual(nodes[0].firstChild.data, "1")
+        self.assertIsNone(xmp.pdfaid_part)
+        self.assertNotIn("pdfaid:", xmp.stream.get_data().decode("utf-8"))
+
+    def test_crop_and_stamp_declares_pdfua_only_on_a_tagged_pdf(self):
+        tagged = round_trip(crop_pdf.crop_and_stamp(PdfReader(make_tagged_pdf()), None))
+        self.assertIn(b"pdfuaid:part>1<", tagged.xmp_metadata.stream.get_data())
+        plain = io.BytesIO()
+        w = PdfWriter()
+        w.add_blank_page(width=612.12, height=792.24)
+        w.write(plain)
+        plain.seek(0)
+        untagged = round_trip(crop_pdf.crop_and_stamp(PdfReader(plain), None))
+        self.assertNotIn(b"pdfuaid", untagged.xmp_metadata.stream.get_data())
 
     def test_the_stream_is_labelled_metadata_xml(self):
         # ISO 32000 14.3.2; pypdf leaves both keys out, and veraPDF

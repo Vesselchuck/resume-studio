@@ -502,9 +502,11 @@ every word on the page.
 The PDFs are tagged: Chromium writes a structure tree (headings, lists,
 paragraphs, links, reading order) from the HTML, and the crop step adds
 what it leaves out. Checked with veraPDF against PDF/UA-1, the
-accessibility standard for PDF, both documents pass every rule but
-one: they do not declare themselves PDF/UA in their metadata, which is
-a claim the project does not make.
+accessibility standard for PDF, both documents pass every rule, and
+their metadata declares PDF/UA-1. veraPDF checks what a machine can;
+the standard also asks for human judgement (does the reading order
+make sense, do the headings), and the heading order was checked with
+NVDA and Acrobat.
 
 - **Every heading is tagged.** Section headings and the role line are
   written once, visible. A copy hidden from screen readers plus an
