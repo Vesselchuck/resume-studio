@@ -43,7 +43,135 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
-Nothing yet.
+*A link in the YAML now needs its scheme: `example.com/me` stops the
+build instead of putting a path on your computer into the PDF. Seven
+optional keys no longer crash the build, long words stay inside their
+column, and the Studio recovers from a crashed Chromium, keeps every
+open window in step, and no longer flashes the previous page on each
+save. Everything in the Studio works from the keyboard and meets the
+WCAG contrast minimum, and it no longer loads anything from Google.*
+
+### Upgrading from 0.9.1
+
+1. If a build stops with "href … has no scheme", write the whole
+   address in that `href`: `https://example.com/me`, `mailto:…` or
+   `tel:…`. Such a link used to build, and pointed at a file on your
+   computer instead of the page.
+2. Nothing to regenerate. Placement and pixels are unchanged on the
+   template data and on real data, so the snapshot fixtures stay as
+   they are.
+
+### Changes
+
+- **Changed — Breaking.** An `href` must be a link a reader can
+  follow. One with no scheme (`linkedin.com/in/you`) or a Windows path
+  (`C:\Users\…`) is refused, as are `javascript:`, `vbscript:`,
+  `file:` and `data:` links. This applies to the résumé's contact rows
+  and details rows and to the letter's contact rows. An empty `href`
+  still means no link.
+- **Security.** A scheme-less `href` was resolved against the page
+  Chromium printed, so the PDF's link, and the description a screen
+  reader announces for it, held the full path of the project folder
+  on your computer, which on many machines includes your Windows user
+  name. That is what the change above stops.
+- **Fixed.** Leaving out an optional key crashed the build with
+  `UndefinedError`: a contact row's `href`, `contact.address`, and in
+  the letter `meta`, `meta.description` and `recipient`. They now
+  print nothing, as documented. In the Studio the crash was also
+  mislabelled as a stale layout.
+- **Fixed.** A word longer than its column (a long URL, say) ran over
+  the column divider or off the page, where it was cut from the
+  printed text as well as from view, and the layout check still said
+  "clean". Such a word now breaks at the column edge. Nothing else
+  moves: placement and pixels are identical on the template and on
+  real data.
+- **Fixed.** A sidebar list could end a page on a `- group:`
+  sub-heading, with its items on the next page. It happened for 5 of
+  29 list lengths tried; the group heading now moves with its items.
+- **Changed.** Layout errors say what to do. Over `meta.maxPages`, the
+  message gives the number of pages the content needs. A header taller
+  than the page is named as such, instead of being blamed on the first
+  sidebar block, and an item taller than a page no longer suggests
+  raising `maxPages`, which could not help.
+- **Added.** A warning when text is drawn in a system font instead of
+  the vendored ones (emoji, or scripts Manrope and Newsreader do not
+  cover). Which font you get then depends on the machine, and some
+  come out as Type 3.
+- **Added.** The letter warns about keys nothing reads: a misspelled
+  `recipent:` used to vanish without a word. A body paragraph with
+  `: ` in it gets the same "wrap it in double quotes" advice as a
+  résumé bullet.
+- **Fixed.** A data file that is not UTF-8 (Notepad's "Unicode", or a
+  legacy code page) ended in a Python traceback. The build now names
+  the file and says to save it as UTF-8.
+- **Fixed.** A block `id` such as `col-main-1` collided with the
+  template's own column ids and scrambled the PDF's heading order.
+  The template's ids no longer use a form a block id can take.
+- **Fixed.** A control character in the name or description (written
+  as a YAML escape) made the PDF's XMP metadata unreadable. Such
+  characters are left out of the metadata.
+- **Fixed.** The Studio failed to recover when Chromium crashed or was
+  killed: every render failed until the app was restarted, and
+  **Re-render** did not help. The next render now starts a new one.
+- **Fixed.** Chromium could be closed while the window was showing, when
+  the window came back just as the five-minute hidden timer ran out.
+- **Fixed.** A failed render left every other Studio window showing
+  "Rendering" for good, and a save made while another window was
+  rendering was never shown there.
+- **Fixed.** Each live edit briefly showed the previous page before
+  the new one, and the page could go blank for a frame while the new
+  image decoded (19 of 40 edits in a Linux sandbox, now 0).
+- **Fixed.** Every failure was labelled "Invalid YAML", and the line
+  and column of a YAML error reached only the console. The error bar
+  now shows where the error is, and other failures say "Render failed".
+- **Fixed.** With the engine unreachable, **Re-render** left the Studio
+  on "Rendering"; after the engine came back, the window kept saying
+  "disconnected". Saves made while **Pause** was on were not shown when
+  it was turned off.
+- **Fixed.** The Data files dialog failed completely when `data/` held
+  a folder named `*.yml` or Emacs's `.#file.yml` lock link.
+- **Fixed.** The Studio's server now shuts down properly when its
+  console window is closed (`SIGHUP`, and `SIGBREAK` on Windows). It
+  used to leave its Python worker running.
+- **Changed.** The Studio works from the keyboard: the menu items,
+  document cards and "Show" links are buttons, dialogs take focus and
+  give it back, a render no longer moves focus away from the control
+  you were on, and status changes are announced to screen readers.
+  Secondary text is darker, so every text colour meets WCAG's 4.5:1
+  minimum in both themes. The Pause button keeps its label and shows
+  a pressed state instead of turning into "Resume". axe-core found
+  46 problems in a Linux sandbox; it now finds none.
+- **Changed.** The Studio's interface uses the vendored Manrope and
+  Newsreader instead of Google Fonts, so opening it sends nothing to
+  Google and works the same offline. A slow network used to hold up
+  its first paint.
+- **Changed.** Previews arrive sooner: the first changed page is sent
+  as soon as it is drawn, and a needless image copy is gone. In a
+  Linux sandbox, a save that changes page 1 reached the screen in
+  245 ms instead of 275 (median, n=30).
+- **Security.** The Studio's server refuses cross-site requests that a
+  browser marks as such (`Sec-Fetch-Site`) and sends a
+  Content-Security-Policy, `X-Content-Type-Options`,
+  `Cross-Origin-Resource-Policy` and `Referrer-Policy` with every
+  response, so another site cannot frame the Studio or have a browser
+  send it requests on its behalf.
+- **Fixed.** `tests/test_anonymized.py` missed personal details in
+  several forms: non-ASCII text in image metadata, phone numbers
+  written with other punctuation, Unicode variants of a name, and
+  names inside a PDF's XMP metadata, link addresses or bookmarks. A
+  real value that also appeared inside a template word ("King" in
+  "working") was never searched for. All are now checked, a data file
+  that does not parse fails the test instead of silently skipping it,
+  and `*.yml~` and `*.yml.orig` backups are read.
+- **Fixed.** The attribution check blocked ordinary lines such as
+  "Generated by resume.js from the template", and let a `claude.ai/chat`
+  link, `Co-authored-by :` with a space and similar forms through.
+- **Changed.** `tests/test_yaml_typing.py` checks the profile schema
+  against `_profile_default.yml` when there is no `_profile.yml`, so
+  that check also runs on GitHub.
+- **Added.** `tests/test_failure_recovery.js`: a killed Chromium, the
+  window shown during a pending release, unreadable entries in
+  `data/`, and a failed render's end event.
 
 ---
 

@@ -289,7 +289,14 @@ so it is right on every letter without being written on any of them.
 
 A `salutation:`, `closing:` or `signature:` left in an old file is
 rejected with the line to write instead — silently ignoring one would
-drop the greeting off the letter without a word.
+drop the greeting off the letter without a word. Any other key the
+letter does not read, a misspelled `recipent:` say, is printed as a
+warning, with a suggestion when it looks like a typo of a real key.
+
+Quote a list-form paragraph that contains a colon followed by a
+space — `- "Dear Team: thank you for your time."` — or YAML reads it
+as a key and a value, and the build refuses it and says so. The block
+form (`body: |`) needs no quotes.
 
 Output: `dist/Gaius_Caesar_Cover_Letter.pdf`.
 
@@ -411,6 +418,15 @@ letter dated differently to the file that made it.
 - **Language** — `meta.lang: en-US` (BCP-47), also normally in the
   profile. Drives the document's `<html lang>` and the PDF's `/Lang`
   catalog entry.
+- **Links** — an `href` in a contact row or a details row is written
+  in full: `https://example.com/me`, `mailto:you@example.com`,
+  `tel:+15550100`. One without a scheme (`example.com/me`) is refused:
+  Chromium would read it as a file next to the page, and the PDF would
+  link to a path on your computer. `javascript:`, `file:` and `data:`
+  links and Windows paths are refused too. Leave `href` out, or empty,
+  for text without a link.
+- **Long words** — a word wider than its column, such as a long URL,
+  breaks at the column edge rather than running over the divider.
 
 You do **not** need to manage page breaks manually. If you write 20
 bullets across your jobs, the solver figures out where to break.
@@ -843,6 +859,16 @@ They're loaded directly from disk via `@font-face url('../fonts/...')`
 with no `local()` source, so a system-installed font of the same name
 can't take over. Total weight on disk is well under 1 MB.
 
+Text the two families do not cover — emoji, or a script such as
+Chinese or Arabic — is drawn by Chromium in whatever system font has
+the letters, so it looks different on each machine, and some of those
+fonts end up in the PDF as Type 3. The build prints a warning naming
+them ("Text drawn in system fonts: …") instead of passing it by.
+
+The Studio's own interface uses the same files (the variable ones in
+`fonts/variable/`), served by its local server, so opening the Studio
+loads nothing from Google or anywhere else online.
+
 The OFL license texts (`Manrope-OFL.txt`, `Newsreader-OFL.txt`) sit
 alongside the woff2 binaries. Keep them. Removing them while keeping
 the woff2 files would put the project in violation of the SIL Open
@@ -856,7 +882,7 @@ slow visual-regression snapshot test for the rendered PDFs.
 ### Unit tests
 
 Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; twelve launch Chromium, three of them Python suites
+pure-logic tests; thirteen launch Chromium, three of them Python suites
 that build a throwaway copy of the project through the CLI.
 
 | Test                          | What it covers                              |
@@ -877,7 +903,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_output_name.py`         | How your name becomes the PDF file names    |
 | `test_anonymized.py`          | No personal details in committable files, screenshots included |
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
-| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
@@ -892,6 +918,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_cold_start.js`          | Startup order, when Sass starts, and where the compile cache lives |
 | `test_worker_restarts.js`     | A Python worker that keeps crashing stops being restarted; Re-render brings it back |
 | `test_hidden_release.js`      | Chromium closes while the window is hidden and comes back when it is shown |
+| `test_failure_recovery.js`    | A killed Chromium is replaced; the window shown during a pending release keeps it; unreadable entries in `data/`; a failed render ends for every window |
 | `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium |
 | `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
@@ -906,14 +933,22 @@ a skip too, never as passed.
 
 `test_yaml_typing.py` skips its schema-agreement checks unless
 `jsonschema` is installed — it is in `requirements.txt`, marked
-test-only, and nothing in the build imports it.
+test-only, and nothing in the build imports it. Without your own
+`data/_profile.yml` it checks the profile schema against
+`_profile_default.yml`, so that check runs on GitHub too.
 
 `test_anonymized.py` runs only where your own data files are (it looks
 for their details everywhere else). It reads committed images with
 [Tesseract OCR](https://tesseract-ocr.github.io/tessdoc/Installation.html)
 when it is on `PATH` or in its default Windows folder, and otherwise
 skips that one check and says so. Images' embedded metadata is checked
-either way.
+either way, in whatever encoding it was written in. Committed PDFs are
+searched in their text, their XMP metadata, their link addresses and
+their bookmarks. Names are compared after Unicode normalization and
+phone numbers by their digits, so a different spelling of the same
+detail is still found. A data file of yours that does not parse fails
+the test rather than being skipped, and backups next to it
+(`*.yml.bak`, `*.yml~`, `*.yml.orig`) are read as well.
 
 The suites that build — the engine, the preview, the Studio server —
 each run in a throwaway copy of the project in the system temp
@@ -1241,6 +1276,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_cold_start.js               Startup order, Sass, and the compile cache.
     ├── test_worker_restarts.js          The cap on Python worker restarts.
     ├── test_hidden_release.js           Chromium closed while the window is hidden.
+    ├── test_failure_recovery.js         The engine and server recover from failures.
     ├── test_power_throttling.js         The opt-out request, and the launch race.
     ├── test_font_faces.js               A font file for every weight and size in use.
     ├── test_pipeline_reports.js         Every build failure prints why.
@@ -1300,7 +1336,23 @@ should not happen with reasonable content.
 Your content doesn't fit in the configured cap. Either raise
 `meta.maxPages` — normally in `data/_profile.yml`, or in the document
 itself to override it just there — or trim content. The error
-identifies which column ran out of pages.
+identifies which column ran out of pages and how many pages the
+content needs.
+
+**The build says the page-1 header is taller than the page, or that
+something "does not fit" or is "taller than a page".**
+Raising `meta.maxPages` will not help here: one piece of content is
+taller than the room a page has for it. For the header, remove contact
+rows or shorten the address or role; for a block, a job or a bullet,
+split or shorten it.
+
+**The build says an href "has no scheme".**
+Write the whole address: `https://example.com/me`, not
+`example.com/me`. See "Links" under "What you can change in the YAML".
+
+**The build says a data file "is not UTF-8 text".**
+It was saved in another encoding — Notepad's "Unicode", say. Open it
+and save it again with the encoding set to UTF-8.
 
 **I edited the YAML and the build silently dropped a section / job.**
 Schema validation should catch every malformed entry with a clear

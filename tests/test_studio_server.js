@@ -11,11 +11,15 @@
  *   • The tray names the PDFs the last Build wrote, however many
  *     previews of other data files have run since.
  *   • Requests must be addressed to this server (Host), from its own
- *     page (Origin), with JSON bodies; a malformed Host cannot crash it.
+ *     page (Origin, Sec-Fetch-Site), with JSON bodies; a malformed Host
+ *     cannot crash it. Every response carries nosniff, CORP and
+ *     Referrer-Policy; the page's CSP lets it load and render in a real
+ *     browser with no violation.
+ *   • A folder named *.yml is not offered as a data file.
  *   • A dropped file never replaces one in data/, and a support file
  *     name (_profile.yml) is refused.
  *   • Closing the server's stdin (what the desktop shell does) shuts it
- *     down gracefully, worker included.
+ *     down gracefully, worker included; so does SIGHUP, Chromium included.
  *   • A save is picked up after a 20 ms debounce, and a preview that
  *     fails the way a half-written data file would, shortly after a
  *     change, is tried once more before the error is shown.
@@ -102,6 +106,43 @@ async function unitTests(tmp) {
   assertEq((server.checkRequest(req({ host: '127.0.0.1:5000',
     'content-type': 'text/plain' }, 'POST'), 5000) || [])[0], 415,
     'checkRequest: a text/plain POST is refused');
+
+  // checkRequest: Sec-Fetch-Site. A browser says who asked; another site
+  // is refused, and a request that says nothing (curl, the desktop
+  // shell's own POST) is not.
+  const fetchReq = (site, extra = {}, method = 'GET', url = '/api/status') => ({ method, url,
+    headers: { host: '127.0.0.1:5000', ...(site ? { 'sec-fetch-site': site } : {}), ...extra } });
+  assertEq((server.checkRequest(fetchReq('cross-site'), 5000) || [])[0], 403,
+    'checkRequest: Sec-Fetch-Site cross-site is refused');
+  assertEq((server.checkRequest(fetchReq('same-site'), 5000) || [])[0], 403,
+    'checkRequest: Sec-Fetch-Site same-site (a sibling subdomain) is refused');
+  assertEq((server.checkRequest(fetchReq('CROSS-SITE', { 'sec-fetch-mode': 'no-cors' }, 'GET', '/'), 5000) || [])[0], 403,
+    'checkRequest: a cross-site subresource load of the page is refused, any case');
+  assertEq(server.checkRequest(fetchReq('same-origin'), 5000), null,
+    'checkRequest: Sec-Fetch-Site same-origin is accepted');
+  assertEq(server.checkRequest(fetchReq('none'), 5000), null,
+    'checkRequest: Sec-Fetch-Site none (typed or bookmarked) is accepted');
+  assertEq(server.checkRequest(fetchReq(null, { 'content-type': 'application/json' }, 'POST'), 5000), null,
+    'checkRequest: a POST with no Sec-Fetch-Site (the shell, curl) is accepted');
+  assertEq(server.checkRequest(fetchReq('cross-site',
+    { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }, 'GET', '/'), 5000), null,
+    'checkRequest: a top-level navigation to the page from elsewhere is accepted');
+  assertEq((server.checkRequest(fetchReq('cross-site',
+    { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }, 'GET', '/api/status'), 5000) || [])[0], 403,
+    'checkRequest: ...but not a navigation to the API');
+  assertEq((server.checkRequest(fetchReq('cross-site',
+    { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' }, 'GET', '/'), 5000) || [])[0], 403,
+    'checkRequest: ...nor the page loaded into another site\'s frame');
+
+  // The UI's Content-Security-Policy allows its inline script by hash,
+  // and only that script.
+  const csp = server.uiContentSecurityPolicy('<p>x</p><script>var a = 1;</script><script src="/x.js"></script>');
+  const digest = require('crypto').createHash('sha256').update('var a = 1;').digest('base64');
+  assertTrue(csp.includes(`script-src 'sha256-${digest}';`),
+    `CSP: the inline script is allowed by its hash, the src= one adds none (${csp})`);
+  assertTrue(/frame-ancestors 'none'/.test(csp) && /default-src 'none'/.test(csp)
+    && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp),
+    'CSP: no framing, nothing by default, no unsafe script sources');
 
   // The save debounce, and a data file caught half-written.
   assertEq(server.WATCH_DEBOUNCE_MS, 20, 'debounce: a save is rendered after 20 ms of quiet');
@@ -222,7 +263,7 @@ function request(port, method, route, { body, headers = {}, timeoutMs = 120000 }
       res.on('end', () => {
         let data = null;
         try { data = JSON.parse(text); } catch { /* not JSON */ }
-        resolve({ status: res.statusCode, data, text });
+        resolve({ status: res.statusCode, data, text, headers: res.headers });
       });
     });
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`${method} ${route} timed out`)));
@@ -294,6 +335,63 @@ async function goneWithin(pid, ms) {
 }
 
 
+// Every process below `pid`, from /proc (Linux). Chromium is started by
+// Playwright's Node side, so it is a child of the server, not of us.
+function descendants(pid) {
+  const parent = new Map();
+  for (const entry of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf-8');
+      parent.set(Number(entry), Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]));
+    } catch { /* gone meanwhile */ }
+  }
+  const out = [];
+  const walk = (p) => {
+    for (const [child, pp] of parent) if (pp === p) { out.push(child); walk(child); }
+  };
+  walk(pid);
+  return out;
+}
+
+function commandOf(pid) {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf-8').replace(/\0/g, ' '); } catch { return ''; }
+}
+
+
+/**
+ * The page in a real browser under its own Content-Security-Policy:
+ * it loads, draws a page of the preview, and nothing it does is blocked.
+ */
+async function cspTests(port, chromium) {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const violations = [];
+    await page.exposeFunction('__cspViolation', v => violations.push(v));
+    await page.addInitScript(() => {
+      document.addEventListener('securitypolicyviolation',
+        e => window.__cspViolation(`${e.violatedDirective} ${e.blockedURI}`));
+    });
+    page.on('console', (msg) => {
+      if (/Content.Security.Policy/i.test(msg.text())) violations.push(msg.text());
+    });
+    const resp = await page.goto(`http://127.0.0.1:${port}/`);
+    assertTrue(/frame-ancestors 'none'/.test(resp.headers()['content-security-policy'] || ''),
+      'CSP: the browser receives the policy');
+    await page.waitForSelector('.sheet img', { timeout: 90000 });
+    await page.evaluate(() => document.fonts.ready);
+    const fonts = await page.evaluate(() => [...document.fonts].filter(f => f.status === 'loaded')
+      .map(f => f.family.replace(/["']/g, '')));
+    assertTrue(fonts.includes('Manrope'), `CSP: the UI font loads under the policy (${fonts.join(', ')})`);
+    await page.waitForTimeout(300);
+    assertEq(violations, [], 'CSP: loading and drawing the preview breaks no rule of the policy');
+  } finally {
+    await browser.close();
+  }
+}
+
+
 /* ─── Endpoint tests ──────────────────────────────────────────── */
 
 async function httpTests(project, srv) {
@@ -306,6 +404,18 @@ async function httpTests(project, srv) {
     'the UI is served to localhost:<port>');
   assertEq((await api('GET', '/', undefined, { headers: { host: `evil.example:${port}` } })).status, 403,
     'the UI is refused to a foreign Host (DNS rebinding)');
+
+  // The UI loads nothing from the network: its fonts come from fonts/.
+  const ui = (await api('GET', '/')).text;
+  assertEq((ui.match(/(?:src|href)\s*=\s*["']?https?:|url\(\s*["']?https?:/gi) || []).length, 0,
+    'the UI references no remote stylesheet, script, font or image');
+  const faces = ui.match(/\/fonts\/variable\/[\w-]+\.woff2/g) || [];
+  assertEq(faces.length, 2, 'the UI declares its two typefaces');
+  for (const face of faces) {
+    assertEq((await api('GET', face)).status, 200, `the UI's font ${face} is served`);
+  }
+  assertEq((await api('GET', '/fonts/variable/..%2F..%2Fpackage.woff2')).status, 404,
+    'the font route serves nothing outside fonts/variable/');
   assertEq((await api('POST', '/api/datasource', { source: null },
     { headers: { origin: 'http://evil.example' } })).status, 403,
     'a cross-origin POST is refused');
@@ -319,12 +429,52 @@ async function httpTests(project, srv) {
     { headers: { origin: `http://127.0.0.1:${port}` } })).status, 200,
     'a same-origin JSON POST is accepted');
 
+  // Sec-Fetch-Site over HTTP: another site's fetch gets nothing.
+  assertEq((await api('GET', '/api/status', undefined,
+    { headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors' } })).status, 403,
+    'a cross-site GET of the API is refused');
+  assertEq((await api('POST', '/api/datasource', { source: null },
+    { headers: { 'sec-fetch-site': 'same-site' } })).status, 403,
+    'a same-site POST is refused');
+  assertEq((await api('GET', '/api/status', undefined,
+    { headers: { 'sec-fetch-site': 'same-origin' } })).status, 200,
+    'a same-origin GET is accepted');
+
+  // Headers on every response, and the page's policy.
+  const want = { 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin',
+    'referrer-policy': 'no-referrer' };
+  const pick = h => Object.fromEntries(Object.keys(want).map(k => [k, h[k]]));
+  const page = await api('GET', '/');
+  for (const [what, resp] of [['the page', page], ['the API', await api('GET', '/api/status')],
+    ['a font', await api('GET', faces[0] || '/fonts/variable/Manrope.woff2')],
+    ['a 404', await api('GET', '/nope')],
+    ['a refusal', await api('GET', '/api/status', undefined, { headers: { 'sec-fetch-site': 'cross-site' } })]]) {
+    assertEq(pick(resp.headers), want, `security headers are on ${what}`);
+  }
+  const pagePolicy = page.headers['content-security-policy'] || '';
+  assertTrue(/frame-ancestors 'none'/.test(pagePolicy) && /script-src 'sha256-/.test(pagePolicy),
+    `the page is sent with its Content-Security-Policy (${pagePolicy})`);
+  assertEq(pagePolicy, server.uiContentSecurityPolicy(page.text),
+    "the page's policy hashes the page as served");
+
   // M9 — a malformed Host does not take the server down.
   const bad = await rawRequest(port, `GET /api/status HTTP/1.1\r\nHost: [::bad\r\nConnection: close\r\n\r\n`);
   assertTrue(/^HTTP\/1\.1 (400|403)/.test(bad), `a malformed Host is refused (${bad.split('\r\n')[0]})`);
   const none = await rawRequest(port, `GET /api/status HTTP/1.0\r\n\r\n`);
   assertTrue(/^HTTP\/1\.[01] (400|403)/.test(none), `a request with no Host is refused (${none.split('\r\n')[0]})`);
   assertEq((await api('GET', '/api/status')).status, 200, 'the server is still up afterwards');
+
+  // A folder named *.yml is not a data file the inspector can offer.
+  fs.mkdirSync(path.join(project, 'data', 'folder.yml'));
+  try {
+    const listed = ((await api('GET', '/api/status')).data.dataFiles || []).map(f => f.name);
+    assertTrue(listed.length > 0 && !listed.includes('folder.yml'),
+      `status: a folder named folder.yml is not listed as a data file (${listed.join(', ')})`);
+    const files = ((await api('GET', '/api/datafiles')).data.files || []).map(f => f.name);
+    assertTrue(!files.includes('folder.yml'), 'datafiles: ...nor in the Data files dialog');
+  } finally {
+    fs.rmSync(path.join(project, 'data', 'folder.yml'), { recursive: true, force: true });
+  }
 
   // L-b — adopting a dropped file.
   const letterYml = fs.readFileSync(path.join(project, 'data', 'letter_default.yml'), 'utf-8');
@@ -564,6 +714,7 @@ async function httpTests(project, srv) {
     copyProject(project);
     srv = await startServer(project);
     const workerPid = await httpTests(project, srv);
+    await cspTests(srv.port, chromium);
 
     // L-c — closing stdin (what the desktop shell does) is a graceful
     // shutdown: the server exits by itself and takes the worker with it.
@@ -574,6 +725,25 @@ async function httpTests(project, srv) {
     assertEq(outcome, 'exited', 'closing stdin shuts the server down');
     assertTrue(await goneWithin(workerPid, 5000), 'the graceful shutdown stopped the Python worker');
     srv = null;
+
+    // SIGHUP (the terminal it runs in is closed) is a graceful shutdown
+    // too: Chromium and the worker go with the server.
+    if (process.platform === 'linux') {
+      srv = await startServer(project);
+      const warm = await request(srv.port, 'POST', '/api/preview', { body: { doc: 'letter', scale: 1 } });
+      assertEq(warm.status, 200, `SIGHUP: a preview first, so Chromium is up (${warm.data && warm.data.error})`);
+      const family = descendants(srv.child.pid);
+      assertTrue(family.some(pid => /chrom/i.test(commandOf(pid))) && family.some(pid => /worker\.py/.test(commandOf(pid))),
+        `SIGHUP: the server has a Chromium and a worker running (${family.length} processes)`);
+      const hupExit = new Promise(res => srv.child.once('exit', (code, signal) => res({ code, signal })));
+      srv.child.kill('SIGHUP');
+      const hup = await Promise.race([hupExit, new Promise(res => setTimeout(() => res('timeout'), 8000))]);
+      assertEq(hup, { code: 0, signal: null }, 'SIGHUP: the server runs its shutdown and exits 0');
+      const left = [];
+      for (const pid of family) if (!(await goneWithin(pid, 5000))) left.push(`${pid} ${commandOf(pid).slice(0, 60)}`);
+      assertEq(left, [], 'SIGHUP: no Chromium or worker process is left behind');
+      srv = null;
+    }
   } catch (err) {
     fail('studio server run', { error: `${err.stack || err.message}\n${srv ? srv.log.slice(-30).join('\n') : ''}` });
   } finally {

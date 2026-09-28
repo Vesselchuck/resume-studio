@@ -667,5 +667,36 @@ test('tunables: widow/orphan policy is frozen at expected values', () => {
 });
 
 
+test('sidebar: never ends a page on a group sub-heading', () => {
+  // 5 items fit on page 1; the 5th is a `- group:` heading, so the
+  // split backs off to 4 and the heading opens page 2 with its items.
+  const b = listBlock('a', 0, [20, 20, 20, 20, 20, 20, 20]);
+  b.items[4].isGroup = true;
+  const result = solveSidebar([b], geometry({ page1: 100, pageN: 200 }), 10);
+  assertEq(result[0].entries[0].items_limit, 4, 'page 1 stops before the group');
+  assertEq(result[1].entries[0].items_offset, 4, 'page 2 starts at the group');
+});
+
+test('solveLayout: a header taller than page 1 is named, not a block', () => {
+  assertThrows(() => solveLayout({
+    pageGeometry: geometry({ page1: -50, pageN: 1100 }), maxPages: 3,
+    sidebar: [listBlock('a', 10, [10])],
+    mainColumn: [summary(10, 10), experience(10, [job('j', 10, [10])]), education(10, 10)],
+  }), (e) => e instanceof SolverError && e.column === 'header', 'header error');
+});
+
+test('solveLayout: over maxPages reports the pages needed', () => {
+  let err;
+  try {
+    solveLayout({
+      pageGeometry: geometry({ page1: 100, pageN: 100 }), maxPages: 1,
+      sidebar: [listBlock('a', 0, [60]), listBlock('b', 0, [60]), listBlock('c', 0, [60])],
+      mainColumn: [summary(10, 10), experience(10, [job('j', 10, [10])]), education(10, 10)],
+    });
+  } catch (e) { err = e; }
+  assertEq(err && err.pages_needed, 3, 'pages_needed');
+});
+
+
 // ─── Report ─────────────────────────────────────────────────────
 report();

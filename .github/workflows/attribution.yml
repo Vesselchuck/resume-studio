@@ -65,7 +65,7 @@ jobs:
           RELEASE_NAME: ${{ github.event.release.name }}
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          pattern='co-authored-by:|assisted-by:|made-with:|generated-by:|ai-(assisted|generated)(-by)?:|claude-session:|claude\.ai/(code|share)|chatgpt\.com/share|chat\.openai\.com/share|generated (with|by|using) \[?(claude|chatgpt|openai|codex|copilot|cursor|gemini|an? ai)|^[^[:alnum:]]*generated (with|by|using) \[?[[:alpha:]]'
+          pattern='co-?authored[- ]by[[:space:]]*(:|：)|assisted-by[[:space:]]*:|made-with[[:space:]]*:|generated-by[[:space:]]*:|ai-(assisted|generated)(-by)?[[:space:]]*:|claude-session[[:space:]]*:|noreply@anthropic\.com|claude\.ai/(code|share|chat|project)|claude\.com/claude-code|chatgpt\.com/(share|c/)|chat\.openai\.com/share|gemini\.google\.com/share|g\.co/gemini/share|generated[[:space:]]+(with|by|using)[[:space:]]+\[?(claude|chatgpt|openai|codex|copilot|cursor|gemini|an? ai)|(generated|written|made|created)[[:space:]]+(with|by|using)[[:space:]]+(the help of[[:space:]]+)?\[?(claude|chatgpt|openai|codex|gemini)|^[^[:alnum:]]*generated[[:space:]]+(with|by|using)[[:space:]]+\[[[:alpha:]]'
           zero=0000000000000000000000000000000000000000
           fail=0
 

@@ -39,6 +39,14 @@ body {
      applied after the font-variant-* properties and wins (CSS Fonts 4,
      feature precedence).                                              */
   font-feature-settings: "kern", "liga" 0;
+  /* A WORD WIDER THAN ITS COLUMN BREAKS instead of running out of it: a
+     long URL in a bullet was cut off at the page margin, and one in a
+     sidebar list ran over the divider into the main column's text,
+     while the layout check reported clean. break-word (not `anywhere`)
+     only acts on a word that cannot fit on a line of its own, so no
+     line that fits today breaks differently. Set here, on body, so the
+     measurement pass inherits it and measures the same wrapped lines. */
+  overflow-wrap: break-word;
 }
 
 ul, ol { list-style: none; }

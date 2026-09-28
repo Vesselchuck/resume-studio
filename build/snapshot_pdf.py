@@ -314,7 +314,10 @@ def render_pdf_pages(pdfium, path, prepare=None, only=None) -> list:
             if prepare is not None:
                 prepare(page)
             bitmap = page.render(scale=SCALE)
-            images.append(bitmap.to_pil().convert("RGB"))
+            image = bitmap.to_pil()
+            # pdfium's default BGR render already comes out as an RGB
+            # copy; converting it again only copied ~6 MB a page.
+            images.append(image if image.mode == "RGB" else image.convert("RGB"))
         return images
     finally:
         pdf.close()

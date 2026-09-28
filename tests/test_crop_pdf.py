@@ -224,6 +224,28 @@ class TestApplyMetadata(unittest.TestCase):
         self.assertEqual(info["/Subject"], "Test subject")
         self.assertEqual(info["/Keywords"], "python, design, pdf")
 
+    def test_control_characters_do_not_break_the_xmp(self):
+        # YAML lets "\x01" and "\f" through in a double-quoted string.
+        # XML 1.0 cannot hold them even escaped, and the XMP copied from
+        # /Info became ill-formed — pypdf refused to read it back.
+        reader = PdfReader(make_pdf_with_page(612.0, 792.0))
+        writer = PdfWriter()
+        crop_pdf.crop_pages(reader, writer)
+        meta = self._write_manifest({
+            "title": "Gaius\x01 Caesar — Resume",
+            "author": "Gaius Caesar",
+            "subject": "Tab\tstays, \x0cform feed and \x1b escape go",
+        })
+        crop_pdf.apply_metadata(writer, reader, meta)
+        crop_pdf.apply_xmp(writer, "en-US")
+
+        out = round_trip(writer)
+        self.assertEqual(out.metadata["/Title"], "Gaius Caesar — Resume")
+        self.assertEqual(out.metadata["/Subject"], "Tab\tstays, form feed and  escape go")
+        xmp = out.xmp_metadata   # raises PdfReadError on ill-formed XML
+        self.assertEqual(xmp.dc_title["x-default"], out.metadata["/Title"])
+        self.assertEqual(xmp.dc_description["x-default"], out.metadata["/Subject"])
+
     def test_does_not_override_creator_or_producer(self):
         # apply_metadata's mapping deliberately omits Creator/Producer —
         # Chromium's defaults pass through, truthfully describing what

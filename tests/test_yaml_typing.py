@@ -326,7 +326,10 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
         the only thing that will tell you a key is misspelled."""
         path = DATA_DIR / build.PROFILE_NAME
         if not path.exists():
-            self.skipTest(f"no {build.PROFILE_NAME} in data/")
+            # A clean checkout (CI) has only the shipped template; check
+            # that one rather than skipping, so the schema is checked
+            # against something on every run.
+            path = DATA_DIR / "_profile_default.yml"
         data = _yaml_loader.load(path.read_text(encoding="utf-8"))
         errors = sorted(
             self.Draft7Validator(self.schema("profile.schema.json"))

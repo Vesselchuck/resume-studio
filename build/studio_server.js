@@ -66,6 +66,7 @@ compileCache.enable();
 const http = require('http');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const os = require('os');
 
@@ -103,7 +104,8 @@ const READY_PREFIX = '\x1eSTUDIO_READY ';
  * or cut off mid-line. On Windows the editor may also still hold the
  * file open, and reading it fails with a sharing violation. Rather than
  * flash that error, a preview whose data could not be read as YAML —
- * or read as nothing at all, or not read because the file was locked —
+ * or read as nothing at all, or cut off inside a multi-byte character
+ * (build.py's "not UTF-8" error), or not read because the file was locked —
  * within HALF_WRITTEN_WINDOW_MS of a change is tried once more after
  * HALF_WRITTEN_RETRY_MS. A file that really is broken fails the second
  * time too and is reported as before, 50 ms later; a schema error in a
@@ -112,7 +114,7 @@ const READY_PREFIX = '\x1eSTUDIO_READY ';
 const WATCH_DEBOUNCE_MS = 20;
 const HALF_WRITTEN_WINDOW_MS = 1000;
 const HALF_WRITTEN_RETRY_MS = 50;
-const HALF_WRITTEN_MESSAGE = /could not be read as YAML|is empty or not a YAML mapping/;
+const HALF_WRITTEN_MESSAGE = /could not be read as YAML|is empty or not a YAML mapping|is not UTF-8 text/;
 
 /** True for a build failure that a half-written data file would cause. */
 function looksHalfWritten(err) {
@@ -329,6 +331,55 @@ function json(res, status, body) {
   res.end(text);
 }
 
+/**
+ * Headers every response carries.
+ *
+ * nosniff: a JSON reply is never run as script or styled as CSS, however
+ * a page on another site asks for it. Cross-Origin-Resource-Policy: no
+ * other origin may embed anything from here (an <img> or <script> tag
+ * pointing at the API gets nothing). no-referrer: the page's address,
+ * with its port, is not handed to anything it links to.
+ */
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'cross-origin-resource-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
+};
+
+/**
+ * The Content-Security-Policy for the UI page.
+ *
+ * The page is one file: its script is inline, so it is allowed by hash —
+ * computed from the file being served, so an edit to ui/index.html
+ * cannot leave a stale hash behind — and nothing else may run. Styles
+ * need 'unsafe-inline' for the style="" attributes the page builds;
+ * fonts, fetches and the event stream are same-origin; page images are
+ * data: URLs. frame-ancestors 'none' keeps the page out of any frame
+ * (clickjacking), which X-Frame-Options would too but only this is
+ * honored everywhere the Studio runs.
+ */
+function uiContentSecurityPolicy(html) {
+  const hashes = [];
+  const re = /<script(\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    if (m[1] && /\ssrc\s*=/i.test(m[1])) continue;
+    const digest = crypto.createHash('sha256').update(m[2], 'utf8').digest('base64');
+    hashes.push(`'sha256-${digest}'`);
+  }
+  return [
+    "default-src 'none'",
+    `script-src ${hashes.length ? hashes.join(' ') : "'none'"}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+}
+
 function readBody(req, limitBytes = 8 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -448,6 +499,22 @@ function checkRequest(req, port, extraHosts = []) {
     if (!origins.has(String(origin).toLowerCase())) {
       return [403, 'cross-origin requests are not accepted'];
     }
+  }
+  // Sec-Fetch-Site, when a browser sends it, says who asked. Another
+  // site (or a sibling subdomain) gets nothing, even a GET that a CORS
+  // check would let through as a "simple" request. The one exception is
+  // a top-level navigation to the page itself: that is how a link or a
+  // shell hands the window over, and it runs nothing on the server that
+  // the page's own requests are not checked for. Requests without the
+  // header (curl, the desktop shell's own loopback POST) are unaffected.
+  const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (site === 'cross-site' || site === 'same-site') {
+    const pathname = String(req.url || '').split('?')[0];
+    const navigation = req.method === 'GET'
+      && String(req.headers['sec-fetch-mode'] || '').toLowerCase() === 'navigate'
+      && String(req.headers['sec-fetch-dest'] || '').toLowerCase() === 'document'
+      && (pathname === '/' || pathname === '/index.html');
+    if (!navigation) return [403, 'requests from other sites are not accepted'];
   }
   if (req.method === 'POST') {
     const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -605,6 +672,11 @@ function listDataFiles() {
   try {
     return fs.readdirSync(DATA_DIR)
       .filter(isDocumentFile)
+      // A folder named *.yml, or a dangling link such as Emacs's .#x.yml
+      // lock, is not a data file to offer: picking it could only fail.
+      .filter((name) => {
+        try { return fs.statSync(path.join(DATA_DIR, name)).isFile(); } catch { return false; }
+      })
       .sort((a, b) => a.localeCompare(b))
       .map((name) => {
         let doc = null;
@@ -799,13 +871,24 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         names = fs.readdirSync(DATA_DIR).filter(isDocumentFile);
       } catch { /* no data dir yet */ }
       return {
-        files: names.map((name) => {
-          const st = fs.statSync(path.join(DATA_DIR, name));
-          return {
+        files: names.flatMap((name) => {
+          // One entry that is not a readable file (a folder named *.yml,
+          // Emacs's dangling .#x.yml lock link, a file deleted since the
+          // listing) is left out, not a reason to list nothing.
+          let st;
+          let text;
+          try {
+            st = fs.statSync(path.join(DATA_DIR, name));
+            if (!st.isFile()) return [];
+            text = fs.readFileSync(path.join(DATA_DIR, name), 'utf-8');
+          } catch {
+            return [];
+          }
+          return [{
             name,
             bytes: st.size,
             mtimeMs: st.mtimeMs,
-            doc: detectDoc(fs.readFileSync(path.join(DATA_DIR, name), 'utf-8')).doc
+            doc: detectDoc(text).doc
                  || 'resume',
             // Which files leave this machine if the project is pushed.
             //
@@ -818,7 +901,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
             // and a wrong answer there is the kind that ends with a
             // phone number on GitHub.
             isTemplate: /_default\.ya?ml$/i.test(name),
-          };
+          }];
         }).sort((a, b) => b.mtimeMs - a.mtimeMs),
       };
     },
@@ -860,6 +943,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       }
       busy = true;
       broadcast('render', { state: 'start', doc: id });
+      let ended = false;
       try {
         // `known`: page hashes the page already holds, so unchanged pages
         // come back without their PNG. See renderPreview in engine.js.
@@ -903,6 +987,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
           changedAt: lastChangeAt,
           onRetry: () => console.log('  (the data file may have been caught mid-save; reading it again)'),
         });
+        ended = true;
         broadcast('render', { state: 'done', doc: id, ms: result.totalMs });
         if (!streaming) return { mode: 'live', ...result };
         const images = result.images.map((im) => {
@@ -913,6 +998,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         return { mode: 'live', ...result, images, renderId, streamed: true };
       } finally {
         busy = false;
+        // Every window that saw 'start' is showing "Rendering"; a failed
+        // render must end that too, not only a successful one.
+        if (!ended) broadcast('render', { state: 'failed', doc: id });
       }
     },
 
@@ -1360,6 +1448,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     // Same server, same page only — see checkRequest. The Host check
     // comes first and applies to every request, the UI page included,
     // so a rebinding page cannot even read it.
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     const refused = checkRequest(req, listeningPort,
       host === '127.0.0.1' || host === 'localhost' ? [] : [host]);
     if (refused) return json(res, refused[0], { error: refused[1] });
@@ -1387,6 +1476,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         return json(res, 500, { error: `UI missing at ${path.relative(ROOT, file)}` });
       }
       const html = fs.readFileSync(file);
+      const csp = uiContentSecurityPolicy(html.toString('utf8'));
       // The header says whether the engine was up when the page was
       // served. Nothing in the app reads it; it is how a test can show
       // that the page does not wait for the engine without timing two
@@ -1395,8 +1485,27 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         'x-studio-engine': engine ? 'ready' : 'starting',
+        'content-security-policy': csp,
       });
       return res.end(html);
+    }
+
+    // The UI's own typefaces (fonts/variable/*.woff2), so the page needs
+    // nothing from the network. The pattern admits a file name only: no
+    // separators beyond the one folder, so no way out of fonts/.
+    if (req.method === 'GET' && /^\/fonts\/variable\/[A-Za-z0-9_-]+\.woff2$/.test(url.pathname)) {
+      const file = path.join(ROOT, url.pathname);
+      let data;
+      try {
+        data = fs.readFileSync(file);
+      } catch {
+        return json(res, 404, { error: `no font at ${url.pathname}` });
+      }
+      res.writeHead(200, {
+        'content-type': 'font/woff2',
+        'cache-control': 'no-cache',
+      });
+      return res.end(data);
     }
 
     const handler = routes[key];
@@ -1518,6 +1627,11 @@ if (require.main === module) {
     }
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
+    // The terminal closing (SIGHUP) or Ctrl-Break in a Windows console
+    // (SIGBREAK) would otherwise end Node without the shutdown routine,
+    // leaving Chromium and the Python worker behind.
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
+    if (process.platform === 'win32') process.on('SIGBREAK', () => shutdown('SIGBREAK'));
 
     console.log(`Resume Studio → ${url}`);
     // Where the compiled-code cache lives, said once: it is outside the
@@ -1539,6 +1653,6 @@ if (require.main === module) {
 }
 
 module.exports = { start, DOCS, READY_PREFIX, detectDoc, isDocumentFile,
-                   listDataFiles, resolveInsideRoot, dataFileInfo, renderEnv,
+                   listDataFiles, resolveInsideRoot, uiContentSecurityPolicy, SECURITY_HEADERS, dataFileInfo, renderEnv,
                    checkRequest, writeNew, looksHalfWritten, retryIfHalfWritten,
                    WATCH_DEBOUNCE_MS, HALF_WRITTEN_WINDOW_MS, HALF_WRITTEN_RETRY_MS };

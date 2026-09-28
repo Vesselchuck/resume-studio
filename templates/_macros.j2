@@ -147,7 +147,9 @@
     <div class="detail-row"{% if measure %} data-measure="item" data-row-index="{{ loop.index0 }}"{% endif %}>
       <span class="subgroup-label">{{ row.label }}</span>
       <span class="detail-value">
-{%- if row.href is defined -%}
+{#- An empty href is no link, as in the header: <a href=""> would
+    point at the page itself, which in the PDF is a local file path. #}
+{%- if row.href is defined and row.href -%}
 <a href="{{ row.href }}">{{ row.value }}</a>
 {%- else -%}
 {{ row.value }}

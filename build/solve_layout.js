@@ -332,10 +332,13 @@ function solveSidebar(blocks, geometry, maxPages) {
 
     if (isSplittable && items_remaining > 0) {
       const availForBlock = available - overhead;
-      const bestK = maxFitting(
+      let bestK = maxFitting(
         sidebarBlockHeight,
         block, items_offset, items_remaining, isContinuation, availForBlock,
       );
+      // Never end a page on a `- group:` sub-heading: its items would
+      // start the next page with their label stranded above them.
+      while (bestK > 0 && block.items[items_offset + bestK - 1].isGroup) bestK--;
       const tailRemaining = items_remaining - bestK;
       if (bestK >= minOnOrigin && tailRemaining >= MIN_SIDEBAR_ITEMS_ON_RECEIVER) {
         currentPage.entries.push({
@@ -364,7 +367,11 @@ function solveSidebar(blocks, geometry, maxPages) {
     }
     if (currentPage.entries.length === 0) {
       throw new SolverError(
-        `sidebar block '${block.id}' (offset ${items_offset}) is taller than a page`,
+        currentCapacity < geometry.pageNCapacity
+          ? `sidebar block '${block.id}' does not fit below the page-1 header `
+            + `(${Math.round(wholeBlockHeight)}px, room for ${Math.round(currentCapacity)}px) `
+            + `and cannot be split`
+          : `sidebar block '${block.id}' (offset ${items_offset}) is taller than a page`,
         { column: 'sidebar', block_id: block.id, items_offset,
           height: wholeBlockHeight, capacity: currentCapacity },
       );
@@ -700,8 +707,37 @@ function solveLayout(input) {
     throw new SolverError(`input.maxPages must be a positive integer; got ${maxPages}`);
   }
 
-  const sidebarPages = solveSidebar(sidebar, pageGeometry, maxPages);
-  const mainPages = solveMainColumn(mainColumn, pageGeometry, maxPages);
+  if (!(pageGeometry.page1Capacity > 0)) {
+    throw new SolverError(
+      `the page-1 header (name, role, contact) is taller than the page: `
+      + `${Math.round(pageGeometry.pageNCapacity - pageGeometry.page1Capacity)}px of `
+      + `${Math.round(pageGeometry.pageNCapacity)}px, leaving no room for content`,
+      { column: 'header', capacity: pageGeometry.page1Capacity, fixable_by_max_pages: false },
+    );
+  }
+
+  let sidebarPages, mainPages;
+  try {
+    sidebarPages = solveSidebar(sidebar, pageGeometry, maxPages);
+    mainPages = solveMainColumn(mainColumn, pageGeometry, maxPages);
+  } catch (err) {
+    // Over the cap: say how many pages the content actually needs, in
+    // both columns, so "raise maxPages" comes with a number. Cheap: the
+    // solver runs in milliseconds even for hundreds of jobs.
+    if (err instanceof SolverError && err.pages_filled !== undefined) {
+      const need = (fn, input) => {
+        try { return fn(input, pageGeometry, Infinity).length; } catch { return null; }
+      };
+      const s = need(solveSidebar, sidebar);
+      const m = need(solveMainColumn, mainColumn);
+      if (s !== null && m !== null) {
+        err.pages_needed = Math.max(s, m);
+        err.message += `; the content needs ${err.pages_needed} pages `
+          + `(sidebar ${s}, main column ${m})`;
+      }
+    }
+    throw err;
+  }
 
   const total = Math.max(sidebarPages.length, mainPages.length);
   if (total > maxPages) {

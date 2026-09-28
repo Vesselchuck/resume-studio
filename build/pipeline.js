@@ -429,9 +429,22 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
       if (err.block_id) c.detail(`Block:  ${err.block_id}`);
       if (err.job_id)   c.detail(`Job:    ${err.job_id}`);
       c.detail('');
-      c.detail('If content is too dense for meta.maxPages, either:');
-      c.detail('  • Increase meta.maxPages in your resume YAML');
-      c.detail('  • Trim content (shorter bullets, fewer skills, etc.)');
+      if (err.column === 'header') {
+        c.detail('Shorten the header: fewer contact rows, a shorter address or role.');
+      } else if (err.pages_needed) {
+        c.detail('Either:');
+        c.detail(`  • Set meta.maxPages to ${err.pages_needed} in your resume YAML`);
+        c.detail('  • Trim content (shorter bullets, fewer skills, etc.)');
+      } else if (err.pages_filled !== undefined) {
+        c.detail('If content is too dense for meta.maxPages, either:');
+        c.detail('  • Increase meta.maxPages in your resume YAML');
+        c.detail('  • Trim content (shorter bullets, fewer skills, etc.)');
+      } else if (err.column) {
+        c.detail('One piece of content is taller than the room a page has for it;');
+        c.detail('raising meta.maxPages will not help. Split it or shorten it.');
+      }
+      // No column: malformed input (an unknown section, a bad maxPages),
+      // which the message itself names; neither piece of advice applies.
       throw reported(err);
     }
     fs.writeFileSync(paths.placement, JSON.stringify(placement, null, 2) + '\n', 'utf-8');
