@@ -61,9 +61,11 @@ strong { font-weight: 600; }
    cleanly, the wrapper-span technique (text in <span> child of
    styled parent) appears to nudge Chromium to emit Tc (character
    spacing) instead of per-letter positioning operators — provided
-   letter-spacing stays at or below ~0.10em. Above that the words
-   come apart: at 0.15em pdftotext and pdfium both read the role as
-   "I M P E R AT O R …". Hence --ls-wide at .name-role.
+   letter-spacing stays low enough. Above that the words come apart:
+   at 0.15em pdftotext and pdfium both read the role as
+   "I M P E R AT O R …", and since the fonts became static pdftotext
+   does at 0.10em too. Hence the role's tracking is built into its
+   font instead (see .name-role).
 
    letter-spacing/text-transform overrides are essential — without
    them the hidden text would inherit tracking and uppercase from

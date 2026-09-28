@@ -102,16 +102,29 @@
 
   /* Typography. Two faces:
      --font          Body face (Manrope). Used for everything by default.
-     --font-display  Display face (Newsreader). Applied selectively in
-                     _components.scss to .name and .section-heading.
-                     Newsreader is an editorial serif with an opsz axis,
-                     so it adapts automatically between display sizes
-                     (30pt name) and smaller sizes (14pt section
-                     headings) — the same font file optimizes both.
+     --font-display-*  Display face (Newsreader), one token per size it
+                     is drawn at. Newsreader is an editorial serif with
+                     an optical-size axis: its letters are finer and
+                     higher-contrast at display sizes, sturdier at text
+                     sizes. The fonts are static (see _fonts.scss), so
+                     each size has its own file cut at that optical
+                     size, and its own family name:
+       -name         .name, 30pt (40px)
+       -heading      .section-heading, 14pt (18.67px)
+       -small        .letter-signature, 10pt (13.33px)
+                     Drawing Newsreader at a new size, or changing one of
+                     these, needs a new instance: see
+                     build/make_static_fonts.py. tests/test_font_faces.js
+                     fails until it has one.
      Both fallback chains end in system serif/sans-serif so a missing
      vendored woff2 still produces a readable document.              */
-  --font:         'Manrope',    'Helvetica Neue', Arial, sans-serif;
-  --font-display: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --font:                 'Manrope', 'Helvetica Neue', Arial, sans-serif;
+  /* The role line: Manrope 500 with --ls-wide (0.1em) built into the
+     font's advances instead of set as letter-spacing. See .name-role. */
+  --font-role:            'Manrope Tracked', 'Helvetica Neue', Arial, sans-serif;
+  --font-display-name:    'Newsreader opsz40', Georgia, 'Times New Roman', serif;
+  --font-display-heading: 'Newsreader opsz18.67', Georgia, 'Times New Roman', serif;
+  --font-display-small:   'Newsreader opsz13.33', Georgia, 'Times New Roman', serif;
 
   /* Sizes — pt-based so they translate identically to print.
      Job title is intentionally LARGER than body so the type scale

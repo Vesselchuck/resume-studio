@@ -140,6 +140,34 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   now run in a throwaway copy of the project, as `test_studio_server.js`
   already did (the helper is `tests/_project.js`), and each one checks
   that nothing in your `dist/` was written.
+- **Changed.** The fonts are static. Manrope and Newsreader were each
+  one variable font, and Chromium writes a variable font into a PDF as
+  Type 3: every glyph a small drawing program instead of a real font.
+  They are now cut into one file per weight in use (Manrope 350, 400,
+  500, 600, and 500 with the role line's tracking) and, since
+  Newsreader's letters change shape with size, one per Newsreader size
+  in use (the name, the section headings, the
+  letter's signature), each at exactly the point the variable font was
+  drawn at. The PDFs embed them as TrueType. In a Linux sandbox the
+  template résumé's PDF went from 205 KB to 77 KB and the letter's from
+  111 KB to 35 KB; the preview prints in 24 ms instead of 45 and
+  rasterizes in 106 ms instead of 149, so a preview after a text edit
+  takes about 149 ms instead of 187. The layout does not move — the
+  solved placement is byte-identical, on the templates and on a real
+  résumé — but letter edges are smoothed slightly differently, so
+  regenerate the snapshot fixture with
+  `python build/snapshot_pdf.py --update-all`. The variable originals
+  are kept in `fonts/variable/`; `build/make_static_fonts.py` cuts them
+  (it needs fontTools and brotli, which the project does not otherwise
+  use). `tests/test_font_faces.js` fails when text asks for a weight or
+  Newsreader size with no cut, and `tests/test_pdf_fonts.py` when a
+  PDF has a Type 3 font again.
+
+  The role line under the name keeps its 0.1em tracking, but built
+  into its own cut of Manrope rather than set as letter-spacing: with
+  the static fonts, pdftotext read it one letter at a time again at
+  0.1em. The page is pixel for pixel the same as with letter-spacing,
+  and every extractor tested reads the role whole.
 
 ---
 

@@ -55,11 +55,12 @@
 }
 
 .name {
-  font-family: var(--font-display);
-  /* Newsreader has an opsz axis. The browser auto-selects the
-     optical size from font-size when font-optical-sizing is auto
-     (the CSS default), so no font-variation-settings rule is
-     needed — at 30pt the browser picks opsz=30 automatically. */
+  font-family: var(--font-display-name);
+  /* Newsreader cut at optical size 40, the display shape. With the
+     variable font Chromium picked that itself: it sets opsz to the
+     font size in CSS px, and 30pt is 40px. The static file is cut at
+     the same point, so the name looks as it did. A new size here
+     needs a new cut; see --font-display-* in _tokens.scss. */
   font-weight: 600;
   font-size: var(--size-name);
   /* No text-transform: uppercase — mixed case is more personal and
@@ -76,18 +77,28 @@
    appropriate here as a structured designation, not a personal name.
    Sits below the name as the professional identifier.
 
-   Tracked at --ls-wide (0.1em), the same as the section headings, and
-   no wider: it is the job title, arguably the most-searched phrase on
-   the page, and at 0.15em pdftotext and pdfium extracted it one letter
-   at a time ("I M P E R AT O R  R O M A N US"). At 0.10em and 0.08em
-   all four extractors tested read it whole; see .visually-hidden in
-   _base.scss for why the threshold sits there.                       */
+   Tracked at 0.1em, like the section headings, but not with
+   letter-spacing: the tracking is built into the font. It is the job
+   title, arguably the most-searched phrase on the page, and an
+   extractor takes a gap between letters for a word break. At 0.15em
+   pdftotext and pdfium read it "I M P E R AT O R  R O M A N US"; with
+   the static fonts pdftotext did at 0.1em too (it read whole at 0.08em,
+   but that is a tighter line). 'Manrope Tracked' is Manrope 500 with
+   0.1em added to every advance width (build/make_static_fonts.py), so
+   the letters sit exactly where 0.1em of letter-spacing puts them —
+   the same pixels — while each letter's width in the PDF now covers
+   the space after it, and there is no gap to break on.
+   tests/test_text_extraction.py checks it in four extractors.
+
+   letter-spacing must stay 0 here, or the tracking doubles;
+   tests/test_font_faces.js checks that too.                         */
 .name-role {
+  font-family: var(--font-role);
   font-size: var(--size-caption);
   font-weight: 500;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: var(--ls-wide);
+  letter-spacing: 0;                /* 0.1em, in the font: see above */
   line-height: 1;
   margin-block-start: var(--sp-sm);
 }
@@ -98,10 +109,9 @@
    boundaries. --section-rhythm carries the visual separation
    load.                                                       */
 .section-heading {
-  font-family: var(--font-display);
-  /* Auto opsz selection — see .name. At 14pt the browser picks
-     opsz=14, which is the text-optimized shape Newsreader's
-     authors designed for small headings.                       */
+  font-family: var(--font-display-heading);
+  /* Newsreader cut at optical size 18.67 (14pt is 18.67px), the
+     shape Chromium picked with the variable font; see .name. */
   font-weight: 700;
   font-size: var(--size-section);
   /* Accent color migrates the brand into content territory — the

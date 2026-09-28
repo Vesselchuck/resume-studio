@@ -212,12 +212,12 @@
      typographic identity it opens with: same display face
      (Newsreader), same 600 weight and 0.02em tracking as .name. Kept
      at the scaffolding body size — it's a signature, not a second name
-     header — and like .name it leaves font-optical-sizing on auto, so
-     the browser selects Newsreader's text opsz at this size. This
+     header — and in the Newsreader cut for this size (optical size
+     13.33: 10pt is 13.33px), the sturdier text shape. This
      mirrors the header's own serif-name / sans-supporting pairing: the
      serif signature sits under the sans closing paragraph just as the
      serif .name sits over the sans .name-role. */
-  font-family: var(--font-display);
+  font-family: var(--font-display-small);
   font-weight: 600;
   letter-spacing: 0.02em;
 }

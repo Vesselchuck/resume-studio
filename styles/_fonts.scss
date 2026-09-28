@@ -1,43 +1,58 @@
 /* ───────────────────────────────────────────────────────────────
    FONTS — Vendored Manrope (body) + Newsreader (display),
-   both variable WOFF2, loaded from fonts/ for
-   reproducibility across machines.
+   static WOFF2, loaded from fonts/ for reproducibility across
+   machines.
 
    LICENSING
    ─────────
    Both fonts are licensed under the SIL Open Font License 1.1.
    The license texts MUST accompany the font files in any
    distribution of this repository — they are kept alongside the
-   woff2 binaries:
+   woff2 binaries (the static cuts are Modified Versions under the
+   OFL; neither font declares a Reserved Font Name):
      fonts/Manrope-OFL.txt
      fonts/Newsreader-OFL.txt
    Do not delete those .txt files. Removing them while keeping the
    woff2 files would put the project in violation of the OFL,
    which requires that the license travel with the font.
 
-   VARIABLE FONTS — DELIBERATE
-   ───────────────────────────
-   Each family is shipped as a single variable WOFF2 file that
-   covers the entire weight range (and Newsreader's optical-size
-   range). The browser interpolates the requested CSS font-weight
-   via the `wght` axis, and font-size drives Newsreader's `opsz`
-   axis automatically (font-optical-sizing: auto — CSS default).
+   STATIC FONTS — DELIBERATE
+   ─────────────────────────
+   One static WOFF2 per weight in use, and for Newsreader per
+   optical size in use, cut from the variable fonts in
+   fonts/variable/ by build/make_static_fonts.py. They were one
+   variable file per family; Chromium's PDF backend writes a font
+   with variation axes as Type 3 (every glyph a small drawing
+   program), which made the PDF several times larger and every
+   preview's rasterization slower. A static font with TrueType
+   outlines is embedded as a real TrueType font.
 
-   ENVIRONMENT NOTE
-   ────────────────
-   Some Chromium versions/sandboxes fail to activate the wght axis
-   when the variable font's default instance is not Regular —
-   Manrope's default is ExtraLight (200). In affected environments
-   the entire weight range silently renders as ExtraLight in the
-   PDF output (verifiable via `pdffonts` on the built PDF).
+   The cuts sit exactly where the variable font was drawn, so the
+   letters keep their shapes and widths:
+     Manrope     350, 400, 500, 600 — every font-weight the
+                 stylesheets set on Manrope text. The italic
+                 .entry-title is slanted by the browser, as before:
+                 Manrope has no italic.
+     Manrope Tracked
+                 Manrope 500 with 0.1em built into every advance
+                 width, for the role line: the same pixels as
+                 letter-spacing 0.1em, but an extractor reads the
+                 words whole. See .name-role in _components.scss.
+     Newsreader  a family per size, named after its optical size.
+                 Chromium set the opsz axis to the font size in CSS
+                 px: the name 40 (30pt), section headings 18.67
+                 (14pt), the letter's signature 13.33 (10pt). See
+                 --font-display-* in _tokens.scss.
 
-   This is a Chromium environment issue, not a project issue. In
-   correctly-configured environments (modern desktop Chrome,
-   recent Playwright Chromium), variable axis activation works and
-   each requested font-weight produces the correct rendered shape.
-   If your environment exhibits the bug, switch to per-weight
-   static WOFF2 files as a workaround — see the project history
-   for an example configuration.
+   A weight with no file here is not an error in CSS: the browser
+   draws the nearest weight, or thickens it artificially.
+   tests/test_font_faces.js fails when any text on either document
+   asks for a weight or Newsreader size that has no file. Adding one
+   means a new line in build/make_static_fonts.py, running it, and a
+   rule below.
+
+   No `local()` sources: an installed copy of either family would
+   otherwise stand in for these files on one machine and not another.
 
    Paths are relative to dist/styles.css (Sass compiles into
    dist/), so ../fonts/* resolves to fonts/* at the
@@ -46,15 +61,63 @@
 @font-face {
   font-family: 'Manrope';
   font-style: normal;
-  font-weight: 200 800;
+  font-weight: 350;
   font-display: block;
-  src: url('../fonts/Manrope.woff2') format('woff2-variations');
+  src: url('../fonts/Manrope-350.woff2') format('woff2');
 }
 
 @font-face {
-  font-family: 'Newsreader';
+  font-family: 'Manrope';
   font-style: normal;
-  font-weight: 200 800;
+  font-weight: 400;
   font-display: block;
-  src: url('../fonts/Newsreader.woff2') format('woff2-variations');
+  src: url('../fonts/Manrope-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('../fonts/Manrope-500.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../fonts/Manrope-600.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Manrope Tracked';
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url('../fonts/Manrope-500-tracked0.1.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Newsreader opsz40';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../fonts/Newsreader-600-opsz40.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Newsreader opsz18.67';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../fonts/Newsreader-700-opsz18.67.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Newsreader opsz13.33';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../fonts/Newsreader-600-opsz13.33.woff2') format('woff2');
 }
