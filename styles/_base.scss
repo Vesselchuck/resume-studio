@@ -24,7 +24,21 @@ body {
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--surface-app);
-  font-feature-settings: "kern", "liga";
+  /* LIGATURES OFF. Manrope and Newsreader both ligate fi, fl, ff, ffl
+     (and Manrope tt) through `liga`. Chromium's PDF gives some of those
+     ligature glyphs no ToUnicode entry, and writes no ActualText for
+     them, so text extraction loses them: pypdf read "Mattis" as "Mais"
+     and "efficitur" as "eicitur", and on the author's own resume lost
+     14 of 15 such words (pdfplumber 5). With "liga" 0 all four
+     extractors tested (pypdf, pdfplumber, pdftotext, pdfium) read every
+     one. The layout does not move — the solved placement is
+     byte-identical — but the glyphs do, which is a fixture re-baseline.
+
+     It must be switched off HERE. font-variant-ligatures: none does
+     nothing while this property names "liga": font-feature-settings is
+     applied after the font-variant-* properties and wins (CSS Fonts 4,
+     feature precedence).                                              */
+  font-feature-settings: "kern", "liga" 0;
 }
 
 ul, ol { list-style: none; }
@@ -47,9 +61,9 @@ strong { font-weight: 600; }
    cleanly, the wrapper-span technique (text in <span> child of
    styled parent) appears to nudge Chromium to emit Tc (character
    spacing) instead of per-letter positioning operators — provided
-   letter-spacing stays at or below ~0.10em. Above that, the role
-   label remains broken in extraction. Tradeoff documented at
-   .name-role.
+   letter-spacing stays at or below ~0.10em. Above that the words
+   come apart: at 0.15em pdftotext and pdfium both read the role as
+   "I M P E R AT O R …". Hence --ls-wide at .name-role.
 
    letter-spacing/text-transform overrides are essential — without
    them the hidden text would inherit tracking and uppercase from

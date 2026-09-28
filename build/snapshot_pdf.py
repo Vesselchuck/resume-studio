@@ -275,8 +275,11 @@ PIXEL_RGB_TOLERANCE = 4         # 0–255 per channel
 MAX_DIFF_FRACTION = 0.001       # 0.1% of pixels
 
 
-def render_pdf_pages(pdfium, path: Path, prepare=None, only=None) -> list:
+def render_pdf_pages(pdfium, path, prepare=None, only=None) -> list:
     """Rasterize all pages of a PDF to PIL Images at RENDER_DPI.
+
+    `path` is a file, or the PDF's bytes: the Studio's live preview hands
+    Chromium's print over in memory, never writing it to disk.
 
     `prepare`, when given, is called with each pypdfium2 page before it
     is rendered. The Studio's live preview passes
@@ -300,7 +303,7 @@ def render_pdf_pages(pdfium, path: Path, prepare=None, only=None) -> list:
     than deleted. It matters now that build/worker.py rasterizes
     throwaway preview PDFs it then removes.
     """
-    pdf = pdfium.PdfDocument(str(path))
+    pdf = pdfium.PdfDocument(path if isinstance(path, (bytes, bytearray)) else str(path))
     try:
         images = []
         for index in range(len(pdf)):

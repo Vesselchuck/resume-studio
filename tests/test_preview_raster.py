@@ -17,6 +17,8 @@ only acceptable if it never changes what is shown:
     to rendering every page.
   • The pixel hash is SHA-256 (cut to 128 bits); it only has to be a
     stable fingerprint.
+  • The PDF may arrive as bytes instead of a file (the live preview
+    writes none); everything above must come out the same.
 
 The same guarantees against real Chromium prints — an edit on page 1,
 an edit on page 2, an edit that adds a glyph — are checked in
@@ -230,15 +232,27 @@ class TestPageKeys(unittest.TestCase):
                    + table[a.start():a.end()] + table[b.end():])
         self.assertIsNone(_pdf_page_keys.page_keys(good[:at] + swapped))
 
-    def test_a_chromium_shaped_file_is_read(self):
-        """Classic xref, one section, Chromium's own spacing — see the JS
-        suite for real Chromium prints; this is the dist/ build if there is one."""
-        pdfs = sorted((ROOT / "dist").glob("*.pdf")) if (ROOT / "dist").is_dir() else []
-        if not pdfs:
-            self.skipTest("no built PDFs in dist/")
-        for pdf in pdfs:
-            with self.subTest(pdf.name):
-                self.assertIsNotNone(_pdf_page_keys.page_keys(pdf.read_bytes()))
+    def test_a_built_file_is_read(self):
+        """Real PDFs from the real build: both documents, built from the
+        templates in a throwaway copy of the project (tests/_project.py),
+        never this checkout's dist/. The raw Chromium prints the preview
+        keys are covered by tests/test_engine_equivalence.js."""
+        sys.path.insert(0, str(ROOT / "tests"))
+        from _project import Project, real_dist_fingerprint
+        before = real_dist_fingerprint()
+        project = Project("preview-raster-test")
+        try:
+            problem = project.build()
+            if problem:
+                self.skipTest(f"could not build a copy of the project ({problem})")
+            pdfs = sorted(project.dist.glob("*.pdf"))
+            self.assertEqual(len(pdfs), 2, [p.name for p in pdfs])
+            for pdf in pdfs:
+                with self.subTest(pdf.name):
+                    self.assertIsNotNone(_pdf_page_keys.page_keys(pdf.read_bytes()))
+        finally:
+            project.remove()
+        self.assertEqual(real_dist_fingerprint(), before, "this checkout's dist/ was written")
 
 
 # ── The worker's raster op ───────────────────────────────────────
@@ -296,6 +310,26 @@ class TestRasterSkipsOnlyUnchangedPages(unittest.TestCase):
             snapshot_pdf.SCALE = saved
         want = hashlib.sha256(f"RGB:{img.width}x{img.height}:".encode("ascii") + img.tobytes())
         self.assertEqual(r["images"][0]["hash"], want.hexdigest()[:32])
+
+    def test_bytes_render_like_the_file(self):
+        """The live preview sends the PDF's bytes (`data`) instead of a
+        path; the pages, hashes, PNGs and slot skipping must be those of
+        the file."""
+        data = make_pdf([PAGE1, PAGE2])
+        path = self._file("a.pdf", data)
+        b64 = base64.b64encode(data).decode("ascii")
+        for extra in ({}, {"crop": "letter"}):
+            by_file = self._raster(path, **extra)
+            by_bytes = self.worker.op_raster({"data": b64, "scale": 1.0, **extra})
+            self.assertEqual(by_bytes["pageCount"], by_file["pageCount"])
+            self.assertEqual(by_bytes["images"], by_file["images"], f"{extra}")
+
+        # With a slot: the second render of the same bytes renders nothing.
+        first = self.worker.op_raster({"data": b64, "scale": 1.0, "slot": self.slot})
+        again = self.worker.op_raster({"data": b64, "scale": 1.0, "slot": self.slot})
+        self.assertEqual(first["rendered"], 2)
+        self.assertEqual(again["rendered"], 0)
+        self._assert_matches_full_render(again, path)
 
     def test_sequence_of_edits(self):
         first = self._file("1.pdf", make_pdf([PAGE1, PAGE2]))

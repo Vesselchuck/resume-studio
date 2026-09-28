@@ -26,7 +26,7 @@
  * and how they reach Python.
  *
  * It also does not write the PDFs in dist/. Live previews render one
- * color PDF to a temp file and rasterize it. A real Build shells out
+ * color PDF in memory and rasterize it. A real Build shells out
  * to `node resume.js`, so the deliverables are only ever produced by
  * the path that also runs the unit tests and the snapshot diff. That
  * keeps exactly one blessed way to produce a PDF you would send to
@@ -86,17 +86,25 @@ if (require.main === module) require('./_compile_cache').enable();
 
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 
-const { createPipeline, disposeSass, warmUpSass } = require('./pipeline');
+const { createPipeline, disposeSass, warmUpSass, sassIsWarm } = require('./pipeline');
 const { detectPython } = require('./detect_python');
 const { ENV_RESUME_SPECULATIVE } = require('./_env_contract');
 const c = require('./_console');
 
 const FRAME_PREFIX = '\x1e';
 const WORKER = path.join(__dirname, 'worker.py');
+
+// How long the Studio window may stay hidden before Chromium is closed.
+// See "Releasing Chromium while hidden" in createEngine.
+const HIDDEN_RELEASE_MS = 5 * 60 * 1000;
+
+// The worker is not restarted after this many crashes within this long.
+// See PythonWorker.ensure.
+const MAX_CRASHES = 5;
+const CRASH_WINDOW_MS = 3 * 60 * 1000;
 
 // A real navigation at least this often, however many in-place loads
 // would otherwise follow one another. See renderPreview.
@@ -192,6 +200,12 @@ class PythonWorker {
     // the real build repeats a moment later, and whose failure is a
     // reason to fall back rather than something to show. See silently().
     this.silent = false;
+    // When each worker died unasked, newest last; see ensure(). `now` is
+    // the clock, replaceable so the tests need not wait three minutes.
+    this.crashes = [];
+    this.now = () => Date.now();
+    // The worker's last stderr lines, quoted when it stops restarting.
+    this.lastStderr = [];
   }
 
   /**
@@ -220,6 +234,13 @@ class PythonWorker {
     proc.stdout.setEncoding('utf-8');
     proc.stderr.setEncoding('utf-8');
 
+    // A death nobody asked for, counted once per process.
+    const recordCrash = () => {
+      if (this.stopping || this.proc !== proc || proc._studioCounted) return;
+      proc._studioCounted = true;
+      this.crashes.push(this.now());
+    };
+
     // Everything a dead process was asked and will never answer.
     const failPending = (err) => {
       for (const [id, waiter] of this.pending) {
@@ -233,6 +254,7 @@ class PythonWorker {
       this._resolveReady = resolve;
       proc.once('error', (err) => {
         proc._studioDead = true;
+        recordCrash();
         failPending(err);
         if (this._resolveReady && this.proc === proc) {
           this._resolveReady = null;
@@ -241,6 +263,7 @@ class PythonWorker {
       });
       proc.once('exit', (code, signal) => {
         proc._studioDead = true;
+        recordCrash();
         const err = new Error(
           `build/worker.py exited (${signal ? `signal ${signal}` : `code ${code}`})`);
         failPending(err);
@@ -249,7 +272,12 @@ class PythonWorker {
           reject(err);
         }
         if (!this.stopping && this.proc === proc) {
-          c.warn(`Python worker exited (${signal || code}); it restarts on the next request`);
+          const since = this.now() - CRASH_WINDOW_MS;
+          const recent = this.crashes.filter(t => t > since).length;
+          c.warn(recent >= MAX_CRASHES
+            ? `Python worker exited (${signal || code}); ${recent} crashes in `
+              + `${CRASH_WINDOW_MS / 60000} minutes, so it stays down until Re-render`
+            : `Python worker exited (${signal || code}); it restarts on the next request`);
         }
       });
     });
@@ -270,7 +298,9 @@ class PythonWorker {
     // arriving here is a hard crash (a traceback that escaped the
     // per-request handler), so surface it rather than swallowing it.
     proc.stderr.on('data', (chunk) => {
-      String(chunk).split('\n').filter(Boolean).forEach(line => c.detail(`[worker] ${line}`));
+      const lines = String(chunk).split('\n').filter(Boolean);
+      lines.forEach(line => c.detail(`[worker] ${line}`));
+      this.lastStderr = [...this.lastStderr, ...lines].slice(-6);
     });
 
     return this.ready.then((hello) => { this.hello = hello; return hello; });
@@ -280,6 +310,15 @@ class PythonWorker {
    * Start a fresh worker if the last one died. Lazy on purpose: a crash
    * is reported by the request it broke, and the next request brings the
    * worker back rather than a timer restarting something nobody needs.
+   *
+   * UP TO A POINT. A worker that crashes on the same input every time
+   * would otherwise be restarted on every save, each restart ~130 ms of
+   * imports, forever. After MAX_CRASHES crashes within CRASH_WINDOW_MS
+   * (four restarts) it stays down, and each request fails at once with
+   * the reason instead. VS Code's language client is the precedent: the
+   * same five-in-three-minutes on a sliding window, no backoff. Here a
+   * crash older than the window stops counting, and allowRestart() — the
+   * Re-render button — clears the count at once.
    */
   async ensure() {
     if (this.alive()) {
@@ -287,11 +326,29 @@ class PythonWorker {
       return;
     }
     if (this.stopping) throw new Error('build/worker.py has been stopped');
+    const since = this.now() - CRASH_WINDOW_MS;
+    this.crashes = this.crashes.filter(t => t > since);
+    if (!this._restarting && this.crashes.length >= MAX_CRASHES) {
+      const minutes = CRASH_WINDOW_MS / 60000;
+      const err = new Error(
+        `The Python worker crashed ${this.crashes.length} times in ${minutes} minutes `
+        + 'and is not being restarted. Fix what it tripped on (its output is in the log), '
+        + 'then choose Re-render.');
+      err.kind = 'worker_crashing';
+      // What the server forwards to the UI with the message.
+      err.failures = this.lastStderr.slice();
+      throw err;
+    }
     if (!this._restarting) {
       c.detail('(starting a new Python worker)');
       this._restarting = this.start().finally(() => { this._restarting = null; });
     }
     await this._restarting;
+  }
+
+  /** Forget past crashes, so the next request may start a worker. */
+  allowRestart() {
+    this.crashes = [];
   }
 
   _consume(chunk) {
@@ -436,10 +493,13 @@ class PythonWorker {
    * PNGs left out of the ones already delivered (marked `sent`). Without
    * it, nothing about the request or the reply changes.
    */
-  async raster({ pdfPath, scale, pages, known, crop, slot, order, onPage }) {
+  async raster({ pdfPath, pdfBytes, scale, pages, known, crop, slot, order, onPage }) {
     const streaming = typeof onPage === 'function';
     const frame = await this.run({
-      op: 'raster', path: pdfPath, scale, pages: pages || null, known: known || null,
+      op: 'raster',
+      // The PDF itself when the caller has it in memory, else its file.
+      ...(pdfBytes ? { data: pdfBytes.toString('base64') } : { path: pdfPath }),
+      scale, pages: pages || null, known: known || null,
       crop: crop || null, slot: slot || null,
       stream: streaming || undefined, order: streaming ? (order || null) : undefined,
     }, streaming ? (partial) => {
@@ -470,19 +530,41 @@ class PythonWorker {
  * @param {string}  opts.python — interpreter; detected when omitted
  * @param {boolean} opts.warm   — start everything a first preview needs
  *   right away and in parallel, instead of on first use: the Python
- *   worker, Chromium and the Sass compiler all boot at once. Studio sets
- *   it; a caller that only wants build() should not.
+ *   worker and Chromium boot at once, and the Sass compiler compiles
+ *   during boot only if the stylesheet is stale (else it starts right
+ *   after the first preview). Studio sets it; a caller that only wants
+ *   build() should not.
+ * @param {?number} opts.hiddenReleaseMs — how long the window may be
+ *   hidden before Chromium is closed (see "Releasing Chromium while
+ *   hidden"). Only the tests pass it.
+ * @param {?string} opts.platform — process.platform, unless a test needs
+ *   the Windows-only paths to run elsewhere.
  * @param {?boolean} opts.speculative — whether a preview may load the
  *   final HTML speculatively (see "Speculative final load"). Null, the
  *   default, follows RESUME_SPECULATIVE; a boolean overrides it. Only
  *   the tests pass it, to compare the two paths in one process.
  */
-async function createEngine({ root, python, warm = false, speculative = null } = {}) {
+async function createEngine({
+  root, python, warm = false, speculative = null, hiddenReleaseMs = HIDDEN_RELEASE_MS,
+  platform = process.platform,
+} = {}) {
   root = root || path.join(__dirname, '..');
   const interpreter = python || detectPython();
 
   const worker = new PythonWorker({ root, python: interpreter });
   const workerReady = worker.start();
+
+  // Declared before anything is launched. Chromium's launch below runs on
+  // its own and can finish before this function gets past `await
+  // workerReady` (a slow Python start); what the launch path touches —
+  // the queue, the disposed flag, the power-throttling result — must
+  // exist by then. Declared further down, it was in its temporal dead
+  // zone at that moment: the launch threw after Chromium was up, and the
+  // first render launched a second one, leaving the first running
+  // through dispose().
+  let chain = Promise.resolve();
+  let disposed = false;
+  let powerThrottling = null;
 
   // Chromium next, before anything else this function does.
   //
@@ -545,6 +627,9 @@ async function createEngine({ root, python, warm = false, speculative = null } =
     }
     const ctx = await browser.newContext();
     page = await ctx.newPage();
+    // A new Chromium is a new set of processes to opt out; see "Windows
+    // power throttling". Queued, so it runs after whatever launched it.
+    optOutOfPowerThrottling();
     return page;
   }
 
@@ -570,21 +655,17 @@ async function createEngine({ root, python, warm = false, speculative = null } =
     return specPagePromise;
   }
 
-  // The three are independent processes, so booting them side by side
-  // costs about as long as the slowest of them rather than their sum:
-  // Python was spawned first, Chromium's require and launch came next
-  // while Python boots, and Sass follows below while Chromium launches.
+  // The two are independent processes, so booting them side by side
+  // costs about as long as the slower of them rather than their sum:
+  // Python was spawned first, and Chromium's require and launch came
+  // next while Python boots.
   const hello = await workerReady;
 
-  // Sass last: its API is synchronous and holds this thread while it
-  // starts, so it waits until Python is up and Chromium's launch is
-  // under way — both keep starting in their own processes meanwhile.
-  // It compiles the stylesheet too, when it is stale, so the first
-  // preview does not have to.
-  if (warm) {
+  // Sass only when the first preview needs it: see "Deferred Sass
+  // warm-up" below.
+  if (warm && pipeline.stylesAreStale()) {
     try {
-      warmUpSass();
-      if (pipeline.stylesAreStale()) pipeline.compileSass();
+      pipeline.compileSass();
     } catch {
       // Already reported by compileSass; the first preview will try again.
     }
@@ -593,6 +674,166 @@ async function createEngine({ root, python, warm = false, speculative = null } =
   // The page images of each document's last preview, for skipping pages
   // that did not change. See renderPreview.
   const lastImages = { resume: null, letter: null };
+
+  /* ── Deferred Sass warm-up ─────────────────────────────────────
+   *
+   * Sass's API is synchronous: requiring sass-embedded and starting its
+   * compiler holds this thread for ~240 ms (Linux sandbox). Boot used
+   * to do that unconditionally, on the critical path. Deferred, with
+   * styles.css fresh, the engine is ready at 382 ms instead of 621 and
+   * the first preview arrives at 1017 ms instead of 1237 (n=15 each,
+   * interleaved). The first preview only needs Sass when styles.css is
+   * stale, and then boot still compiles it (above).
+   *
+   * Otherwise the compiler is started on the queue right after the
+   * first preview, so the first style edit of a session still finds it
+   * warm (~10 ms, not ~240). Queued rather than run from a timer: it
+   * blocks the thread, and on the queue it can only ever delay a render
+   * the way another render would. A disposed engine never starts it — a
+   * live compiler keeps Node from exiting.
+   */
+  let sassWarmQueued = !warm;
+
+  /* ── Releasing Chromium while hidden ───────────────────────────
+   *
+   * Chromium is two-thirds of what a warm engine holds: in a Linux
+   * sandbox the process tree drops from ~810 to ~270 MB when it is
+   * closed. While
+   * the Studio window is minimized or otherwise hidden nobody is looking
+   * at a preview, so after `hiddenReleaseMs` of that the browser is
+   * closed. The Python worker and Sass stay up: they are small and slow
+   * to start. The close runs on the queue, so never under a render in
+   * progress.
+   *
+   * When the window is shown again, a browser that was closed this way
+   * is relaunched straight away, so the next save does not pay for the
+   * launch. A render that arrives while it is closed launches it itself,
+   * as the first render of a cold engine does — and the Studio does
+   * render while hidden, on every save of a data file — so each render
+   * that finishes while the window is still hidden starts the delay
+   * again, and Chromium is closed again once the saves stop. Nothing about a render's
+   * result depends on which Chromium process produced it; the early
+   * cutoff's memo stays valid, and the first load after a relaunch is a
+   * real navigation because the new page has no history.
+   *
+   * The page reports visibility (document.visibilitychange) to the
+   * server, which calls setWindowHidden(). Covered-but-not-minimized is
+   * not reported by browsers as hidden, and is not treated as such.
+   */
+  let hiddenTimer = null;
+  let windowHidden = false;
+  let releasedWhileHidden = false;
+
+  /** (Re)start the delay before Chromium is closed. */
+  function armHiddenRelease() {
+    if (disposed) return;
+    if (hiddenTimer) clearTimeout(hiddenTimer);
+    hiddenTimer = setTimeout(() => {
+      hiddenTimer = null;
+      if (windowHidden) serial(releaseBrowser);
+    }, hiddenReleaseMs);
+    // A pending release must never keep the process alive on its own.
+    hiddenTimer.unref();
+  }
+
+  function setWindowHidden(hidden) {
+    if (disposed) return;
+    if (hidden !== windowHidden) {
+      const delay = hiddenReleaseMs >= 60000
+        ? `${Math.round(hiddenReleaseMs / 60000)} minutes` : `${hiddenReleaseMs} ms`;
+      c.detail(hidden
+        ? `(window hidden: Chromium closes after ${delay} hidden)`
+        : '(window shown)');
+    }
+    windowHidden = hidden;
+    if (hidden) {
+      if (!hiddenTimer) armHiddenRelease();
+      return;
+    }
+    if (hiddenTimer) {
+      clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
+    if (releasedWhileHidden) {
+      releasedWhileHidden = false;
+      browserPage().catch(() => { /* reported again by the next render */ });
+    }
+  }
+
+  async function releaseBrowser() {
+    if (disposed || (!browser && !pagePromise)) return;
+    if (pagePromise) {
+      try { await pagePromise; } catch { /* never launched */ }
+    }
+    if (specPagePromise) {
+      try { await specPagePromise; } catch { /* never opened */ }
+      specPagePromise = null;
+    }
+    if (browser) {
+      try { await browser.close(); } catch { /* already gone */ }
+    }
+    browser = null;
+    page = null;
+    pagePromise = null;
+    for (const n of [nav, specNav]) {
+      n.assets = null;
+      n.sinceGoto = 0;
+    }
+    releasedWhileHidden = true;
+    c.detail('(closed Chromium while the window is hidden; it starts again when the window is shown)');
+  }
+
+  let firstPreviewDone = false;
+  function afterFirstPreview() {
+    if (firstPreviewDone) return;
+    firstPreviewDone = true;
+    if (!sassWarmQueued) {
+      sassWarmQueued = true;
+      serial(async () => {
+        if (disposed) return;
+        try {
+          warmUpSass();
+        } catch {
+          // The next compile starts it, and reports what went wrong.
+        }
+      });
+    }
+    // Chromium's renderers and the Sass compiler exist now; see below.
+    optOutOfPowerThrottling();
+  }
+
+  /* ── Windows power throttling ──────────────────────────────────
+   *
+   * Windows gives the Studio's processes the QoS of its window, which is
+   * usually unfocused and may be covered or minimized — and on battery
+   * the lowest level confines work to efficiency cores. The worker opts
+   * this process and every process below it (Python, Chromium's, Sass's)
+   * out of that; see build/_power.py for what exactly and why.
+   *
+   * Chromium starts renderers of its own, so the walk is repeated after
+   * each Chromium launch and after the first preview. On the queue,
+   * because it uses the worker; silently, because it is housekeeping.
+   * Anywhere but Windows this is never sent at all. The last result is
+   * in status().powerThrottling, which is how it can be checked.
+   *
+   * Never to a worker that is not running: housekeeping must not restart
+   * a crashed worker. That is the next real request's job, and a restart
+   * made here would also spend one of the crashes PythonWorker.ensure
+   * allows before it stops restarting.
+   */
+  function optOutOfPowerThrottling() {
+    if (platform !== 'win32' || disposed) return;
+    serial(async () => {
+      if (disposed || !worker.alive()) return;
+      try {
+        const frame = await worker.silently(
+          () => worker.run({ op: 'power_throttling', root: process.pid }));
+        powerThrottling = frame.result;
+      } catch (err) {
+        powerThrottling = { supported: false, applied: [], failed: [], reason: err.message };
+      }
+    }).catch(() => {});
+  }
 
   /* ── Early cutoff ──────────────────────────────────────────────
    *
@@ -828,7 +1069,7 @@ async function createEngine({ root, python, warm = false, speculative = null } =
   // One page, one placement file: overlapping renders would interleave
   // on both. Serialize every operation through this chain so a burst of
   // keystrokes queues instead of corrupting a render in flight.
-  let chain = Promise.resolve();
+  // `chain` is declared at the top of createEngine; see there.
   function serial(fn) {
     const run = chain.then(fn, fn);
     chain = run.then(() => {}, () => {});
@@ -843,6 +1084,9 @@ async function createEngine({ root, python, warm = false, speculative = null } =
    * @param {number}  opts.scale      — raster scale; 2.0 ≈ 144 dpi
    * @param {?number[]} opts.pages    — 1-based page numbers, or null for all
    * @param {boolean} opts.recompileStyles — force a Sass rebuild
+   * @param {boolean} opts.retry — the user asked for this render (the
+   *   Re-render button): a Python worker that stopped restarting after
+   *   repeated crashes is allowed to start again. See PythonWorker.ensure.
    * @param {?object} opts.env — env overrides for the Python build,
    *   e.g. { RESUME_DATA_SOURCE: 'default' }; a null value unsets one
    * @param {?function} opts.onPage — called with each page image as the
@@ -863,10 +1107,11 @@ async function createEngine({ root, python, warm = false, speculative = null } =
    *   returned page carries a PNG.
    */
   function renderPreview(opts = {}) {
-    return serial(async () => {
+    const run = serial(async () => {
       const doc = opts.doc === 'letter' ? 'letter' : 'resume';
       const pl = pipelines[doc];
       const started = Date.now();
+      if (opts.retry) worker.allowRestart();
       const timings = {};
       const mark = (name, t0) => { timings[name] = Date.now() - t0; };
       const scale = opts.scale || 2.0;
@@ -1026,10 +1271,10 @@ async function createEngine({ root, python, warm = false, speculative = null } =
       // Chromium's print as it comes, uncropped: the worker crops it in
       // memory with crop_pdf's own geometry while rasterizing, which is
       // pixel for pixel what rasterizing crop_pdf.py's output gives. See
-      // printPreviewPdf in build/pipeline.js.
-      const tmpPdf = path.join(os.tmpdir(), `studio-preview-${doc}-${process.pid}.pdf`);
+      // printPreviewPdf in build/pipeline.js. The bytes go to the worker
+      // directly; nothing is written to disk.
       t = Date.now();
-      await pl.printPreviewPdf(printFrom, tmpPdf);
+      const pdfBytes = await pl.printPreviewPdf(printFrom);
       mark('print', t);
 
       // Pages whose pixels did not change since this document's last
@@ -1075,29 +1320,15 @@ async function createEngine({ root, python, warm = false, speculative = null } =
       const wantsStream = typeof opts.onPage === 'function';
 
       t = Date.now();
-      let raster;
-      try {
-        raster = await worker.raster({
-          pdfPath: tmpPdf, scale, pages: opts.pages, known, crop: 'letter', slot: doc,
-          order: opts.order,
-          onPage: wantsStream ? (im) => {
-            const done = settle(im);
-            streamed.set(done.page, done);
-            opts.onPage(done);
-          } : undefined,
-        });
-      } finally {
-        // Best-effort. On Windows a rasterizer that still holds the file
-        // open makes this throw EBUSY, and losing a preview because a
-        // scratch file outlived it would be absurd. build/snapshot_pdf.py
-        // closes its PdfDocument, which removes the usual cause; this
-        // stays as the belt to that suspenders.
-        try {
-          fs.rmSync(tmpPdf, { force: true });
-        } catch (err) {
-          c.detail(`(could not remove the preview scratch file: ${err.code || err.message})`);
-        }
-      }
+      const raster = await worker.raster({
+        pdfBytes, scale, pages: opts.pages, known, crop: 'letter', slot: doc,
+        order: opts.order,
+        onPage: wantsStream ? (im) => {
+          const done = settle(im);
+          streamed.set(done.page, done);
+          opts.onPage(done);
+        } : undefined,
+      });
       if (typeof raster.rendered === 'number') timings.renderedPages = raster.rendered;
       if (raster.streamed) timings.streamedPages = streamed.size;
       // A page that was streamed is already settled and already carries
@@ -1139,6 +1370,15 @@ async function createEngine({ root, python, warm = false, speculative = null } =
         totalMs: Date.now() - started,
       };
     });
+    const after = () => {
+      afterFirstPreview();
+      // A save while the window is hidden renders, and may have
+      // relaunched Chromium: start the delay again. See "Releasing
+      // Chromium while hidden".
+      if (windowHidden && (browser || pagePromise)) armHiddenRelease();
+    };
+    run.then(after, after);
+    return run;
   }
 
   /**
@@ -1247,6 +1487,11 @@ async function createEngine({ root, python, warm = false, speculative = null } =
   }
 
   async function dispose() {
+    disposed = true;
+    if (hiddenTimer) {
+      clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
     if (buildChild) {
       try { buildChild.kill(); } catch { /* already gone */ }
       buildChild = null;
@@ -1283,6 +1528,7 @@ async function createEngine({ root, python, warm = false, speculative = null } =
     // Run fn on the same queue as previews and builds, for work that
     // reads what they write (dist/'s metadata, the shared worker).
     exclusive: serial,
+    setWindowHidden,
     dispose,
     status: () => ({
       root,
@@ -1290,6 +1536,13 @@ async function createEngine({ root, python, warm = false, speculative = null } =
       // The live worker's handshake: its pid changes after a restart.
       worker: worker.hello || hello,
       browserOpen: Boolean(page),
+      sassWarm: sassIsWarm(),
+      // Whether the window last reported itself hidden (see "Releasing
+      // Chromium while hidden").
+      windowHidden,
+      // Windows only: the last power-throttling opt-out, {supported,
+      // applied: [pids], failed: [{pid, error}]}; null until one has run.
+      powerThrottling,
       stylesStale: pipeline.stylesAreStale(),
     }),
   };
@@ -1317,7 +1570,7 @@ async function serve() {
   const ops = {
     preview: (req) => engine.renderPreview({
       doc: req.doc, scale: req.scale, pages: req.pages,
-      recompileStyles: req.recompileStyles, env: req.env,
+      recompileStyles: req.recompileStyles, env: req.env, retry: req.retry,
     }),
     build: (req) => engine.build({ script: req.script, env: req.env }),
     status: async () => engine.status(),

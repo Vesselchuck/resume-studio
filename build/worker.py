@@ -56,9 +56,11 @@ Operations
   build_letter-> {env} ........... the single-page cover letter; env as
                                    for build, e.g. {"LETTER_DATA_FILE": ...}
   crop        -> {input, output, meta}
-  raster      -> {path, scale, pages, known, crop, slot} -> base64 PNGs;
+  raster      -> {path | data, scale, pages, known, crop, slot} -> base64 PNGs;
                  see op_raster
   compare     -> {a, b, scale} -> per-page pixel-diff verdicts
+  power_throttling -> {root} -> opt that pid's process tree out of
+                 Windows power throttling; see build/_power.py
   shutdown    -> {} .............. exits 0
 
 Errors never kill the worker. A malformed YAML file, a missing data
@@ -96,6 +98,7 @@ import crop_pdf as crop_mod          # noqa: E402
 import _console as c                 # noqa: E402
 import _pdf_page_keys as _page_keys  # noqa: E402
 import _png                          # noqa: E402
+import _power                        # noqa: E402
 
 PROTOCOL_VERSION = 1
 
@@ -365,8 +368,10 @@ def _slot_keys(data, scale, crop):
     return [hashlib.sha256(signature + b"|" + k.encode("ascii")).hexdigest() for k in keys]
 
 
-def _rasterize(path, scale, crop, only):
+def _rasterize(source, scale, crop, only):
     """snapshot_pdf.render_pdf_pages at `scale`, with the crop applied.
+
+    `source` is a file's Path or the PDF's bytes (see op_raster).
 
     crop='letter' is the live preview: Chromium's raw print, cropped to
     US Letter in memory by crop_pdf's own geometry. Everything else
@@ -386,19 +391,20 @@ def _rasterize(path, scale, crop, only):
     snapshot_pdf.SCALE = scale
     try:
         try:
-            return snapshot_pdf.render_pdf_pages(pdfium, path, prepare, only)
+            return snapshot_pdf.render_pdf_pages(pdfium, source, prepare, only)
         except crop_mod.NoOwnMediaBox:
-            return _rasterize_file_cropped(pdfium, snapshot_pdf, path, only)
+            return _rasterize_file_cropped(pdfium, snapshot_pdf, source, only)
     finally:
         snapshot_pdf.SCALE = saved_scale
 
 
-def _rasterize_file_cropped(pdfium, snapshot_pdf, path, only):
+def _rasterize_file_cropped(pdfium, snapshot_pdf, source, only):
     import tempfile
     from pypdf import PdfReader, PdfWriter
 
     writer = PdfWriter()
-    crop_mod.crop_pages(PdfReader(str(path)), writer)
+    crop_mod.crop_pages(PdfReader(io.BytesIO(source) if isinstance(source, bytes) else str(source)),
+                        writer)
     fd, tmp = tempfile.mkstemp(suffix=".pdf", prefix="studio-crop-")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -473,7 +479,7 @@ def _priority_order(page_count, wanted, order):
     return first + [i for i in pages if i not in seen]
 
 
-def _raster_streamed(req, path, scale, crop, keys, previous, known, wanted, slot):
+def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, slot):
     """op_raster, one page at a time, most wanted first.
 
     Same pages, same pixels, same hashes as the one-reply path — the
@@ -500,7 +506,7 @@ def _raster_streamed(req, path, scale, crop, keys, previous, known, wanted, slot
     # there are. This asks pdfium first — rendering nothing, which only
     # opens the document — and hands the whole request back to that path
     # if the count differs. Nothing is streamed before this is settled.
-    if len(_rasterize(path, scale, crop, set())) != page_count:
+    if len(_rasterize(source, scale, crop, set())) != page_count:
         return None
 
     out = []
@@ -547,7 +553,7 @@ def _raster_streamed(req, path, scale, crop, keys, previous, known, wanted, slot
                 entry = None  # the caller needs a PNG this slot never encoded
             img = None
             if entry is None:
-                img = _rasterize(path, scale, crop, {idx})[idx]
+                img = _rasterize(source, scale, crop, {idx})[idx]
                 rendered += 1
             item, cached = _item_for(idx, img, entry, keys, previous)
             future = pool.submit(_encode_png, img) if _fill_png(item, cached, known, idx) else None
@@ -579,7 +585,12 @@ def op_raster(req):
     regression test uses, so what the preview shows and what the test
     compares come from one code path.
 
-    Request fields besides `path` and `scale`:
+    The PDF is `path`, a file, or `data`, its bytes in base64. The live
+    preview sends `data`: Chromium's print never touches the disk, which
+    on Windows saves a file create, close and delete per render, and
+    whatever real-time scanning does with a new PDF each time.
+
+    Request fields besides the PDF and `scale`:
       pages  — 1-based page numbers to return, or null for all
       known  — {"<page>": "<hash>"} of images the caller already holds;
                a page whose pixels hash the same comes back without a
@@ -595,9 +606,14 @@ def op_raster(req):
     and snapshot work, and a worker used purely for building should not
     fail to start because they are missing.
     """
-    path = Path(req["path"])
-    if not path.exists():
-        raise FileNotFoundError(f"no PDF at {path}")
+    if req.get("data") is not None:
+        source = base64.b64decode(req["data"])
+        pdf_bytes = source
+    else:
+        source = Path(req["path"])
+        if not source.exists():
+            raise FileNotFoundError(f"no PDF at {source}")
+        pdf_bytes = None
 
     scale = float(req.get("scale") or 2.0)
     crop = req.get("crop") or None
@@ -613,7 +629,8 @@ def op_raster(req):
     keys = None
     previous = {}
     if slot is not None:
-        keys = _slot_keys(path.read_bytes(), scale, crop)
+        keys = _slot_keys(pdf_bytes if pdf_bytes is not None else source.read_bytes(),
+                          scale, crop)
         previous = _RENDERED.get(slot) or {}
         # Forget the slot until this render has finished, so a failure
         # halfway can never leave it describing a mix of two prints.
@@ -636,7 +653,7 @@ def op_raster(req):
     # path below, which is also what every caller that does not ask for
     # streaming gets.
     if req.get("stream") and keys is not None and req.get("id") is not None:
-        streamed = _raster_streamed(req, path, scale, crop, keys, previous,
+        streamed = _raster_streamed(req, source, scale, crop, keys, previous,
                                     known, wanted, slot)
         # None: the keys do not describe this file after all. Nothing was
         # sent, so the one-reply path below answers it in full.
@@ -653,13 +670,13 @@ def op_raster(req):
     else:
         only = None if not wanted else {p - 1 for p in wanted}
 
-    images = _rasterize(path, scale, crop, only)
+    images = _rasterize(source, scale, crop, only)
     if keys is not None and len(images) != len(keys):
         # The key reader and pdfium disagree about the page count: trust
         # neither the keys nor the partial render, and render everything.
         keys = None
         page_count = None
-        images = _rasterize(path, scale, crop, None)
+        images = _rasterize(source, scale, crop, None)
 
     out = []
     to_encode = []
@@ -671,7 +688,7 @@ def op_raster(req):
         if img is None and entry is None:
             # Not rendered and nothing to stand in for it: cannot happen
             # unless the file changed under us. Render it now.
-            img = _rasterize(path, scale, crop, {idx})[idx]
+            img = _rasterize(source, scale, crop, {idx})[idx]
         item, cached = _item_for(idx, img, entry, keys, previous)
         if _fill_png(item, cached, known, idx):
             to_encode.append((item, cached, img))
@@ -772,6 +789,15 @@ def op_compare(req):
     }
 
 
+def op_power_throttling(req):
+    """Opt a process and its descendants out of Windows power throttling.
+
+    `root` is the pid to start from (the engine sends the Node server's).
+    A no-op that says so off Windows. See build/_power.py.
+    """
+    return _power.opt_out_tree(req["root"])
+
+
 def op_shutdown(_req):
     return {"bye": True}
 
@@ -783,6 +809,7 @@ OPS = {
     "crop": op_crop,
     "raster": op_raster,
     "compare": op_compare,
+    "power_throttling": op_power_throttling,
     "shutdown": op_shutdown,
 }
 

@@ -1220,7 +1220,10 @@ details[open]>summary::before{content:"▾"}
     var m = docMeta(id);
     if (!m) return;
     if (state.busy.resume || state.busy.letter) {
-      pendingPreview = { id: id, fromChange: Boolean(opts.fromChange) };
+      pendingPreview = {
+        id: id, fromChange: Boolean(opts.fromChange),
+        retry: Boolean(opts.retry) || Boolean(pendingPreview && pendingPreview.retry),
+      };
       return;
     }
     // Which pages are on screen, asked before the canvas is rebuilt for
@@ -1237,6 +1240,9 @@ details[open]>summary::before{content:"▾"}
       var r = await api('POST', '/api/preview', {
         doc: id, scale: 2, known: held.known,
         stream: true, renderId: rid, order: order,
+        // Only a render the user asked for: it may restart a Python
+        // worker that stopped restarting after repeated crashes.
+        retry: Boolean(opts.retry),
       });
       var missing = false;
       var arrived = (streamRender[id] && streamRender[id].id === rid)
@@ -1286,9 +1292,9 @@ details[open]>summary::before{content:"▾"}
       if (state.paused) return;
       var m = docMeta(state.active);
       if (!m || !m.live) return;
-      preview(null, { fromChange: true });
+      preview(null, { fromChange: true, retry: next.retry });
     } else {
-      preview(next.id);
+      preview(next.id, { retry: next.retry });
     }
   }
 
@@ -1432,7 +1438,7 @@ details[open]>summary::before{content:"▾"}
       state.paused ? 'saving a file will not re-render' : 'watching data/ and styles/');
   });
 
-  $('menuRefresh').addEventListener('click', function () { preview(); });
+  $('menuRefresh').addEventListener('click', function () { preview(null, { retry: true }); });
   async function reveal(target) {
     try {
       var r = await api('POST', '/api/reveal', { path: target });
@@ -1443,6 +1449,17 @@ details[open]>summary::before{content:"▾"}
   }
 
   $('menuOpenDist').addEventListener('click', function () { reveal('dist'); });
+
+  // Tell the server when this page is hidden (the window minimized) or
+  // shown again: after five minutes hidden it closes Chromium, and it
+  // relaunches it as soon as the page is visible. Best effort — a lost
+  // report only means Chromium stays open. In a browser (`npm run ui`)
+  // this is the report. In the desktop app WebView2 never fires it on
+  // minimize, so the Tauri shell sends the same report itself (main.rs,
+  // note_minimized); a report twice over is harmless.
+  document.addEventListener('visibilitychange', function () {
+    api('POST', '/api/visibility', { hidden: document.hidden }).catch(function () {});
+  });
 
   /* ─── data-file dialog ─────────────────────────────────────── */
 

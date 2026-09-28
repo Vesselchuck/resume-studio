@@ -116,7 +116,11 @@ const STEPS = [
   ['the first render', null, null],
   ['a bullet on page 1', f => edit(f, 'Phasellus scelerisque magna', 'Phasellus scelerisque magnum'), 'used'],
   ['a bullet on page 2', f => edit(f, 'Sed finibus accumsan', 'Sed finibus accumsam'), 'used'],
-  ['a new glyph', f => edit(f, 'Aliquam mattis', 'Aliquam Žmattis'), 'used'],
+  // A glyph the fonts have not drawn yet, swapped in for a letter rather
+  // than inserted: 'used' needs the placement to stay put, and with
+  // ligatures off (styles/_base.scss) this line has no room for one more
+  // character — inserting it wraps the bullet and moves the layout.
+  ['a new glyph', f => edit(f, 'Aliquam mattis', 'Aliquam Žattis'), 'used'],
   ['a comment-only save', f => edit(f, '    jobs:\n', '    jobs:\n      # a comment only\n'), null],
   ['an identical save', f => fs.writeFileSync(f, fs.readFileSync(f)), null],
   ['a whole new job', f => edit(f, '\n      - id: nulla', NEW_JOB), 'missed'],

@@ -38,15 +38,18 @@ Not covered here
   color on a non-tty). Artifacts are the contract; log formatting is
   not.
 
-Skips cleanly when dist/ has not been built yet — build.py requires a
-compiled dist/styles.css, and final mode requires dist/placement.json.
-Build once in the Studio (or run `node resume.js`) first. A stylesheet
-that is merely older than an edited .scss file is recompiled here, the
-same way the Studio does, rather than failing every build test.
+ISOLATION
+  Everything runs in a throwaway copy of the project (tests/_project.py),
+  built once from the shipped templates by the real `node resume.js` and
+  `node letter.js`. So there is always a compiled stylesheet, a placement
+  solved for the data being built, and a built PDF — nothing here skips
+  for want of a build, or for a placement solved for other data — and
+  this checkout's dist/ is fingerprinted before and after, and must be
+  untouched. The copy's worker is started from the copy: worker.py finds
+  the project from its own location.
 
-Final-mode tests also skip when dist/placement.json was solved for a
-different data source than the one currently resolving, since nothing
-in a Python-only suite can re-solve a layout.
+  The suite skips as a whole only when the copy cannot be built (no
+  Node, no Chromium), and says why.
 """
 
 import json
@@ -62,65 +65,52 @@ ROOT = Path(__file__).parent.parent
 BUILD_DIR = ROOT / "build"
 
 sys.path.insert(0, str(BUILD_DIR))
-import _output_name  # noqa: E402  (what the last build called its PDFs)
-DIST = ROOT / "dist"
-
-WORKER = BUILD_DIR / "worker.py"
-BUILD_PY = BUILD_DIR / "build.py"
-CROP_PY = BUILD_DIR / "crop_pdf.py"
-
-STYLES_CSS = DIST / "styles.css"
-PLACEMENT = DIST / "placement.json"
-PDF_META = DIST / "pdf_meta.json"
-
-# The built color PDF, whatever the last build called it. Outputs are
-# named after you now (Gaius_Caesar_Resume.pdf), so this cannot be a
-# literal — and a literal that no longer matches would not fail, it
-# would make test_crop_matches_cli skip forever while still printing a
-# reason that sounds like an ordinary "nothing built yet". Hence the
-# lookup, and hence the skip message below quoting the resolved name.
-BUILT_PDF = _output_name.output_pdf(DIST, _output_name.stem_from_meta(PDF_META, 'resume'))
-
-# The three files a build writes. Compared after every build op.
-BUILD_ARTIFACTS = (DIST / "index.html", PDF_META, DIST / "favicon.svg")
+sys.path.insert(0, str(ROOT / "tests"))
+import _output_name  # noqa: E402  (what the build called its PDFs)
+from _project import Project, real_dist_fingerprint  # noqa: E402
 
 FRAME_PREFIX = "\x1e"
 TIMEOUT = 120  # generous: a cold import of pypdfium2 on a slow CI box
 
-
-def _have_dist():
-    return STYLES_CSS.exists()
-
-
-def _stylesheet_is_stale():
-    """True when a .scss source is newer than dist/styles.css.
-
-    build.py refuses to build against a stale stylesheet, so after any
-    edit under styles/ every build test here would fail until something
-    recompiled it. Mirrors build.py's check, tolerance included.
-    """
-    css_mtime = STYLES_CSS.stat().st_mtime
-    return any(p.stat().st_mtime - css_mtime > 2.0
-               for p in (ROOT / "styles").glob("*.scss"))
+# Set by setUpModule: the built copy, and the paths inside it.
+PROJECT = None
+DIST = BUILD_PY = CROP_PY = STYLES_CSS = PLACEMENT = PDF_META = BUILT_PDF = None
+BUILD_ARTIFACTS = ()
+_REAL_DIST = None
 
 
-def _recompile_stylesheet():
-    """Compile styles/ → dist/styles.css with the pipeline's own compileSass.
+def setUpModule():
+    global PROJECT, DIST, BUILD_PY, CROP_PY, STYLES_CSS, PLACEMENT, PDF_META
+    global BUILT_PDF, BUILD_ARTIFACTS, _REAL_DIST
+    _REAL_DIST = real_dist_fingerprint()
+    PROJECT = Project("worker-equivalence-test")
+    problem = PROJECT.build()
+    if problem:
+        PROJECT.remove()
+        PROJECT = None
+        raise unittest.SkipTest(f"could not build a copy of the project to test against ({problem})")
+    root = PROJECT.root
+    DIST = root / "dist"
+    BUILD_PY = root / "build" / "build.py"
+    CROP_PY = root / "build" / "crop_pdf.py"
+    STYLES_CSS = DIST / "styles.css"
+    PLACEMENT = DIST / "placement.json"
+    PDF_META = DIST / "pdf_meta.json"
+    # The built color PDF, whatever the build called it: outputs are named
+    # after the person in the data, so this is looked up, not spelled out.
+    BUILT_PDF = _output_name.output_pdf(DIST, _output_name.stem_from_meta(PDF_META, "resume"))
+    # The three files a build writes. Compared after every build op.
+    BUILD_ARTIFACTS = (DIST / "index.html", PDF_META, DIST / "favicon.svg")
 
-    Returns an explanation when it could not, None when it did.
-    """
-    node = shutil.which("node")
-    if not node:
-        return "node not found"
-    script = ("require('./build/pipeline')"
-              ".createPipeline({ root: process.cwd(), python: null })"
-              ".compileSass()")
-    result = subprocess.run([node, "-e", script], cwd=str(ROOT),
-                            capture_output=True, text=True, encoding="utf-8",
-                            timeout=TIMEOUT)
-    if result.returncode != 0:
-        return (result.stderr or result.stdout).strip().splitlines()[-1:] or ["failed"]
-    return None
+
+def tearDownModule():
+    if PROJECT is not None:
+        PROJECT.remove()
+    # Raised here, a difference shows up as an error in the run.
+    assert (ROOT / "node_modules").is_dir() or not (ROOT / "package.json").exists(), \
+        "removing the copy removed this checkout's node_modules"
+    assert real_dist_fingerprint() == _REAL_DIST, \
+        "this checkout's dist/ was written during the suite"
 
 
 class Worker:
@@ -130,11 +120,14 @@ class Worker:
     the outside, so it does not share any code with the Node client.
     """
 
-    def __init__(self, root=ROOT):
+    def __init__(self, root=None):
+        root = root or PROJECT.root
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("RESUME_DATA_FILE", "LETTER_DATA_FILE", "RESUME_DATA_SOURCE")}
         self.proc = subprocess.Popen(
             [sys.executable, "-B", str(Path(root) / "build" / "worker.py")],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", bufsize=1, cwd=str(root),
+            text=True, encoding="utf-8", bufsize=1, cwd=str(root), env=env,
         )
         self.hello = self._read_frame()
 
@@ -167,11 +160,13 @@ class Worker:
 
 
 def run_cold(args):
-    """Run a CLI entry point exactly as resume.js runs it."""
+    """Run a CLI entry point exactly as resume.js runs it, in the copy."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("RESUME_DATA_FILE", "LETTER_DATA_FILE", "RESUME_DATA_SOURCE")}
     return subprocess.run(
         [sys.executable, "-B", *args],
-        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
-        timeout=TIMEOUT,
+        cwd=str(PROJECT.root), capture_output=True, text=True, encoding="utf-8",
+        timeout=TIMEOUT, env=env,
     )
 
 
@@ -180,29 +175,8 @@ def snapshot(paths):
     return {p: (p.read_bytes() if p.exists() else None) for p in paths}
 
 
-@unittest.skipUnless(_have_dist(), "dist/ not built — run `node resume.js` first")
 class WorkerEquivalenceTest(unittest.TestCase):
     """Warm worker output vs cold CLI output, byte for byte."""
-
-    @classmethod
-    def setUpClass(cls):
-        if _stylesheet_is_stale():
-            problem = _recompile_stylesheet()
-            if problem:
-                raise unittest.SkipTest(
-                    "dist/styles.css is older than styles/ and could not be "
-                    f"recompiled ({problem}) — build once in the Studio first")
-        # Both paths write into the real dist/. Preserve whatever was
-        # there so a test run never costs the developer their build.
-        cls._restore = snapshot(BUILD_ARTIFACTS)
-
-    @classmethod
-    def tearDownClass(cls):
-        for path, data in cls._restore.items():
-            if data is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(data)
 
     def setUp(self):
         self.worker = Worker()
@@ -215,34 +189,19 @@ class WorkerEquivalenceTest(unittest.TestCase):
         self.assertTrue(self.worker.hello["ok"])
         self.assertEqual(self.worker.hello["op"], "hello")
         self.assertEqual(self.worker.hello["result"]["protocol"], 1)
-        self.assertEqual(Path(self.worker.hello["result"]["root"]), ROOT)
+        self.assertEqual(Path(self.worker.hello["result"]["root"]).resolve(),
+                         PROJECT.root.resolve())
 
     # -- build -------------------------------------------------------
 
     # A cold 'final' build consumes dist/placement.json, which the solver
-    # wrote for one specific set of job and sidebar ids. Nothing in this
-    # suite can produce a placement — solving needs Node, Playwright and
-    # a browser — so the one on disk is ambient state, and it matches the
-    # current data only if the last thing to run a full build used the
-    # same data source. Switching between resume.yml and
-    # resume_default.yml, or editing job ids, leaves it stale.
-    #
-    # A stale placement makes the template raise on the missing id. That
-    # is correct behavior and says nothing about warm-versus-cold
-    # equivalence, so it skips rather than fails — an earlier version
-    # failed here and reported a template traceback as if the worker
-    # were at fault.
-    _STALE_PLACEMENT_MARKERS = ("UndefinedError", "has no attribute")
+    # wrote for one specific set of job and sidebar ids. The copy's was
+    # solved by its own build of the same templates a moment ago, so it
+    # always matches here.
 
     def _assert_build_matches_cli(self, mode):
         cold = run_cold([str(BUILD_PY), f"--mode={mode}"])
         if cold.returncode != 0:
-            combined = f"{cold.stdout}\n{cold.stderr}"
-            if mode == "final" and any(m in combined for m in self._STALE_PLACEMENT_MARKERS):
-                self.skipTest(
-                    "dist/placement.json was solved for different data — "
-                    "run `node resume.js` to re-solve, then re-run the tests"
-                )
             self.fail(f"cold build failed:\n{cold.stdout}\n{cold.stderr}")
         expected = snapshot(BUILD_ARTIFACTS)
 
@@ -268,7 +227,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
     def test_measurement_build_matches_cli(self):
         self._assert_build_matches_cli("measurement")
 
-    @unittest.skipUnless(PLACEMENT.exists(), "dist/placement.json missing")
     def test_final_build_matches_cli(self):
         self._assert_build_matches_cli("final")
 
@@ -282,9 +240,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
 
     # -- crop --------------------------------------------------------
 
-    @unittest.skipUnless(
-        BUILT_PDF.exists() and PDF_META.exists(),
-        f"{BUILT_PDF.name} not built")
     def test_crop_matches_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             cold_out = Path(tmp) / "cold.pdf"
@@ -336,7 +291,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
         alive = self.worker.call(op="ping")
         self.assertTrue(alive["ok"], "worker died on malformed input")
 
-    @unittest.skipUnless(BUILT_PDF.exists(), "no built resume PDF to rasterize")
     def test_raster_skips_pages_the_caller_already_has(self):
         """The preview only re-sends pages whose pixels changed.
 
@@ -367,7 +321,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
         self.assertNotIn("unchanged", page1)
         self.assertEqual(page1["png"], pages[0]["png"])
 
-    @unittest.skipUnless(BUILT_PDF.exists(), "no built resume PDF to rasterize")
     def test_parallel_encoding_matches_one_page_at_a_time(self):
         """Encoding pages side by side must give the bytes a single-page
         request gives, page for page."""
@@ -387,12 +340,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
 
     # -- the warm-path-specific hazard -------------------------------
 
-    @unittest.skipUnless(
-        PLACEMENT.exists()
-        and (ROOT / "data" / "resume.yml").exists()
-        and (ROOT / "data" / "resume_default.yml").exists(),
-        "needs both data files and a solved placement",
-    )
     def test_stale_placement_is_named_as_such(self):
         """
         The hazard a warm worker introduces: 'final' can be called
@@ -401,18 +348,21 @@ class WorkerEquivalenceTest(unittest.TestCase):
 
         It must fail loudly and say why — never render a document from
         a placement that doesn't match the data.
+
+        The copy's placement was solved for the template. The "other"
+        data is the template with one job's id changed, written into the
+        copy as its local resume.yml for this test only.
         """
-        current = json.loads(PDF_META.read_text(encoding="utf-8"))["data_source"] \
-            if PDF_META.exists() else "mine"
-        other = "default" if current == "mine" else "mine"
+        template = (PROJECT.root / "data" / "resume_default.yml").read_text(encoding="utf-8")
+        self.assertIn("- id: nulla\n", template, "the template's first job id changed")
+        other = PROJECT.root / "data" / "resume.yml"
+        other.write_text(template.replace("- id: nulla\n", "- id: nulla-renamed\n"),
+                         encoding="utf-8")
+        self.addCleanup(other.unlink)
 
         frame = self.worker.call(op="build", mode="final",
-                                 env={"RESUME_DATA_SOURCE": other})
-
-        if frame["ok"]:
-            # Both YAML files happen to share their job and sidebar ids,
-            # so there is nothing stale to detect. Not a failure.
-            self.skipTest("both data files use the same ids")
+                                 env={"RESUME_DATA_SOURCE": "mine"})
+        self.assertFalse(frame["ok"], "a placement solved for other ids was used")
 
         self.assertEqual(frame["error"]["kind"], "stale_placement")
         self.assertTrue(any("placement" in line.lower()
@@ -482,7 +432,6 @@ class WorkerEquivalenceTest(unittest.TestCase):
             self.assertTrue(cleared["ok"], cleared.get("error"))
 
 
-@unittest.skipUnless(_have_dist(), "dist/ not built — run `node resume.js` first")
 class WarmTemplateReloadTest(unittest.TestCase):
     """A warm worker keeps one Jinja Environment and must still see edits.
 
