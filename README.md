@@ -485,8 +485,11 @@ build keeps that text equal to the words on the page:
   of those glyphs stand for — pypdf read "Mattis" as "Mais". They are
   switched off in `styles/_base.scss` (`"liga" 0`).
 - **Letter-spacing at most 0.1em** on anything uppercase and tracked.
-  Wider than that, some readers take each letter as a word: the role
-  line at 0.15em came out as "I M P E R AT O R".
+  Wider, some readers take each letter as a word: the role line at
+  0.15em came out as "I M P E R AT O R". The role line is small enough
+  that pdftotext splits it even at 0.1em, so its 0.1em is built into
+  its font instead (`Manrope Tracked`): the same pixels, and no gap
+  between letters for a reader to break on.
 - **Real spaces.** A space that is only markup between two elements
   can vanish from the text; the name's is inside the first one.
 
@@ -779,12 +782,31 @@ change the rendered output:
    404; the stable CSS endpoint silently serves a different glyph file
    when Google updates the version.
 
-The vendored woff2 files are the canonical Google Fonts release of
-each face. They're loaded directly from disk via
-`@font-face url('../fonts/...')` with no `local()` source, so a
-system-installed font of the same name can't take over. Each is a
-variable WOFF2 covering its full weight range; total weight on disk
-is well under 1 MB.
+The source files are the canonical Google Fonts release of each
+face, as variable fonts, in `fonts/variable/`. What the documents
+load are static cuts of them: one file per weight in use, and for
+Newsreader one per size in use, since its letters change shape with
+size (its optical-size axis). Chromium writes a variable font into a
+PDF as Type 3 — every glyph a small drawing program — and a static
+TrueType font as a real font. With the static cuts the template
+résumé's PDF is 77 KB instead of 205, printing it for the preview
+takes about half the time, and rasterizing it for the preview about
+30% less. The cuts sit exactly where the variable fonts were drawn,
+so letter widths and the layout are unchanged; the pixels differ
+slightly at the edges of letters, where a TrueType font is smoothed
+differently from a drawn shape.
+
+`build/make_static_fonts.py` makes the cuts. It is a one-off tool, not
+a build step: the files it writes are committed, and it needs
+fontTools and brotli, which nothing else uses
+(`py -m pip install fonttools brotli`). Drawing text at a weight or a
+Newsreader size that has no cut makes `tests/test_font_faces.js`
+fail (as does letter-spacing on top of the tracked cut); the fix is a line in that script, running it, and an
+`@font-face` rule in `styles/_fonts.scss`.
+
+They're loaded directly from disk via `@font-face url('../fonts/...')`
+with no `local()` source, so a system-installed font of the same name
+can't take over. Total weight on disk is well under 1 MB.
 
 The OFL license texts (`Manrope-OFL.txt`, `Newsreader-OFL.txt`) sit
 alongside the woff2 binaries. Keep them. Removing them while keeping
@@ -820,6 +842,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_anonymized.py`          | No personal details in committable files, screenshots included |
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole |
+| `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
 | `test_check_layout.js`        | Layout invariants in a real browser         |
@@ -834,6 +857,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_worker_restarts.js`     | A Python worker that keeps crashing stops being restarted; Re-render brings it back |
 | `test_hidden_release.js`      | Chromium closes while the window is hidden and comes back when it is shown |
 | `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium |
+| `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON`, `NO_COLOR` / `FORCE_COLOR` parsing |
 
@@ -1103,11 +1127,17 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── _print.scss           @media print overrides.
 │   ├── _measurement.scss     body.measurement-mode overrides.
 │   └── _letter.scss          Single-column letter styles.
-├── fonts/                    Vendored variable WOFF2 fonts.
-│   ├── Manrope.woff2         Body text (variable wght 200–800).
+├── fonts/                    Vendored static WOFF2 fonts, cut from fonts/variable/.
+│   ├── Manrope-{350,400,500,600}.woff2
+│   │                         Body text, one file per weight.
+│   ├── Manrope-500-tracked0.1.woff2
+│   │                         The role line, its 0.1em tracking built in.
+│   ├── Newsreader-600-opsz40.woff2, -700-opsz18.67, -600-opsz13.33
+│   │                         Display text: the name, section headings,
+│   │                         the letter's signature.
 │   ├── Manrope-OFL.txt       SIL OFL 1.1 license (required to keep).
-│   ├── Newsreader.woff2      Display text (variable wght 200–800).
-│   └── Newsreader-OFL.txt    SIL OFL 1.1 license (required to keep).
+│   ├── Newsreader-OFL.txt    SIL OFL 1.1 license (required to keep).
+│   └── variable/             The Google Fonts variable originals.
 ├── templates/
 │   ├── resume.j2             Final paginated resume template.
 │   ├── measurement.j2        Single-page flowing template (solver input).
@@ -1128,6 +1158,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── _power.py             Windows: opt the Studio's processes out of power throttling.
 │   ├── _compile_cache.js     Node's compile cache, kept out of the project.
 │   ├── snapshot_pdf.py       Visual regression test.
+│   ├── make_static_fonts.py  One-off: cut fonts/ from fonts/variable/ (needs fontTools).
 │   ├── solve_layout.js       Pure-function layout solver.
 │   ├── measure_dom.js        Playwright DOM measurement extractor.
 │   ├── check_layout.js       Post-build layout invariant checks.
@@ -1164,6 +1195,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_worker_equivalence.py       Warm worker == cold CLI, byte for byte.
     ├── test_power.py                    Windows power-throttling opt-out.
     ├── test_text_extraction.py          The PDFs' text layer reads as the page.
+    ├── test_pdf_fonts.py                The PDFs embed TrueType, not Type 3.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
     ├── test_cli_navigation.js           Build scripts don't wait for networkidle.
@@ -1173,6 +1205,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_worker_restarts.js          The cap on Python worker restarts.
     ├── test_hidden_release.js           Chromium closed while the window is hidden.
     ├── test_power_throttling.js         The opt-out request, and the launch race.
+    ├── test_font_faces.js               A font file for every weight and size in use.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.
     └── fixtures/                        Snapshot fixtures. The template one is

@@ -13,7 +13,9 @@ all invisible on screen:
     Fixed by `"liga" 0` in styles/_base.scss.
   • The role line's tracking. At 0.15em pdftotext and pdfium read the
     job title one letter at a time: "I M P E R AT O R …". Fixed by
-    tracking it at --ls-wide (0.1em).
+    tracking it at 0.1em; once the fonts were static pdftotext split it
+    at 0.1em again, and the 0.1em moved into the font's advance widths
+    (styles/_components.scss, .name-role).
   • The name. Two spans with only markup whitespace between them read
     as "GaiusCaesar" in pypdf. Fixed by a real space inside the first.
 
