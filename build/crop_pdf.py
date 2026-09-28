@@ -46,7 +46,8 @@ reads for pronunciation.
 
 The same values, with Chromium's /Producer, /Creator and dates, are
 also written as an XMP metadata packet (the catalog's /Metadata), the
-place PDF/UA and most document-management tools read them from. The
+place PDF/UA and most document-management tools read them from; on a
+tagged PDF it also declares PDF/UA-1 (see ACCESSIBILITY). The
 stream is labelled /Type /Metadata /Subtype /XML, as ISO 32000
 requires; pypdf leaves both out, and veraPDF failed the files on it.
 
@@ -64,7 +65,11 @@ screen reader and a PDF/UA validator need:
     /Artifact BMC … EMC. Marked content draws nothing, so the pages
     render to the same pixels.
 Both run only on a tagged PDF (the deliverable); the preview prints
-untagged and never comes here.
+untagged and never comes here. With them, veraPDF passes every PDF/UA-1
+rule, so the tagged PDF's XMP declares it (pdfuaid:part 1). veraPDF
+checks what a machine can; PDF/UA also asks for human judgement
+(reading order, whether headings and link texts make sense); the
+heading order was checked with NVDA and Acrobat on 2026-09-27.
 
 WHAT THE CROP KEEPS
 ───────────────────
@@ -349,7 +354,10 @@ def pdf_date_to_datetime(value) -> datetime | None:
         return None
 
 
-def apply_xmp(writer: PdfWriter, lang: str) -> None:
+PDFUA_NS = 'http://www.aiim.org/pdfua/ns/id/'
+
+
+def apply_xmp(writer: PdfWriter, lang: str, pdfua: bool = False) -> None:
     """Write an XMP metadata packet that mirrors the final /Info.
 
     Call it after apply_metadata(), so it copies the values actually
@@ -362,10 +370,13 @@ def apply_xmp(writer: PdfWriter, lang: str) -> None:
       /Producer → pdf:Producer     /Creator  → xmp:CreatorTool
       /CreationDate → xmp:CreateDate   /ModDate → xmp:ModifyDate
 
-    plus dc:language from the catalog's /Lang. It claims no conformance
-    level (no pdfaid or pdfuaid): the file is not validated against
-    PDF/A or PDF/UA, and saying so would be a false statement a
-    validator would catch.
+    plus dc:language from the catalog's /Lang.
+
+    With `pdfua`, it also declares PDF/UA-1 (pdfuaid:part 1, ISO
+    14289-1 clause 5). crop_and_stamp() asks for that on a tagged PDF,
+    the deliverable, which veraPDF passes on every other PDF/UA-1 rule
+    (tests/test_pdf_accessibility.py keeps those in place). It never
+    claims PDF/A: the files are not built or checked for it.
     """
     info = writer.metadata or {}
 
@@ -399,6 +410,15 @@ def apply_xmp(writer: PdfWriter, lang: str) -> None:
     stream = writer.root_object['/Metadata'].get_object()
     stream[NameObject('/Type')] = NameObject('/Metadata')
     stream[NameObject('/Subtype')] = NameObject('/XML')
+    if pdfua:
+        # pypdf has no property for the PDF/UA identification schema, so
+        # its description goes into the packet pypdf wrote, as the last
+        # child of rdf:RDF.
+        packet = stream.get_data().decode('utf-8')
+        end = packet.rindex('</rdf:RDF>')
+        ua = ('<rdf:Description rdf:about="" xmlns:pdfuaid="' + PDFUA_NS + '">'
+              '<pdfuaid:part>1</pdfuaid:part></rdf:Description>')
+        stream.set_data((packet[:end] + ua + packet[end:]).encode('utf-8'))
 
 
 def is_tagged(writer: PdfWriter) -> bool:
@@ -522,8 +542,9 @@ def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
     crop_pages(reader, writer)
     apply_metadata(writer, reader, meta_path)
     lang = apply_language(writer, meta_path)
-    apply_xmp(writer, lang)
-    if is_tagged(writer):
+    tagged = is_tagged(writer)
+    apply_xmp(writer, lang, pdfua=tagged)
+    if tagged:
         describe_links(writer)
         mark_untagged_as_artifacts(writer)
     return writer

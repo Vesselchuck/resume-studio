@@ -185,16 +185,19 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   "Gaius" and "Caesar", and left it out of its list of headings: first
   and last name were separate pieces of text. The name is one piece
   now. The last name moves by 0.002 pt, invisible.
+- **Added.** The PDFs declare PDF/UA-1, the accessibility standard for
+  PDF, in their XMP metadata (`pdfuaid:part` 1). veraPDF 1.30.2 passes
+  both documents on every PDF/UA-1 rule. Only the tagged deliverable
+  declares it; nothing claims PDF/A.
 - **Fixed.** The XMP metadata stream lacked the `/Type /Metadata
   /Subtype /XML` labels ISO 32000 requires, so a strict reader could
   ignore it.
 - **Added.** Links in the PDF describe where they go (the address, or
   host and path), and what Chromium draws without a tag — the page
   background, the rules, the "Page 1 of 2" footer — is marked as
-  decoration. With the fixes above, veraPDF passes both documents on
-  every PDF/UA-1 rule except the one asking the file to declare
-  PDF/UA, which it does not. `tests/test_pdf_accessibility.py` guards
-  it.
+  decoration. With these fixes veraPDF passes both documents on every
+  PDF/UA-1 rule, and they declare PDF/UA-1 in their XMP.
+  `tests/test_pdf_accessibility.py` guards it.
 
 ---
 
