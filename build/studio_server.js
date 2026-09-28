@@ -28,13 +28,15 @@
  *   GET  /api/events       SSE: log lines, render/build state, and the
  *                          `page` events of a streamed render
  *   POST /api/preview      {doc, scale, pages, from, known, stream,
- *                          renderId, order} -> rasterized PDF pages;
+ *                          renderId, order, retry} -> rasterized PDF pages;
  *                          from:'built' reads the last Build's PDF
  *                          instead of re-rendering; known ({page: hash})
  *                          returns unchanged pages without a PNG;
  *                          stream:true sends each page on /api/events as
  *                          it is ready (most wanted first, per `order`)
- *                          and leaves those PNGs out of the reply
+ *                          and leaves those PNGs out of the reply;
+ *                          retry:true (the Re-render button) lets a Python
+ *                          worker that stopped restarting start again
  *   POST /api/build        {doc, variants, snapshot, tests} -> shells out to the
  *                          CLI, and returns the built PDF rasterized
  *   POST /api/datasource   {source: 'default'|'mine'}
@@ -45,6 +47,9 @@
  *                          reports a conflict rather than ever replacing
  *   POST /api/adopt-as     {doc, name, content} -> save under a chosen free name
  *   POST /api/reveal       {path} -> show it in the OS file manager
+ *   POST /api/visibility   {hidden} -> the page is hidden or shown; after
+ *                          five minutes hidden the engine closes Chromium
+ *                          (see "Releasing Chromium while hidden")
  *   POST /api/shutdown
  *
  * Run standalone:  node build/studio_server.js [--port 4173] [--open]
@@ -652,8 +657,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   /*
    * The engine starts alongside the HTTP listener, not before it.
    *
-   * Warm: Python, Chromium and Sass start together, so the first preview
-   * does not wait for each of them in turn. But they still take a few
+   * Warm: Python and Chromium start together (and Sass, when the
+   * stylesheet needs compiling), so the first preview does not wait for
+   * each of them in turn. But they still take a few
    * hundred milliseconds between them, and this used to be awaited
    * before the socket was even opened — which meant the desktop shell,
    * which waits for the READY line to create its window, could not so
@@ -661,7 +667,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
    *
    * So the listener comes up first and READY is printed as soon as the
    * port is known. The window, the page, its stylesheet and its fonts
-   * then load while Chromium and Sass are still starting. Every request
+   * then load while Chromium is still starting. Every request
    * that needs the engine waits for `engineReady` (see handle), so
    * nothing can reach a half-built engine; the only difference is that
    * the waiting now happens with the UI on screen instead of in front
@@ -713,7 +719,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
    * prints and writes the document's PDF into dist/ under your own
    * name. The app then refreshed the
    * pane by calling renderPreview(), which did all of that a second
-   * time, into a temp file, to reach the same pixels — roughly 600 ms
+   * time, in memory, to reach the same pixels — roughly 600 ms
    * of a ~1.1 s round trip spent recomputing a result already on disk.
    *
    * So after a build the pane reads the built file. What it shows is
@@ -834,6 +840,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       return { name, content: fs.readFileSync(target, 'utf-8') };
     },
 
+    'POST /api/visibility': async (body) => {
+      engine.setWindowHidden(body.hidden === true);
+      return { hidden: body.hidden === true };
+    },
+
     'POST /api/preview': async (body) => {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const doc = DOCS[id];
@@ -882,6 +893,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
         const result = await retryIfHalfWritten(() => engine.renderPreview({
           doc: id, scale: body.scale, pages: body.pages, env: envForRender(id), known,
+          retry: body.retry === true,
           order: streaming ? order : undefined,
           onPage: streaming ? (im) => {
             sent.add(im.page);

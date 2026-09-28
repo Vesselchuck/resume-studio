@@ -74,13 +74,20 @@
 
 /* Role line — small uppercase label in accent color. Uppercase is
    appropriate here as a structured designation, not a personal name.
-   Sits below the name as the professional identifier.              */
+   Sits below the name as the professional identifier.
+
+   Tracked at --ls-wide (0.1em), the same as the section headings, and
+   no wider: it is the job title, arguably the most-searched phrase on
+   the page, and at 0.15em pdftotext and pdfium extracted it one letter
+   at a time ("I M P E R AT O R  R O M A N US"). At 0.10em and 0.08em
+   all four extractors tested read it whole; see .visually-hidden in
+   _base.scss for why the threshold sits there.                       */
 .name-role {
   font-size: var(--size-caption);
   font-weight: 500;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.15em;
+  letter-spacing: var(--ls-wide);
   line-height: 1;
   margin-block-start: var(--sp-sm);
 }

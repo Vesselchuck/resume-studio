@@ -80,6 +80,55 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 - **Changed.** The layout measurement reads the page in one round trip
   to Chromium instead of three: about 6.1 → 3.7 ms a render in a Linux
   sandbox, with identical measurements.
+- **Changed.** The desktop window opens at once, on a small loading
+  page, and switches to the Studio when the server is ready. It used to
+  appear only once the server was up, so a launch showed nothing at all
+  until then. If the server cannot start — Node missing, say — the
+  reason is shown in the window instead of only in a terminal.
+- **Changed.** The Studio starts faster when the stylesheet is already
+  compiled: Sass no longer starts during start-up then, but right after
+  the first preview. In a Linux sandbox the engine was ready at 382 ms
+  instead of 621, and the first preview arrived at 1017 ms instead of
+  1237 (n=15 each). A style edit afterwards still compiles in ~13 ms.
+- **Added.** A Python worker that crashes five times within three
+  minutes is not restarted again. A worker that crashed on the same
+  input every time used to be restarted on every save, forever. Each
+  preview now says what happened, at once, and **Re-render** starts the
+  worker again.
+- **Added.** Chromium is closed after the Studio window has been
+  minimized (or otherwise hidden) for five minutes, and started again
+  as soon as the window is shown. It is most of what the Studio holds
+  in memory: about 810 MB fell to 270 MB in a Linux sandbox.
+- **Added.** On Windows, the Studio's server, Python worker, Chromium
+  and Sass opt out of power throttling, so an unfocused, covered or
+  minimized window does not confine previews to the CPU's efficiency
+  cores on battery. Not yet measured on a real machine.
+- **Changed.** A live preview no longer writes Chromium's PDF to a temp
+  file: the bytes go straight to the rasterizer. On Windows that saves
+  a file create, close and delete, and whatever real-time scanning
+  does with a new PDF, on every save. In a Linux sandbox, where file
+  writes are cheap, the in-memory hand-off costs about 1 ms more.
+- **Changed.** `test_worker_equivalence.py` and `test_preview_raster.py`
+  run in a throwaway copy of the project, built from the templates, as
+  the JavaScript suites already did. They no longer read or write your
+  `dist/`, and no longer skip when it is unbuilt or was built from other
+  data; the stale-placement check, which needed your own data file,
+  now runs everywhere.
+- **Fixed.** Software reading your PDF lost letters. The fonts drew
+  "fi", "ff" and "tt" as single ligature glyphs that the PDF gave no
+  letters for, so pypdf read "Mattis" as "Mais" and "efficitur" as
+  "eicitur" — on a real résumé, 14 of 15 such words; pdfplumber lost
+  5. Ligatures are off now, and every word reads back in all four
+  extractors tested. The layout does not change; the letters look
+  very slightly different, so regenerate the snapshot fixture with
+  `python build/snapshot_pdf.py --update-all`.
+- **Fixed.** The role line under your name was spaced so widely
+  (0.15em) that pdftotext and pdfium read it one letter at a time:
+  "I M P E R AT O R". It is now spaced like the section headings
+  (0.1em) and reads as words everywhere.
+- **Fixed.** pypdf read the name as one word ("GaiusCaesar"): the
+  space between first and last name was only markup. It is text now;
+  nothing on the page changes.
 - **Fixed.** The tests that build no longer share your `dist/`.
   `test_cold_start.js`, `test_speculative_load.js`,
   `test_engine_equivalence.js` and `test_preview_stream.js` each ran

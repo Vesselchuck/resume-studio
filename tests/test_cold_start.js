@@ -15,9 +15,13 @@
  *     which may not even be writable. Enabling it must never throw,
  *     whatever Node it lands on.
  *   • A warm engine launches Chromium straight away, in parallel with
- *     the Python worker and Sass, rather than on the first request. So
- *     a warm engine has a browser open before anyone asks it to render,
- *     and the first render pays nothing for the launch.
+ *     the Python worker, rather than on the first request. So a warm
+ *     engine has a browser open before anyone asks it to render, and
+ *     the first render pays nothing for the launch.
+ *   • Sass stays out of a warm boot unless the stylesheet is stale:
+ *     starting it blocks the thread for ~240 ms. With fresh styles it
+ *     starts right after the first preview instead, so the first style
+ *     edit still finds it warm.
  *   • The server listens and announces itself BEFORE the engine is
  *     ready, so the desktop shell can open its window and load the UI
  *     while Chromium is still starting. The UI page must therefore be
@@ -112,8 +116,12 @@ function cacheTests() {
 /* ─── Warm start ──────────────────────────────────────────────── */
 
 async function warmTests(createEngine, root) {
+  // The copy's dist/ starts empty, so its stylesheet is stale here.
   const engine = await createEngine({ root, warm: true });
   try {
+    assertTrue(engine.status().sassWarm,
+      'warm, stale styles: boot compiles the stylesheet, so Sass is running');
+
     // The launch was started before this function got the engine back;
     // it does not have to have finished, so give it a moment — without
     // asking for a render, which is the whole point.
@@ -130,12 +138,32 @@ async function warmTests(createEngine, root) {
   } finally {
     await engine.dispose();
   }
+  assertEq(engine.status().sassWarm, false, 'dispose stops the Sass compiler');
+
+  // The stylesheet is fresh now: boot must leave Sass alone.
+  const fresh = await createEngine({ root, warm: true });
+  try {
+    assertEq(fresh.status().stylesStale, false, 'warm, fresh styles: the stylesheet is up to date');
+    assertEq(fresh.status().sassWarm, false,
+      'warm, fresh styles: boot does not start Sass');
+    const r = await fresh.renderPreview({ doc: 'letter' });
+    assertEq(r.timings.sass, 0, 'warm, fresh styles: the first preview compiles nothing');
+    await fresh.exclusive(async () => {});   // past the queued warm-up
+    assertTrue(fresh.status().sassWarm,
+      'warm, fresh styles: Sass is started right after the first preview');
+  } finally {
+    await fresh.dispose();
+  }
 
   // Without `warm`, nothing is launched until something needs it.
   const cold = await createEngine({ root });
   try {
     assertEq(cold.status().browserOpen, false,
       'cold: a plain engine does not launch a browser it may never use');
+    await cold.renderPreview({ doc: 'letter' });
+    await cold.exclusive(async () => {});
+    assertEq(cold.status().sassWarm, false,
+      'cold: a plain engine starts no Sass it was not asked for');
   } finally {
     await cold.dispose();
   }

@@ -65,8 +65,11 @@
       <header class="resume-header">
         <div class="header-left">
           <h1 class="name">
-            <span class="name-first">{{ name.first }}</span>
-            <span class="name-last">{{ name.last }}</span>
+            {#- The space is text inside the first span, not whitespace
+                between two spans: Chromium drew the same gap either way,
+                but with nothing between the spans pypdf read the name as
+                one word ("GaiusCaesar"). Pixel-identical. #}
+            <span class="name-first">{{ name.first }} </span><span class="name-last">{{ name.last }}</span>
           </h1>
 {%- if role %}
           <p class="name-role">

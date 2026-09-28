@@ -475,6 +475,25 @@ applicant-tracking systems that are much less careful with bytes than
 the PDF's own metadata, where your name is stored exactly as you wrote
 it.
 
+### Text a machine can read
+
+Applicant-tracking systems read the PDF's text, not its pixels, so the
+build keeps that text equal to the words on the page:
+
+- **No ligatures.** The fonts would draw "fi", "ff" and "tt" as single
+  glyphs, and Chromium's PDF does not tell a reader which letters some
+  of those glyphs stand for — pypdf read "Mattis" as "Mais". They are
+  switched off in `styles/_base.scss` (`"liga" 0`).
+- **Letter-spacing at most 0.1em** on anything uppercase and tracked.
+  Wider than that, some readers take each letter as a word: the role
+  line at 0.15em came out as "I M P E R AT O R".
+- **Real spaces.** A space that is only markup between two elements
+  can vanish from the text; the name's is inside the first one.
+
+`tests/test_text_extraction.py` builds both documents and checks that
+pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
+every word on the page.
+
 A part of the name with letters that have no ASCII form (山田,
 Смирнов) is kept in its own characters instead, with only the
 characters a filename can't hold replaced: `Ivan Petrov-Смирнов` gives
@@ -515,7 +534,7 @@ All of `dist/` is gitignored.
 ## How a build works
 
 A Build runs these steps. A live preview runs the same ones, but
-prints to a scratch file, and never runs the tests or the snapshot
+prints in memory, never to a file, and never runs the tests or the snapshot
 check.
 
 1. Reads resume content from `data/resume.yml`, falling back to the
@@ -590,9 +609,12 @@ desktop build is a wrapper rather than a second implementation.
 Behind it sits a **warm engine**: one long-lived Chromium, one
 long-lived Python worker and one running Sass compiler, so a live
 preview does not pay Chromium startup and four Python interpreter
-starts on every keystroke. When the app opens, all three start at once
-rather than one after another, and the stylesheet is compiled before
-the first preview asks for it. Both
+starts on every keystroke. When the app opens, Chromium and Python
+start at once rather than one after another. Sass starts during that
+only if the stylesheet needs compiling for the first preview;
+otherwise it starts right after the first preview, so it stays out of
+the way of the first thing you see and is still warm for your first
+style edit. Both
 `test_worker_equivalence.py` and `test_engine_equivalence.js` assert
 the warm path produces the same bytes and the same pixels as the cold
 CLI — that equivalence is the whole premise, so it is tested rather
@@ -630,16 +652,31 @@ the same layout again — which a text edit usually does — that page is
 printed instead of loading it a second time; if anything differs, the
 normal path runs. `RESUME_SPECULATIVE=off` turns it off.
 
-The window opens before the engine has finished starting: the server
-answers as soon as it has a port, and anything that needs Chromium or
-the Python worker waits behind the scenes. Node's compile cache is
+The desktop window opens at once, on a small loading page, while the
+server starts; it switches to the Studio as soon as the server has a
+port, and anything that needs Chromium or the Python worker waits
+behind the scenes. If the server cannot start, the loading page shows
+why. Node's compile cache is
 kept out of the project, in your user cache directory
 (`%LOCALAPPDATA%\resume-studio\node-compile-cache` on Windows), and
 is skipped on Node older than 22.8.
 
 If the Python worker dies, the request in flight fails with an error
 and the next one starts a fresh worker, instead of every later preview
-and build waiting forever. Closing the desktop window asks the server
+and build waiting forever. If it dies five times within three minutes
+it is not restarted again — each preview says so at once instead of
+starting another interpreter — until **Re-render**, or until the
+oldest of those crashes is three minutes old.
+
+While the window is minimized (or the page is otherwise hidden) for
+five minutes, the engine closes Chromium, which is most of the memory
+the Studio holds; it starts again as soon as the window is shown.
+
+On Windows the server, the Python worker, Chromium and Sass opt out of
+power throttling, so an unfocused, covered or minimized Studio window
+does not confine previews to the CPU's efficiency cores on battery.
+
+Closing the desktop window asks the server
 to shut down — it closes Chromium, the worker and any running build —
 and only kills it if it hasn't stopped within two seconds.
 
@@ -762,7 +799,8 @@ slow visual-regression snapshot test for the rendered PDFs.
 ### Unit tests
 
 Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; six launch Chromium.
+pure-logic tests; twelve launch Chromium, three of them Python suites
+that build a throwaway copy of the project through the CLI.
 
 | Test                          | What it covers                              |
 |-------------------------------|---------------------------------------------|
@@ -772,7 +810,7 @@ pure-logic tests; six launch Chromium.
 | `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
 | `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
 | `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; the preview's in-memory crop gives the same pixels |
-| `test_preview_raster.py`      | The preview's PNG writer and per-page keys  |
+| `test_preview_raster.py`      | The preview's PNG writer and per-page keys; the PDF sent as bytes renders like the file |
 | `test_letter_data.py`         | The cover letter's data layer               |
 | `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
 | `test_profile_merge.py`       | The shared profile's merge and precedence   |
@@ -780,7 +818,9 @@ pure-logic tests; six launch Chromium.
 | `test_console_encoding.py`    | Log output on a Windows code page; color settings |
 | `test_output_name.py`         | How your name becomes the PDF file names    |
 | `test_anonymized.py`          | No personal details in committable files, screenshots included |
-| `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte |
+| `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole |
+| `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
 | `test_check_layout.js`        | Layout invariants in a real browser         |
 | `test_detect_doc.js`          | Which document a dropped file is; path containment |
@@ -790,7 +830,10 @@ pure-logic tests; six launch Chromium.
 | `test_cli_navigation.js`      | The build scripts don't wait for `networkidle` |
 | `test_preview_stream.js`      | Pages stream in the order the window asks for |
 | `test_speculative_load.js`    | The speculative final page is used, or correctly discarded |
-| `test_cold_start.js`          | Startup order and where the compile cache lives |
+| `test_cold_start.js`          | Startup order, when Sass starts, and where the compile cache lives |
+| `test_worker_restarts.js`     | A Python worker that keeps crashing stops being restarted; Re-render brings it back |
+| `test_hidden_release.js`      | Chromium closes while the window is hidden and comes back when it is shown |
+| `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON`, `NO_COLOR` / `FORCE_COLOR` parsing |
 
@@ -1029,6 +1072,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │                             the Studio's Build runs it.
 ├── letter.js                 Cover letter build script (single page).
 ├── ui/index.html             The Studio app's entire front end.
+├── ui/loading.html           What the desktop window shows while the server starts.
 ├── src-tauri/                The desktop shell (Rust). Starts the server,
 │                             shows the window — nothing else.
 ├── requirements.txt          Python dependencies (exact-pinned).
@@ -1081,6 +1125,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── crop_pdf.py           Trim Chromium's PDF to true US Letter.
 │   ├── _pdf_page_keys.py     Per-page keys so the preview skips unchanged pages.
 │   ├── _png.py               The preview's PNG writer.
+│   ├── _power.py             Windows: opt the Studio's processes out of power throttling.
 │   ├── _compile_cache.js     Node's compile cache, kept out of the project.
 │   ├── snapshot_pdf.py       Visual regression test.
 │   ├── solve_layout.js       Pure-function layout solver.
@@ -1097,6 +1142,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 └── tests/                    Unit tests + visual regression fixtures.
     ├── _framework.js                    Tiny JS test harness.
     ├── _project.js                      Throwaway project copy for suites that build.
+    ├── _project.py                      Its Python twin, for the Python suites that need a build.
     ├── test_validate_data.py            YAML schema validation.
     ├── test_load_data.py                Data loader + env-var precedence.
     ├── test_markdown_filter.py          Bullet markdown filter.
@@ -1116,12 +1162,17 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_console_encoding.py         Log output on a Windows code page; color settings.
     ├── test_detect_doc.js               Which document a dropped file is.
     ├── test_worker_equivalence.py       Warm worker == cold CLI, byte for byte.
+    ├── test_power.py                    Windows power-throttling opt-out.
+    ├── test_text_extraction.py          The PDFs' text layer reads as the page.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
     ├── test_cli_navigation.js           Build scripts don't wait for networkidle.
     ├── test_preview_stream.js           Streamed, prioritized preview pages.
     ├── test_speculative_load.js         The speculative final page.
-    ├── test_cold_start.js               Startup order and the compile cache.
+    ├── test_cold_start.js               Startup order, Sass, and the compile cache.
+    ├── test_worker_restarts.js          The cap on Python worker restarts.
+    ├── test_hidden_release.js           Chromium closed while the window is hidden.
+    ├── test_power_throttling.js         The opt-out request, and the launch race.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.
     └── fixtures/                        Snapshot fixtures. The template one is

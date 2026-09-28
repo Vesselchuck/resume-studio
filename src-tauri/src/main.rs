@@ -3,6 +3,16 @@
 //! This file has one job: start `build/studio_server.js`, wait for it to
 //! say which URL it is listening on, and show that URL in a window.
 //!
+//! WINDOW FIRST
+//! ------------
+//! The window is created at once, on `ui/loading.html` (bundled, served
+//! by Tauri itself), and the server is started on a thread. When the
+//! server reports its URL the window navigates there. Before, the window
+//! was created only once the server was ready, so for that long a launch
+//! showed nothing at all, and the webview's own start-up could not
+//! overlap the server's. If the server cannot start, the reason is shown
+//! in the window rather than only printed to a console nobody may have.
+//!
 //! WHY IT IS THIS SMALL
 //! --------------------
 //! The usual Tauri design would put the whole application here: spawn
@@ -34,27 +44,174 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::PageLoadEvent;
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Frame the server prints once it is listening. Must match
 /// READY_PREFIX in build/studio_server.js.
 const READY_PREFIX: &str = "\u{1e}STUDIO_READY ";
 
+/// The page the window shows while the server starts (in `ui/`, which is
+/// `build.frontendDist` in tauri.conf.json).
+const LOADING_PAGE: &str = "loading.html";
+
 /// Kept in Tauri's managed state so the child is stopped when the app
 /// exits, however it exits.
-struct Server(Mutex<Option<Child>>);
+///
+/// The server starts on its own thread while the window is already up,
+/// so the window can be closed before there is a child to stop. `closed`
+/// records that; the thread checks it under the same lock it stores the
+/// child with, and stops the child itself if nobody is left to.
+struct Server {
+    child: Mutex<Option<Child>>,
+    closed: AtomicBool,
+}
 
-impl Drop for Server {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.0.lock() {
+impl Server {
+    /// Stop the child, if there is one, and refuse any that arrives later.
+    fn shut(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Ok(mut guard) = self.child.lock() {
             if let Some(child) = guard.take() {
                 stop_server(child);
             }
         }
     }
+
+    /// Keep the child the thread just started — or stop it at once if the
+    /// window has already gone.
+    fn adopt(&self, child: Child) -> bool {
+        match self.child.lock() {
+            Ok(mut guard) if !self.closed.load(Ordering::SeqCst) => {
+                *guard = Some(child);
+                true
+            }
+            _ => {
+                stop_server(child);
+                false
+            }
+        }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.shut();
+    }
+}
+
+/// A start-up error, and whether the loading page is there to show it.
+///
+/// The server can fail before the webview has even loaded the loading
+/// page (Node missing fails in milliseconds), and script evaluated then
+/// is lost. So an error that arrives early waits here, and the page-load
+/// handler shows it once the page has finished loading. Both sides take
+/// the lock, so the message is shown exactly once whichever comes first.
+#[derive(Default)]
+struct StartupError {
+    state: Mutex<(bool, Option<String>)>, // (loading page loaded, pending message)
+}
+
+impl StartupError {
+    fn page_loaded(&self, window: &WebviewWindow) {
+        if let Ok(mut state) = self.state.lock() {
+            state.0 = true;
+            if let Some(message) = state.1.take() {
+                show_startup_error(window, &message);
+            }
+        }
+    }
+
+    fn report(&self, window: &WebviewWindow, message: String) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.0 {
+                show_startup_error(window, &message);
+            } else {
+                state.1 = Some(message);
+            }
+        }
+    }
+}
+
+/// Whether the window was minimized when last looked at, and where the
+/// server listens.
+///
+/// WebView2 does not tell the page it is hidden when the Tauri window is
+/// minimized: `document.visibilitychange` never fired there (checked on
+/// Windows with a listener in the Studio's console). So the shell reports
+/// it: `note_minimized` sends the page's own report, `POST /api/visibility`,
+/// straight to the server over loopback. The page's listener stays for
+/// `npm run ui` in an ordinary browser, where it does fire.
+///
+/// Two things look: the `Resized` event (minimizing and restoring both
+/// resize the window) and a check once a second, so the report does not
+/// depend on how a platform delivers window events. Only a change is
+/// reported.
+#[derive(Default)]
+struct Minimized {
+    state: AtomicBool,
+    addr: Mutex<Option<String>>, // "127.0.0.1:PORT", once the server is up
+}
+
+fn note_minimized(app: &tauri::AppHandle, minimized: bool) {
+    let Some(m) = app.try_state::<Minimized>() else { return };
+    let Some(addr) = m.addr.lock().ok().and_then(|a| a.clone()) else { return };
+    if m.state.swap(minimized, Ordering::SeqCst) == minimized {
+        return;
+    }
+    println!(
+        "     (window {}: telling the server)",
+        if minimized { "minimized" } else { "restored" }
+    );
+    // Off this thread: a slow answer must never hold up window events.
+    std::thread::spawn(move || {
+        if let Err(e) = post_visibility(&addr, minimized) {
+            println!("     (could not tell the server the window was {}: {e})",
+                     if minimized { "minimized" } else { "restored" });
+        }
+    });
+}
+
+/// `POST /api/visibility {"hidden": …}` to the server, with plain std I/O —
+/// one short request on loopback does not need an HTTP client dependency.
+/// The Host header is the server's own address, which its request checks
+/// require; no Origin is sent, which they allow.
+fn post_visibility(addr: &str, hidden: bool) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    let target = addr
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| format!("no address for {addr}"))?;
+    let mut stream = TcpStream::connect_timeout(&target, Duration::from_secs(2))
+        .map_err(|e| e.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let body = format!("{{\"hidden\":{hidden}}}");
+    let request = format!(
+        "POST /api/visibility HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut reply = String::new();
+    let _ = stream.read_to_string(&mut reply);
+    let status = reply.lines().next().unwrap_or("").to_string();
+    if status.contains(" 200 ") {
+        Ok(())
+    } else {
+        Err(format!("the server answered {status:?}"))
+    }
+}
+
+/// Put the reason on the loading page (its `showStartupError`).
+fn show_startup_error(window: &WebviewWindow, message: &str) {
+    let text = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string());
+    let _ = window.eval(&format!("window.showStartupError && window.showStartupError({text})"));
 }
 
 /// How long the server gets to shut down cleanly before it is killed.
@@ -227,61 +384,120 @@ fn main() {
             let resource_dir = app.path().resource_dir().ok();
             let root = project_root(resource_dir);
 
-            match start_server(&root) {
-                Ok((url, child)) => {
-                    app.manage(Server(Mutex::new(Some(child))));
-                    let parsed = url.parse().map_err(|e| format!("bad server URL: {e}"))?;
-                    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
-                        .title("Resume Studio")
-                        // Windowed fullscreen: maximized, with the title
-                        // bar and the taskbar still there. Not
-                        // .fullscreen(true), which takes over the screen
-                        // and hides both — wrong for an app you use
-                        // alongside the editor you are typing your YAML
-                        // in.
-                        //
-                        // inner_size stays as the size to restore to
-                        // when the window is un-maximized.
-                        .maximized(true)
-                        .inner_size(1440.0, 920.0)
-                        .min_inner_size(760.0, 560.0)
-                        // Required for the page to see file drops at all.
-                        //
-                        // By default the webview handles drops natively
-                        // and the HTML dragover/drop events never fire,
-                        // so "drop a .yml on the window" works in a
-                        // browser and silently does nothing here. Tauri
-                        // documents this method as needed to use the
-                        // HTML5 drag and drop APIs on Windows.
-                        //
-                        // The app's Load… button does not depend on
-                        // this; dropping is the convenience.
-                        .disable_drag_drop_handler()
-                        .build()?;
-                }
-                Err(message) => {
-                    // No window exists yet, so there is nowhere to render
-                    // a styled error. Print it and stop: a dock icon that
-                    // never opens anything, with no explanation, is the
-                    // worst of the available failures. Anyone debugging a
-                    // launch is already at a terminal, and `npm run ui`
-                    // reproduces the same failure with full output.
-                    eprintln!("Resume Studio could not start.\n\n{message}");
-                    std::process::exit(1);
-                }
-            }
-            Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(server) = window.app_handle().try_state::<Server>() {
-                    if let Ok(mut guard) = server.0.lock() {
-                        if let Some(child) = guard.take() {
-                            stop_server(child);
+            app.manage(Server {
+                child: Mutex::new(None),
+                closed: AtomicBool::new(false),
+            });
+            app.manage(StartupError::default());
+            app.manage(Minimized::default());
+
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(LOADING_PAGE.into()))
+                .title("Resume Studio")
+                // Windowed fullscreen: maximized, with the title
+                // bar and the taskbar still there. Not
+                // .fullscreen(true), which takes over the screen
+                // and hides both — wrong for an app you use
+                // alongside the editor you are typing your YAML
+                // in.
+                //
+                // inner_size stays as the size to restore to
+                // when the window is un-maximized.
+                .maximized(true)
+                .inner_size(1440.0, 920.0)
+                .min_inner_size(760.0, 560.0)
+                // Required for the page to see file drops at all.
+                //
+                // By default the webview handles drops natively
+                // and the HTML dragover/drop events never fire,
+                // so "drop a .yml on the window" works in a
+                // browser and silently does nothing here. Tauri
+                // documents this method as needed to use the
+                // HTML5 drag and drop APIs on Windows.
+                //
+                // The app's Load… button does not depend on
+                // this; dropping is the convenience.
+                .disable_drag_drop_handler()
+                // Only the loading page's own load counts: the server's
+                // page loads later and has no showStartupError.
+                .on_page_load(|window, payload| {
+                    if payload.event() == PageLoadEvent::Finished
+                        && payload.url().path().ends_with(LOADING_PAGE)
+                    {
+                        if let Some(errors) = window.app_handle().try_state::<StartupError>() {
+                            errors.page_loaded(&window);
                         }
                     }
+                })
+                .build()?;
+
+            // The server starts here, beside the window, not before it.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let started = start_server(&root).and_then(|(url, child)| {
+                    let parsed = url.parse::<tauri::Url>().map_err(|e| format!("bad server URL {url}: {e}"));
+                    let server = handle.state::<Server>();
+                    if !server.adopt(child) {
+                        // The window was closed while the server started.
+                        return Ok(None);
+                    }
+                    parsed.map(Some)
+                });
+                match started {
+                    Ok(Some(url)) => {
+                        // Where minimize reports go, then the once-a-second
+                        // check (see `Minimized`), for as long as the server is.
+                        let addr = format!("{}:{}", url.host_str().unwrap_or("127.0.0.1"),
+                                           url.port_or_known_default().unwrap_or(80));
+                        if let Some(m) = handle.try_state::<Minimized>() {
+                            if let Ok(mut a) = m.addr.lock() {
+                                *a = Some(addr);
+                            }
+                        }
+                        let (poll_handle, poll_window) = (handle.clone(), window.clone());
+                        std::thread::spawn(move || loop {
+                            std::thread::sleep(Duration::from_secs(1));
+                            let closed = poll_handle
+                                .try_state::<Server>()
+                                .map_or(true, |s| s.closed.load(Ordering::SeqCst));
+                            if closed {
+                                break;
+                            }
+                            if let Ok(minimized) = poll_window.is_minimized() {
+                                note_minimized(&poll_handle, minimized);
+                            }
+                        });
+                        if let Err(e) = window.navigate(url) {
+                            let message = format!("Could not open the Studio page: {e}");
+                            eprintln!("Resume Studio could not start.\n\n{message}");
+                            handle.state::<StartupError>().report(&window, message);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(message) => {
+                        // Printed too: anyone debugging a launch from a
+                        // terminal (`npm run studio`) sees it there, and
+                        // `npm run ui` reproduces the failure with full
+                        // output.
+                        eprintln!("Resume Studio could not start.\n\n{message}");
+                        handle.state::<StartupError>().report(&window, message);
+                    }
+                }
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Destroyed => {
+                if let Some(server) = window.app_handle().try_state::<Server>() {
+                    server.shut();
                 }
             }
+            // Minimizing and restoring both resize the window; see Minimized.
+            tauri::WindowEvent::Resized(_) => {
+                if let Ok(minimized) = window.is_minimized() {
+                    note_minimized(window.app_handle(), minimized);
+                }
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running Resume Studio");

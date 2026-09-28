@@ -1,0 +1,91 @@
+<!doctype html>
+<!--
+  loading.html — what the desktop window shows while the Studio server
+  starts.
+
+  The Tauri shell (src-tauri/src/main.rs) opens its window on this page
+  at once, starts build/studio_server.js, and navigates the window to the
+  server's URL when the server reports it. Before, the window was only
+  created once the server was ready, so launching the app showed nothing
+  at all for that long.
+
+  If the server cannot start, the shell calls showStartupError(message)
+  and the reason stays on screen, where the window's owner can read it.
+
+  Served by Tauri from the bundle (tauri.conf.json, build.frontendDist),
+  never by the server: nothing here may depend on it. Self-contained on
+  purpose — no scripts, fonts or styles from anywhere else.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resume Studio</title>
+<style>
+:root{
+  --ground:#e4e7e1;
+  --ink:#15181a;
+  --muted:#5d645d;
+  --accent:#2d4a3e;
+  --err:#9d382a;
+  --err-wash:#f6e3df;
+  --rule:#d5d9cf;
+  --ui:'Manrope','Helvetica Neue',Arial,sans-serif;
+  --mono:ui-monospace,'SF Mono',Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#111512;
+    --ink:#e7eae4;
+    --muted:#9aa398;
+    --accent:#7fb497;
+    --err:#e08b7c;
+    --err-wash:#3a1f1a;
+    --rule:#333a31;
+  }
+}
+html,body{height:100%;margin:0}
+body{
+  background:var(--ground);color:var(--ink);font:14px/1.5 var(--ui);
+  display:flex;align-items:center;justify-content:center;
+}
+.box{max-width:560px;padding:24px;text-align:center}
+.mark{
+  width:18px;height:18px;margin:0 auto 14px;border-radius:50%;
+  border:2px solid var(--rule);border-top-color:var(--accent);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.mark{animation:none;border-color:var(--accent)}}
+h1{font-size:15px;font-weight:600;margin:0 0 4px}
+p{margin:0;color:var(--muted)}
+.error{display:none;text-align:left}
+.error h1{color:var(--err)}
+.error pre{
+  margin:12px 0 0;padding:12px 14px;border-radius:8px;
+  background:var(--err-wash);color:var(--ink);
+  font:12.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;
+}
+body.failed .starting{display:none}
+body.failed .error{display:block}
+</style>
+</head>
+<body>
+<div class="box starting" role="status" aria-live="polite">
+  <div class="mark" aria-hidden="true"></div>
+  <h1>Starting Resume Studio</h1>
+  <p>Starting the preview engine…</p>
+</div>
+<div class="box error" role="alert">
+  <h1>Resume Studio could not start</h1>
+  <pre id="message"></pre>
+</div>
+<script>
+  // Called by the desktop shell (main.rs) with the reason, as plain text.
+  window.showStartupError = function (message) {
+    document.getElementById('message').textContent = String(message);
+    document.body.classList.add('failed');
+  };
+</script>
+</body>
+</html>

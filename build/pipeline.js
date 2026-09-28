@@ -677,7 +677,10 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
 
   /**
    * The live preview's print: Chromium's PDF exactly as printed, with no
-   * crop and no metadata, to `outPath`.
+   * crop and no metadata. Returns its bytes; with `outPath`, also writes
+   * them there (the tests compare files). The engine passes no path and
+   * hands the bytes straight to the rasterizer, so a preview writes no
+   * file at all — see op_raster in build/worker.py.
    *
    * The preview never needed the crop written to a file — only the
    * crop's effect on the pixels. build/worker.py's raster op applies the
@@ -689,7 +692,7 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * Deliverables still go through printPdfs, and only there.
    */
   async function printPreviewPdf(page, outPath) {
-    await page.pdf({ path: outPath, ...PDF_OPTIONS });
+    return page.pdf(outPath ? { path: outPath, ...PDF_OPTIONS } : PDF_OPTIONS);
   }
 
   return {
@@ -856,6 +859,11 @@ function warmUpSass() {
   warmSassCompiler(require('sass-embedded')).compileString('');
 }
 
+/** Whether the warm Sass compiler is running (for status and the tests). */
+function sassIsWarm() {
+  return Boolean(sassCompiler);
+}
+
 /** Stop the warm Sass compiler, if one was started. Safe to call twice. */
 function disposeSass() {
   if (!sassCompiler) return;
@@ -864,4 +872,4 @@ function disposeSass() {
 }
 
 
-module.exports = { createPipeline, disposeSass, warmUpSass, reported };
+module.exports = { createPipeline, disposeSass, warmUpSass, sassIsWarm, reported };
