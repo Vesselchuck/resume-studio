@@ -274,6 +274,40 @@ class TestValidateData(unittest.TestCase):
             clb.validate_data(d)
         self.assertIn("body", str(ctx.exception))
 
+    # ── The resume's guidance, here too ───────────────────────────
+    def test_good_data_has_no_warnings(self):
+        self.assertEqual(clb.validate_data(good_data()), [])
+
+    def test_a_misspelled_key_warns_instead_of_vanishing(self):
+        # `recipent` used to be dropped without a word, and the letter
+        # printed with no address block.
+        d = good_data()
+        d["letter"]["recipent"] = ["Acme"]
+        d["extra"] = 1
+        warnings = clb.validate_data(d)
+        self.assertEqual(len(warnings), 2, warnings)
+        self.assertTrue(any("'recipent'" in w and "'recipient'" in w for w in warnings))
+        self.assertTrue(any("'extra'" in w and "top level" in w for w in warnings))
+
+    def test_the_profiles_max_pages_is_not_a_warning(self):
+        d = good_data()
+        d["meta"]["maxPages"] = 2      # merged in from _profile.yml
+        self.assertEqual(clb.validate_data(d), [])
+
+    def test_a_paragraph_with_a_colon_gets_the_quoting_hint(self):
+        d = good_data()
+        d["letter"]["body"][0] = {"Dear Team": "thank you"}
+        with self.assertRaises(SchemaError) as ctx:
+            clb.validate_data(d)
+        self.assertIn('"Dear Team: thank you"', str(ctx.exception))
+
+    def test_a_contact_href_without_a_scheme_is_an_error(self):
+        d = good_data()
+        d["contact"]["rows"][0]["href"] = "example.com"
+        with self.assertRaises(SchemaError) as ctx:
+            clb.validate_data(d)
+        self.assertIn("no scheme", str(ctx.exception))
+
 
 class TestResolveLetter(unittest.TestCase):
     def test_the_signature_comes_from_the_name(self):

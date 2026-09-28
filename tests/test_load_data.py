@@ -157,6 +157,22 @@ class TestLoadData(unittest.TestCase):
         self.assertIn("duplicate key 'first'", err.getvalue())
         self.assertIn("line 3", err.getvalue())
 
+    def test_a_file_that_is_not_utf8_fails_cleanly(self):
+        """UTF-16 (Notepad's "Unicode") and legacy code pages used to end
+        in a codec traceback; the worker filed it as a bad request."""
+        for name, raw in (("utf16.yml", MINIMAL_YAML.encode("utf-16")),
+                          ("latin1.yml", MINIMAL_YAML.replace("Gaius", "Gäius").encode("latin-1"))):
+            with self.subTest(encoding=name):
+                bad = self.tmpdir / name
+                bad.write_bytes(raw)
+                os.environ[ENV_RESUME_DATA_FILE] = str(bad)
+                err = io.StringIO()
+                with silenced(), contextlib.redirect_stderr(err), \
+                        self.assertRaises(SystemExit):
+                    build.load_data()
+                self.assertIn(f"{name} is not UTF-8", err.getvalue())
+                self.assertIn("Save it again", err.getvalue())
+
     def test_explicit_file_beats_both_the_source_var_and_the_search(self):
         self.default_path.write_text(MINIMAL_YAML.replace("Gaius", "FromDefault"),
                                      encoding="utf-8")

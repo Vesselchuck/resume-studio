@@ -187,6 +187,8 @@ function measureSidebar() {
         height: rect.height
           + parsePx(ics.marginTop)
           + parsePx(ics.marginBottom),
+        // A `- group:` sub-heading. The solver never ends a page on one.
+        isGroup: itemEl.classList.contains('list-group-heading'),
       });
     }
 

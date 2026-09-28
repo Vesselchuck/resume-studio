@@ -214,6 +214,15 @@ def crop_pdfium_page_to_letter(page) -> None:
     page.set_cropbox(crop_left, crop_bottom, *corner)
 
 
+#: Characters XML 1.0 cannot hold, even escaped: C0 controls other than
+#: tab, LF and CR, and U+FFFE/U+FFFF. YAML lets "\x01" or "\f" through in
+#: a double-quoted string; copied into the XMP they made the packet
+#: ill-formed, and pypdf and PDF/UA validators reject the whole packet.
+#: Removed from the manifest values before /Info is stamped, so /Info
+#: and the XMP apply_xmp() copies from it still say the same thing.
+_XML_ILLEGAL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]')
+
+
 def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None) -> None:
     """
     Stamp the writer's /Info dictionary.
@@ -269,7 +278,7 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
         }
         for src, dst in mapping.items():
             if src in manifest and manifest[src]:
-                info[dst] = str(manifest[src])
+                info[dst] = _XML_ILLEGAL.sub('', str(manifest[src]))
 
     if info:
         writer.add_metadata(info)
@@ -530,6 +539,33 @@ def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
     return wrapped
 
 
+VENDORED_FONT_PREFIXES = ("Manrope", "Newsreader")
+
+
+def foreign_fonts(reader: PdfReader) -> list[str]:
+    """Fonts in the PDF that are not the vendored cuts.
+
+    Text in a script Manrope and Newsreader do not cover (CJK, Arabic,
+    emoji, many symbols) is drawn by Chromium in whatever system font
+    has the glyph. That font is embedded silently, differs by machine,
+    and can arrive as Type 3 (a colour emoji font, or a faux bold of a
+    CJK font), which the project otherwise guarantees never happens.
+    """
+    found = set()
+    for page in reader.pages:
+        fonts = (page.get("/Resources") or {}).get("/Font") or {}
+        for ref in fonts.values():
+            font = ref.get_object()
+            if font.get("/Subtype") == "/Type3":
+                found.add("a Type 3 font")
+                continue
+            base = str(font.get("/BaseFont", ""))
+            name = base.lstrip("/").split("+", 1)[-1]
+            if not name.startswith(VENDORED_FONT_PREFIXES):
+                found.add(name)
+    return sorted(found)
+
+
 def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
     """The whole post-process, in its one order: crop, /Info, /Lang, XMP,
     and on a tagged PDF the link descriptions and artifacts.
@@ -574,7 +610,13 @@ def main() -> int:
         c.err(f"--meta file not found: {args.meta}")
         return 2
 
-    writer = crop_and_stamp(PdfReader(args.input), args.meta)
+    reader = PdfReader(args.input)
+    writer = crop_and_stamp(reader, args.meta)
+    foreign = foreign_fonts(reader)
+    if foreign:
+        c.warn(f"Text drawn in system fonts: {', '.join(foreign)}")
+        c.detail("Some characters are not in Manrope or Newsreader (CJK, Arabic,")
+        c.detail("emoji, symbols). The PDF will look different on other machines.")
 
     try:
         with open(args.output, 'wb') as f:

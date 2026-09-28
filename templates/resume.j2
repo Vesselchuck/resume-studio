@@ -46,10 +46,13 @@
       page: every page's main column, then every sidebar, so the jobs run
       on unbroken and a sidebar list split across pages reads as one.
       (Chromium tags from its accessibility tree, which honors aria-owns;
-      checked on a test page and by tests/test_pdf_accessibility.py.) -#}
+      checked on a test page and by tests/test_pdf_accessibility.py.)
+      The column ids use underscores so no block or job id can equal one:
+      those are kebab-case (build.ID_PATTERN), and a sidebar block called
+      col-main-1 used to take the column's place in this list. -#}
   <main class="resume" aria-label="Resume"
-        aria-owns="{% for p in placement.pages %}col-main-{{ p.page_number }} {% endfor %}
-                   {%- for p in placement.pages %}col-side-{{ p.page_number }}{% if not loop.last %} {% endif %}{% endfor %}">
+        aria-owns="{% for p in placement.pages %}col_main_{{ p.page_number }} {% endfor %}
+                   {%- for p in placement.pages %}col_side_{{ p.page_number }}{% if not loop.last %} {% endif %}{% endfor %}">
 
 {% for page in placement.pages %}
     <!-- ─────────────  PAGE {{ page.page_number }}  ───────────── -->
@@ -74,12 +77,14 @@
         </div>
 {%- if contact %}
         <address class="header-contact">
-{%- if contact.address %}
+{#- Both optional (the schema says so): under StrictUndefined a
+    bare `if` on an absent key raises instead of being false. #}
+{%- if contact.address is defined and contact.address %}
           <span class="header-contact-address">{{ contact.address }}</span>
 {%- endif %}
 {%- for item in contact.rows %}
           <span class="header-contact-item">
-{%- if item.href %}<a href="{{ item.href }}">{{ item.value }}</a>
+{%- if item.href is defined and item.href %}<a href="{{ item.href }}">{{ item.value }}</a>
 {%- else %}{{ item.value }}
 {%- endif %}
           </span>
@@ -93,11 +98,11 @@
 
       <div class="body-grid">
 
-        <aside class="sidebar" id="col-side-{{ page.page_number }}" aria-label="{{ page.sidebar_aria }}">
+        <aside class="sidebar" id="col_side_{{ page.page_number }}" aria-label="{{ page.sidebar_aria }}">
 {{ m.render_sidebar_blocks(page.sidebar_blocks, block_by_id) }}
         </aside>
 
-        <div class="main-col" id="col-main-{{ page.page_number }}">
+        <div class="main-col" id="col_main_{{ page.page_number }}">
 {{ m.render_main_sections(page.main_sections, summary, experience, education, job_by_id) }}
         </div>
 

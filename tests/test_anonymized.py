@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -55,7 +56,8 @@ DATA = ROOT / "data"
 # versions kept in data/legacy/ …), is yours and a source of what
 # must not leak.
 TEMPLATE_FILES = ("_profile_default.yml", "resume_default.yml", "letter_default.yml")
-DATA_SUFFIXES = (".yml", ".yaml", ".yml.old", ".yml.bak")
+DATA_SUFFIXES = (".yml", ".yaml", ".yml.old", ".yml.bak", ".yml.orig",
+                 ".yml~", ".yaml~")
 
 
 def _real_files():
@@ -98,11 +100,30 @@ WINDOWS_TESSERACT = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 OCR_UPSCALE = 2
 
 
+def _norm(text):
+    """NFKC, casefolded, without soft hyphens and zero-width characters:
+    the forms a PDF text layer, a macOS file name or a pasted value can
+    take for the same letters."""
+    text = unicodedata.normalize("NFKC", text)
+    return re.sub("[\u00ad\u200b-\u200d\u2060\ufeff]", "", text).casefold()
+
+
 def _load(path):
+    """A real data file, parsed. A file that does not parse is NOT
+    treated as empty: that would drop every value in it from the search
+    and, when it is the only one, skip the whole test."""
     try:
         return _yaml_loader.load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
+    except Exception as err:
+        raise AssertionError(
+            f"data/…/{path.name} does not parse "
+            f"({type(err).__name__}), so the privacy check cannot read "
+            "what to look for. Fix or remove it.") from None
+
+
+GENERIC_ADDRESSEE = re.compile(
+    r"\b(hiring|team|manager|committee|recruit\w*|talent|department|"
+    r"human resources|search|selection|to whom)\b", re.I)
 
 
 def _identifying_values(doc):
@@ -142,6 +163,20 @@ def _identifying_values(doc):
                     # mailto:/tel: carry the same value in another form.
                     add(re.sub(r"^(mailto|tel):", "", href))
 
+    # The letter's addressee: the company (its first line that is not
+    # a generic "Hiring Team") and the street lines (the ones with a
+    # number). A bare city line is left out, like any city on its own.
+    letter = doc.get("letter") or {}
+    recipient = letter.get("recipient") if isinstance(letter, dict) else None
+    if isinstance(recipient, list):       # the other form the letter takes
+        recipient = "\n".join(str(ln) for ln in recipient)
+    if isinstance(recipient, str):
+        lines = [ln for ln in recipient.splitlines()
+                 if ln.strip() and not GENERIC_ADDRESSEE.search(ln)]
+        for i, line in enumerate(lines):
+            if i == 0 or re.search(r"\d", line):
+                add(line)
+
     for section in doc.get("mainColumn") or []:
         if not isinstance(section, dict):
             continue
@@ -166,26 +201,43 @@ def _identifying_values(doc):
         elif isinstance(node, str):
             for m in re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", node):
                 add(m)
-            for m in re.findall(r"\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", node):
-                if not re.fullmatch(r"\(?0{3}\)?[\s.-]?0{3}[\s.-]?0{4}", m):
+            for m in PHONE.findall(node):
+                if len(_digits(m)) >= 9 and set(_digits(m)) != {"0"}:
                     add(m)
+            # Profile URLs (github.com/you, linkedin.com/in/you), wherever
+            # they are: the sidebar holds them as plain list items.
+            for m in re.findall(r"\b(?:[\w-]+\.)+[a-z]{2,}/[\w./%-]*[\w%-]", node, re.I):
+                add(m)
     walk(doc)
     return out
+
+
+def _whole(needle):
+    """`needle` as a whole word: not glued to a letter or digit."""
+    return re.compile(r"(?<![^\W_])" + re.escape(needle) + r"(?![^\W_])")
+
+
+# Needles that occur in the templates only inside a longer word
+# ("Page" in "maxPages"): kept, but matched as whole words only, or
+# every file that says "maxPages" would be reported.
+WORD_ONLY = set()
 
 
 def _needles():
     real = _real_files()
     if not real:
         return set()
-    template_text = "\n".join(
-        (DATA / f).read_text(encoding="utf-8").lower()
-        for f in TEMPLATE_FILES if (DATA / f).exists())
+    template_text = _norm("\n".join(
+        (DATA / f).read_text(encoding="utf-8")
+        for f in TEMPLATE_FILES if (DATA / f).exists()))
     needles = set()
     for path in real:
         for value in _identifying_values(_load(path)):
-            # Too short to mean anything, or shared with the templates.
-            if len(value) < 4 or value.lower() in template_text:
+            # Too short to mean anything, or a word the templates use.
+            if len(value) < 4 or _whole(_norm(value)).search(template_text):
                 continue
+            if _norm(value) in template_text:
+                WORD_ONLY.add(value)
             needles.add(value)
     return needles
 
@@ -241,29 +293,72 @@ def _committable_images():
             yield rel, path
 
 
+PHONE = re.compile(r"\+?\(?\d[\d\s().-]{6,}\d")
+
+
+def _digits(s):
+    return re.sub(r"\D", "", s)
+
+
 def _matches(text, needles):
-    """The needles that occur in `text`, ignoring case.
+    """The needles that occur in `text`, ignoring case and Unicode form.
 
     PDF text extraction drops the space between name parts
     ("GaiusCaesar"), and OCR drops or adds spaces around letter-spaced
     type, so each needle is also compared with all whitespace removed.
+    A phone number matches in any punctuation ("(555) 867 5309" for
+    "555-867-5309", "tel:+15558675309").
     """
-    low, squashed = text.lower(), re.sub(r"\s+", "", text.lower())
-    return sorted(n for n in needles
-                  if n.lower() in low or re.sub(r"\s+", "", n.lower()) in squashed)
+    low = _norm(text)
+    squashed = re.sub(r"\s+", "", low)
+    phones = {_digits(m) for m in PHONE.findall(low)}
+    found = []
+    for n in needles:
+        nl = _norm(n)
+        if n in WORD_ONLY:
+            hit = bool(_whole(nl).search(low))
+        else:
+            hit = nl in low or re.sub(r"\s+", "", nl) in squashed
+        if not hit and PHONE.fullmatch(n.strip()):
+            d = _digits(n)
+            hit = any(p.endswith(d) or d.endswith(p) and len(p) >= 9 for p in phones)
+        if hit:
+            found.append(n)
+    return sorted(found)
+
+
+def _decoded(value):
+    """Every reading of one metadata value. bytes are decoded, not
+    repr()'d: str(b"M\\xc3\\xbcller") is "b'M\\xc3\\xbcller'", which
+    no needle with a non-ASCII letter matches, and the EXIF XP* tags and
+    UserComment are UTF-16 whatever they hold."""
+    if isinstance(value, (tuple, list)):
+        return "\n".join(_decoded(v) for v in value)
+    if not isinstance(value, bytes):
+        return str(value)
+    for prefix in (b"UNICODE\0", b"ASCII\0\0\0"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+    return "\n".join(value.decode(enc, "ignore").replace("\0", "")
+                     for enc in ("utf-8", "utf-16-le", "utf-16-be"))
 
 
 def _image_metadata(path):
     """The text an image carries besides its pixels (PNG text chunks,
-    EXIF, comments), which a screenshot tool can fill with a window
-    title, a file path or a user name."""
+    EXIF including its sub-IFDs, XMP, comments), which a screenshot tool
+    can fill with a window title, a file path or a user name."""
     from PIL import Image
     with Image.open(path) as im:
-        parts = [str(v) for v in im.info.values() if isinstance(v, (str, bytes))]
-        parts += [str(v) for v in getattr(im, "text", {}).values()]
-        parts += [str(v) for v in im.getexif().values()]
-    return "\n".join(p.decode("utf-8", "replace") if isinstance(p, bytes) else p
-                     for p in parts)
+        parts = [_decoded(v) for v in im.info.values()]
+        parts += [_decoded(v) for v in getattr(im, "text", {}).values()]
+        exif = im.getexif()
+        parts += [_decoded(v) for v in exif.values()]
+        for ifd in (0x8769, 0x8825, 0xA005):   # Exif, GPS, Interop
+            try:
+                parts += [_decoded(v) for v in exif.get_ifd(ifd).values()]
+            except KeyError:                    # not in this image
+                pass
+    return "\n".join(parts)
 
 
 def _find_tesseract():
@@ -307,6 +402,24 @@ def _text_of(path):
         reader = pypdf.PdfReader(str(path))
         parts = [page.extract_text() or "" for page in reader.pages]
         parts += [str(v) for v in (reader.metadata or {}).values()]
+        # What a reader shows besides the page: the XMP packet, link
+        # targets (mailto:, profile URLs) and bookmark titles.
+        xmp = reader.trailer["/Root"].get("/Metadata")
+        if xmp is not None:
+            parts.append(xmp.get_object().get_data().decode("utf-8", "replace"))
+        for page in reader.pages:
+            for annot in page.get("/Annots") or []:
+                action = annot.get_object().get("/A") or {}
+                if "/URI" in action:
+                    parts.append(str(action["/URI"]))
+
+        def titles(items):
+            for item in items:
+                if isinstance(item, list):
+                    titles(item)
+                else:
+                    parts.append(str(item.title))
+        titles(reader.outline)
         return "\n".join(parts)
     try:
         return path.read_text(encoding="utf-8")

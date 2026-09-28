@@ -80,12 +80,14 @@
         </div>
 {%- if contact %}
         <address class="header-contact">
-{%- if contact.address %}
+{#- Both optional (the schema says so): under StrictUndefined a
+    bare `if` on an absent key raises instead of being false. #}
+{%- if contact.address is defined and contact.address %}
           <span class="header-contact-address">{{ contact.address }}</span>
 {%- endif %}
 {%- for item in contact.rows %}
           <span class="header-contact-item">
-{%- if item.href %}<a href="{{ item.href }}">{{ item.value }}</a>
+{%- if item.href is defined and item.href %}<a href="{{ item.href }}">{{ item.value }}</a>
 {%- else %}{{ item.value }}
 {%- endif %}
           </span>
@@ -106,7 +108,7 @@
           <time datetime="{{ letter.date_iso }}">{{ letter.date }}</time>
         </p>
 {%- endif %}
-{%- if letter.recipient %}
+{%- if letter.recipient is defined and letter.recipient %}
         <address class="letter-recipient">
 {%- for line in letter.recipient %}
           <span>{{ line }}</span>

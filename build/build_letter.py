@@ -142,7 +142,15 @@ def load_data():
     return build.apply_profile(data, path), source
 
 
-def _validate_contact(data):
+#: Keys the letter reads, per object; anything else is warned about.
+#: 'date', 'salutation', 'closing' and 'signature' are rejected by name
+#: in validate_data before this list is consulted.
+_KEYS_TOP = ("name", "role", "contact", "meta", "letter")
+_KEYS_META = ("description", "lang", "maxPages")   # maxPages: the profile's
+_KEYS_LETTER = ("recipient", "body")
+
+
+def _validate_contact(data, warnings):
     """Validate the optional `contact` block.
 
     Mirrors the contact rules in build.validate_data so the cover
@@ -157,6 +165,8 @@ def _validate_contact(data):
         contact = data["contact"]
         if not isinstance(contact, dict):
             raise build.SchemaError("'contact' must be a mapping")
+        build._check_keys(contact, build._KEYS_CONTACT, "contact", warnings,
+                          strict=False)
         if "address" in contact and not isinstance(contact["address"], str):
             raise build.SchemaError("'contact.address' must be a string")
         rows = contact.get("rows")
@@ -171,10 +181,13 @@ def _validate_contact(data):
                 raise build.SchemaError(
                     f"{ctx}: must be a mapping with 'value' (and optional 'href')"
                 )
+            build._check_keys(row, build._KEYS_CONTACT_ROW, ctx, warnings,
+                              strict=False)
             if not isinstance(row.get("value"), str) or not row["value"]:
                 raise build.SchemaError(f"{ctx}: 'value' must be a non-empty string")
             if "href" in row and not isinstance(row["href"], str):
                 raise build.SchemaError(f"{ctx}: 'href' must be a string if provided")
+            build._check_href(row.get("href"), ctx)
 
 
 def validate_data(data):
@@ -197,8 +210,13 @@ def validate_data(data):
         ordinary paragraphs of 'body', and the name under them comes
         from 'name'.
 
-    Raises build.SchemaError on the first violation found.
+    Raises build.SchemaError on the first violation found. Returns a
+    list of warnings, as build.validate_data does: keys nothing reads.
+    They are never fatal here — the letter never checked keys, and a
+    stricter build must not reject a file that used to build — but a
+    misspelled `recipent` used to vanish without a word.
     """
+    warnings = []
     for key in ("name", "letter"):
         if key not in data:
             raise build.SchemaError(f"missing top-level key: {key!r}")
@@ -209,19 +227,23 @@ def validate_data(data):
     for key in ("first", "last"):
         if not isinstance(data["name"].get(key), str):
             raise build.SchemaError(f"'name.{key}' must be a string")
+    build._check_keys(data, _KEYS_TOP, "the top level", warnings, strict=False)
+    build._check_keys(data["name"], build._KEYS_NAME, "name", warnings,
+                      strict=False)
 
     # Role (optional).
     if "role" in data and not isinstance(data["role"], str):
         raise build.SchemaError("'role' must be a string if provided")
 
     # Contact (optional) — same shape as the resume.
-    _validate_contact(data)
+    _validate_contact(data, warnings)
 
     # Meta (optional). Only description + lang are consumed.
     if "meta" in data and data["meta"] is not None:
         meta = data["meta"]
         if not isinstance(meta, dict):
             raise build.SchemaError("'meta' must be a mapping if provided")
+        build._check_keys(meta, _KEYS_META, "meta", warnings, strict=False)
         if "description" in meta and meta["description"] is not None \
                 and not isinstance(meta["description"], str):
             raise build.SchemaError("'meta.description' must be a string if provided")
@@ -249,6 +271,15 @@ def validate_data(data):
                 "'letter.body' must be a non-empty list of paragraphs"
             )
         for i, para in enumerate(body):
+            # `- Dear Team: thanks` is a one-key mapping to YAML. Say so,
+            # as the resume does, rather than "must be a string".
+            line = build._as_colon_line(para)
+            if line is not None:
+                raise build.SchemaError(
+                    f"letter.body[{i}] was read as a key/value mapping, not "
+                    f"text, because it contains ': '. Wrap the whole "
+                    f"paragraph in double quotes: \"{line}\""
+                )
             if not isinstance(para, str) or not para.strip():
                 raise build.SchemaError(
                     f"letter.body[{i}] must be a non-empty string"
@@ -304,6 +335,8 @@ def validate_data(data):
                 f"'letter.{field}' is no longer part of the data — "
                 f"{instead}. Delete the line."
             )
+    build._check_keys(letter, _KEYS_LETTER, "letter", warnings, strict=False)
+    return warnings
 
 
 # Month names, written out rather than taken from strftime("%B").
@@ -514,9 +547,11 @@ def build_letter():
     build.check_stylesheet_freshness()
     data, data_source = load_data()
     try:
-        validate_data(data)
+        warnings = validate_data(data)
     except build.SchemaError as e:
         build.fail(f"invalid letter data — {e}")
+    for warning in warnings:
+        c.warn(warning)
 
     accent = build.read_accent()
     lang = build.resolve_lang(data)  # reads meta.lang, defaults en-US
@@ -527,12 +562,19 @@ def build_letter():
     # build.jinja_env.
     env = build.jinja_env(TEMPLATES_DIR)
 
+    # meta and meta.description are optional in a letter (validate_data),
+    # but the template prints meta.description in two <meta> tags. Absent
+    # it raised under StrictUndefined; null printed "None". Both are an
+    # empty description, the same one derive_pdf_metadata stamps.
+    meta = dict(data.get("meta") or {})
+    meta["description"] = meta.get("description") or ""
+
     template = env.get_template("letter.j2")
     rendered = template.render(
         name=data["name"],
         role=data.get("role"),
         contact=data.get("contact"),
-        meta=data.get("meta") or {},
+        meta=meta,
         letter=letter,
         accent=accent,
         lang=lang,

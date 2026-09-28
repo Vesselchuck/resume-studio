@@ -570,6 +570,39 @@ class TestValidateDataGaps(unittest.TestCase):
         d["contact"] = {"rows": [], "phone": "1"}
         self.rejects(d, "contact", "'phone'")
 
+    # ── Link targets ──────────────────────────────────────────────
+    # Chromium resolves a scheme-less href against dist/index.html, so
+    # `example.com/me` reached the PDF as file:///…/dist/example.com/me,
+    # a dead link carrying the project's local path, in /URI and in the
+    # /Contents crop_pdf.describe_links writes from it.
+    def test_contact_href_without_a_scheme_is_an_error(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": "me", "href": "example.com/me"}]}
+        self.rejects(d, "contact.rows[0]", "no scheme", "https://example.com/me")
+
+    def test_details_href_without_a_scheme_is_an_error(self):
+        d = good_data()
+        d["sidebar"]["blocks"][0]["rows"][0]["href"] = "../notes.txt"
+        self.rejects(d, "sidebar.blocks[0].rows[0]", "no scheme")
+
+    def test_href_schemes_that_run_code_or_read_the_disk_are_errors(self):
+        for href in ("javascript:alert(1)", "JavaScript:x", "file:///etc/passwd",
+                     "data:text/html,x", "vbscript:x", "C:\\Users\\me\\cv.pdf"):
+            with self.subTest(href=href):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                self.rejects(d, "contact.rows[0]",
+                             "path on this computer" if href.startswith("C:") else "not allowed")
+
+    def test_ordinary_links_and_an_empty_href_pass(self):
+        for href in ("https://example.com", "mailto:a@b.c", "tel:+15551234567",
+                     "http://x.y/z", ""):
+            with self.subTest(href=href):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                d["sidebar"]["blocks"][0]["rows"][0]["href"] = href
+                validate_data(d)  # should not raise
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,8 +82,10 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -289,7 +291,9 @@ def op_crop(req):
     if meta is not None and not meta.exists():
         raise FileNotFoundError(f"--meta file not found: {meta}")
 
-    writer = crop_mod.crop_and_stamp(PdfReader(str(src)), meta)
+    reader = PdfReader(str(src))
+    writer = crop_mod.crop_and_stamp(reader, meta)
+    foreign = crop_mod.foreign_fonts(reader)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "wb") as f:
@@ -303,6 +307,7 @@ def op_crop(req):
         "widthPt": float(box.width),
         "heightPt": float(box.height),
         "bytes": dst.stat().st_size,
+        "foreignFonts": foreign,
     }
 
 
@@ -525,25 +530,32 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
     # together used to. The bytes are the same either way.
     #
     # `waiting` holds the pages in the order they are to be sent. A page
-    # is sent as soon as it and everything before it are done, so the
-    # first page the caller asked for goes out the moment it is ready
-    # rather than after the last one.
-    waiting = []
+    # is sent as soon as it and everything before it are done: by the
+    # pool thread that finishes its encode, or by this one when a page
+    # needs no encode. So the first page the caller asked for goes out
+    # the moment its PNG exists, not when the next page's render ends.
+    # The lock keeps frames whole and in order whichever thread sends.
+    waiting = deque()
+    lock = threading.Lock()
 
-    def emit(entry, block):
-        idx, item, cached, future = entry
-        if future is not None:
-            if not block and not future.done():
-                return False
-            png = future.result()
-            item["png"] = png
-            cached["png"] = png
-        current[keys[idx]] = cached
-        items[idx] = item
-        _send({"id": rid, "op": "raster", "partial": True,
-               "result": {"scale": scale, "pageCount": page_count, "image": item},
-               "log": [], "diagnostics": [], "ms": 0.0})
-        return True
+    def flush():
+        """Send every page at the head of the queue that is done. Holds `lock`."""
+        while waiting:
+            idx, item, cached, future = waiting[0]
+            if future is not None:
+                if not future.done() or future.exception() is not None:
+                    return  # a failed encode is raised below, in this thread
+                item["png"] = cached["png"] = future.result()
+            waiting.popleft()
+            current[keys[idx]] = cached
+            items[idx] = item
+            _send({"id": rid, "op": "raster", "partial": True,
+                   "result": {"scale": scale, "pageCount": page_count, "image": item},
+                   "log": [], "diagnostics": [], "ms": 0.0})
+
+    def on_encoded(_future):
+        with lock:
+            flush()
 
     with ThreadPoolExecutor(max_workers=max(1, min(len(order), os.cpu_count() or 1))) as pool:
         for idx in order:
@@ -557,12 +569,20 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
                 rendered += 1
             item, cached = _item_for(idx, img, entry, keys, previous)
             future = pool.submit(_encode_png, img) if _fill_png(item, cached, known, idx) else None
-            waiting.append((idx, item, cached, future))
-            while waiting and emit(waiting[0], False):
-                waiting.pop(0)
-        while waiting:
-            emit(waiting[0], True)
-            waiting.pop(0)
+            with lock:
+                waiting.append((idx, item, cached, future))
+                flush()
+            if future is not None:
+                future.add_done_callback(on_encoded)
+
+    # Every encode has finished. Anything still queued sits behind a
+    # failed one: raise that here, as the one-reply path would.
+    with lock:
+        flush()
+        if waiting:
+            for _idx, _item, _cached, future in waiting:
+                if future is not None:
+                    future.result()
 
     if slot is not None:
         _RENDERED[slot] = current
@@ -856,13 +876,19 @@ def handle(req):
         # that is the correct behavior; here it is a reportable error
         # and the worker survives it. The user-facing explanation fail()
         # already wrote is in err_buf and reaches the GUI as diagnostics.
+        #
+        # The headline is fail()'s ❌ line, not simply the first line:
+        # warnings (unknown keys) reach stderr before a later fail(), and
+        # the first of them used to be reported as the error.
+        lines = _split_lines(err_buf.getvalue())
+        at = next((i for i, ln in enumerate(lines)
+                   if ln.lstrip().startswith(c._SYM_ERR)), 0)
         frame.update({
             "ok": False,
             "error": {"kind": "build_failed",
-                      "message": _split_lines(err_buf.getvalue())[0]
-                                 if _split_lines(err_buf.getvalue())
+                      "message": lines[at] if lines
                                  else f"build exited with code {e.code}",
-                      "detail": _split_lines(err_buf.getvalue())[1:],
+                      "detail": lines[at + 1:],
                       "exitCode": e.code},
         })
 
@@ -891,9 +917,12 @@ def handle(req):
         # A Jinja UndefinedError out of a 'final' build almost always
         # means dist/placement.json was solved for different data — see
         # the ordering invariant in op_build. Naming that explicitly
-        # saves the caller from reading a template traceback.
+        # saves the caller from reading a template traceback. Only a
+        # 'final' build reads the placement: an UndefinedError out of a
+        # measurement build is about the data, and its traceback says where.
         kind, detail = "internal", traceback.format_exc().splitlines()[-6:]
-        if type(e).__name__ == "UndefinedError" and op_name == "build":
+        if type(e).__name__ == "UndefinedError" and op_name == "build" \
+                and req.get("mode", "final") == "final":
             kind = "stale_placement"
             detail = [
                 "dist/placement.json does not match the data just loaded.",
@@ -965,6 +994,16 @@ def main():
             _send({"id": None, "op": None, "ok": False,
                    "error": {"kind": "bad_request",
                              "message": f"malformed JSON request: {e}",
+                             "detail": []},
+                   "log": [], "diagnostics": [], "ms": 0.0})
+            continue
+        # Valid JSON that is not an object ("x", [1], null) has no id or
+        # op to answer; handle() calling .get on it killed the worker.
+        if not isinstance(req, dict):
+            _send({"id": None, "op": None, "ok": False,
+                   "error": {"kind": "bad_request",
+                             "message": "request must be a JSON object, got "
+                                        f"{type(req).__name__}",
                              "detail": []},
                    "log": [], "diagnostics": [], "ms": 0.0})
             continue

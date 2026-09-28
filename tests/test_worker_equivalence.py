@@ -291,6 +291,17 @@ class WorkerEquivalenceTest(unittest.TestCase):
         alive = self.worker.call(op="ping")
         self.assertTrue(alive["ok"], "worker died on malformed input")
 
+    def test_json_that_is_not_an_object_does_not_kill_the_worker(self):
+        for line in ('"build"', "[1, 2]", "null", "42"):
+            with self.subTest(request=line):
+                self.worker.proc.stdin.write(line + "\n")
+                self.worker.proc.stdin.flush()
+                bad = self.worker._read_frame()
+                self.assertFalse(bad["ok"])
+                self.assertEqual(bad["error"]["kind"], "bad_request")
+                self.assertTrue(self.worker.call(op="ping")["ok"],
+                                "worker died on a request that was not an object")
+
     def test_raster_skips_pages_the_caller_already_has(self):
         """The preview only re-sends pages whose pixels changed.
 
@@ -432,6 +443,24 @@ class WorkerEquivalenceTest(unittest.TestCase):
             self.assertTrue(cleared["ok"], cleared.get("error"))
 
 
+def _scratch_copy(test):
+    """build/, templates/, styles/, the templates' data and a compiled
+    stylesheet in a temporary directory; no placement. Removed after `test`."""
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    root = Path(tmp.name) / "project"
+    for name in ("build", "templates", "styles"):
+        shutil.copytree(ROOT / name, root / name,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "data").mkdir()
+    for f in (ROOT / "data").glob("*_default.yml"):
+        shutil.copy2(f, root / "data" / f.name)
+    (root / "dist").mkdir()
+    # Copied last, so it is newer than every .scss (build.py checks).
+    shutil.copyfile(STYLES_CSS, root / "dist" / "styles.css")
+    return root
+
+
 class WarmTemplateReloadTest(unittest.TestCase):
     """A warm worker keeps one Jinja Environment and must still see edits.
 
@@ -444,18 +473,7 @@ class WarmTemplateReloadTest(unittest.TestCase):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name) / "project"
-        for name in ("build", "templates", "styles"):
-            shutil.copytree(ROOT / name, self.root / name,
-                            ignore=shutil.ignore_patterns("__pycache__"))
-        (self.root / "data").mkdir()
-        for f in (ROOT / "data").glob("*_default.yml"):
-            shutil.copy2(f, self.root / "data" / f.name)
-        (self.root / "dist").mkdir()
-        # Copied last, so it is newer than every .scss (build.py checks).
-        shutil.copyfile(STYLES_CSS, self.root / "dist" / "styles.css")
+        self.root = _scratch_copy(self)
         self.worker = Worker(self.root)
         self.addCleanup(self.worker.close)
 
@@ -514,6 +532,84 @@ class WarmTemplateReloadTest(unittest.TestCase):
         first = self._html()
         self._build(op="build", mode="measurement")
         self.assertEqual(self._html(), first)
+
+
+class OptionalKeysAndErrorsTest(unittest.TestCase):
+    """What the schema calls optional may be left out, and a failure is
+    reported as itself.
+
+    Under StrictUndefined a bare `{% if contact.address %}` raises when
+    the key is absent, so a file without an address, a contact row
+    without an href, or a letter without meta or recipient failed with a
+    template traceback; the worker then filed a measurement build's
+    failure as a stale placement. Run against a throwaway copy, with the
+    documents in a folder of their own so no profile fills the keys back.
+    """
+
+    def setUp(self):
+        import yaml
+        import _yaml_loader
+        self.root = _scratch_copy(self)
+        bare = self.root / "data" / "bare"
+        bare.mkdir()
+        data = self.root / "data"
+        resume = _yaml_loader.load((data / "resume_default.yml").read_text(encoding="utf-8"))
+        del resume["contact"]["address"]
+        for row in resume["contact"]["rows"]:
+            del row["href"]
+        letter = _yaml_loader.load((data / "letter_default.yml").read_text(encoding="utf-8"))
+        del letter["meta"], letter["letter"]["recipient"], letter["contact"]["address"]
+        for row in letter["contact"]["rows"]:
+            del row["href"]
+        self.resume = bare / "resume_default.yml"
+        self.letter = bare / "letter_default.yml"
+        for path, doc in ((self.resume, resume), (self.letter, letter)):
+            path.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False),
+                            encoding="utf-8")
+        self.worker = Worker(self.root)
+        self.addCleanup(self.worker.close)
+
+    def _html(self, name):
+        return (self.root / "dist" / name).read_text(encoding="utf-8")
+
+    def test_a_resume_without_address_or_hrefs_builds(self):
+        frame = self.worker.call(op="build", mode="measurement",
+                                 env={"RESUME_DATA_FILE": str(self.resume)})
+        self.assertTrue(frame["ok"], frame.get("error"))
+        html = self._html("index.html")
+        self.assertNotIn("header-contact-address", html)
+        self.assertNotIn("<a href", html.split("</header>")[0])
+
+    def test_a_letter_without_meta_or_recipient_builds(self):
+        frame = self.worker.call(op="build_letter",
+                                 env={"LETTER_DATA_FILE": str(self.letter)})
+        self.assertTrue(frame["ok"], frame.get("error"))
+        html = self._html("letter.html")
+        self.assertIn('<meta name="description" content="">', html)
+        self.assertNotIn("letter-recipient", html)
+        self.assertNotIn("None", html)
+
+    def test_a_template_error_in_measurement_is_not_a_stale_placement(self):
+        path = self.root / "templates" / "measurement.j2"
+        path.write_text(path.read_text(encoding="utf-8") + "{{ no_such_name }}\n",
+                        encoding="utf-8")
+        frame = self.worker.call(op="build", mode="measurement")
+        self.assertFalse(frame["ok"])
+        self.assertEqual(frame["error"]["kind"], "internal")
+        self.assertIn("no_such_name", frame["error"]["message"])
+
+    def test_the_error_is_the_failure_not_a_warning_before_it(self):
+        # An unknown key warns, then the final build fails: this copy
+        # has no placement. The warning used to be the headline.
+        text = self.resume.read_text(encoding="utf-8") + "skills: [x]\n"
+        self.resume.write_text(text, encoding="utf-8")
+        frame = self.worker.call(op="build", mode="final",
+                                 env={"RESUME_DATA_FILE": str(self.resume)})
+        self.assertFalse(frame["ok"])
+        self.assertEqual(frame["error"]["kind"], "build_failed")
+        self.assertIn("placement.json not found", frame["error"]["message"])
+        self.assertFalse(any("skills" in line for line in frame["error"]["detail"]))
+        self.assertTrue(any("skills" in line for line in frame["diagnostics"]))
 
 
 if __name__ == "__main__":

@@ -189,6 +189,21 @@ class TestPdfAccessibility(unittest.TestCase):
         self.assertEqual(len(h2) - parser.main, parser.side,
                          "and the sidebar headings all come after them")
 
+    def test_no_block_or_job_id_can_stand_in_for_a_column(self):
+        # aria-owns names the columns by id, and a sidebar block with
+        # id: col-main-1 used to come first in the document with that id,
+        # so the sidebar heading was read in the middle of the jobs.
+        # Block and job ids are kebab-case; the column ids must not be.
+        sys.path.insert(0, str(ROOT / "build"))
+        from build import ID_PATTERN
+        html = (PROJECT.dist / "index.html").read_text(encoding="utf-8")
+        owned = re.search(r'aria-owns="([^"]*)"', html).group(1).split()
+        self.assertTrue(owned)
+        for column in owned:
+            with self.subTest(column=column):
+                self.assertIsNone(ID_PATTERN.match(column))
+                self.assertEqual(html.count(f'id="{column}"'), 1)
+
     def test_only_decoration_is_hidden_from_readers(self):
         for doc, page in DOCS:
             with self.subTest(document=doc):

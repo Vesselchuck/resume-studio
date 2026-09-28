@@ -183,7 +183,7 @@ class PythonWorker {
     this.python = python;
     this.seq = 0;
     this.pending = new Map();
-    this.buffer = '';
+    this.buffer = [];   // pieces of an unfinished stdout line
     this.ready = null;
     // Per-render env overrides (RESUME_DATA_SOURCE, *_DATA_FILE). Set by
     // renderPreview around a call and cleared after, so a data-source
@@ -230,7 +230,7 @@ class PythonWorker {
       env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
     });
     this.proc = proc;
-    this.buffer = '';
+    this.buffer = [];
     proc.stdout.setEncoding('utf-8');
     proc.stderr.setEncoding('utf-8');
 
@@ -352,11 +352,21 @@ class PythonWorker {
   }
 
   _consume(chunk) {
-    this.buffer += chunk;
+    // A page frame is a few hundred KB and arrives in 64 KB chunks.
+    // Only the new chunk is searched for the end of the line, and the
+    // pieces of an unfinished line are joined once, when it ends —
+    // rescanning the whole unfinished line on every chunk made reading
+    // a frame quadratic in its size.
+    let start = 0;
     let idx;
-    while ((idx = this.buffer.indexOf('\n')) !== -1) {
-      const line = this.buffer.slice(0, idx);
-      this.buffer = this.buffer.slice(idx + 1);
+    while ((idx = chunk.indexOf('\n', start)) !== -1) {
+      let line = chunk.slice(start, idx);
+      start = idx + 1;
+      if (this.buffer.length) {
+        this.buffer.push(line);
+        line = this.buffer.join('');
+        this.buffer = [];
+      }
       if (!line.startsWith(FRAME_PREFIX)) {
         if (line.trim()) c.detail(`[worker] ${line}`);
         continue;
@@ -393,6 +403,7 @@ class PythonWorker {
       this.pending.delete(frame.id);
       waiter.resolve(frame);
     }
+    if (start < chunk.length) this.buffer.push(chunk.slice(start));
   }
 
   call(req, onPartial = null) {
@@ -429,11 +440,19 @@ class PythonWorker {
     this.lastLog = frame.log || [];
     if (!this.silent) (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
     if (!frame.ok) {
+      // build.py's fail() output arrives already formatted by _console
+      // ("  ❌ headline", indented detail): strip that, so c.err does not
+      // mark it twice and the UI shows the words. The detail (where in
+      // the file) is part of the error, not only of the log. Only the
+      // detail's own 5-space indent goes: deeper indentation (a YAML
+      // snippet's caret) is part of what it says.
+      const message = String(frame.error.message).replace(/^\s*(?:❌|⚠️|✅)\s*/u, '');
+      const detail = (frame.error.detail || []).map(line => line.replace(/^ {1,5}/, '').trimEnd());
       if (!this.silent) {
-        c.err(frame.error.message);
-        (frame.error.detail || []).forEach(line => c.detail(line));
+        c.err(message);
+        detail.forEach(line => c.detail(line));
       }
-      const err = new Error(frame.error.message);
+      const err = new Error([message, ...detail].join('\n'));
       err.alreadyReported = true;
       err.kind = frame.error.kind;
       throw err;
@@ -475,6 +494,12 @@ class PythonWorker {
       c.ok_pair('Cropped',
         `${r.pages} ${r.pages === 1 ? 'page' : 'pages'}, ` +
         `${(r.widthPt / 72).toFixed(1)} × ${(r.heightPt / 72).toFixed(0)} in (US Letter)`);
+      // The same warning crop_pdf.py prints when the CLI crops.
+      if (r.foreignFonts && r.foreignFonts.length) {
+        c.warn(`Text drawn in system fonts: ${r.foreignFonts.join(', ')}`);
+        c.detail('Some characters are not in Manrope or Newsreader (CJK, Arabic,');
+        c.detail('emoji, symbols). The PDF will look different on other machines.');
+      }
     }
     return frame.result;
   }
@@ -625,6 +650,22 @@ async function createEngine({
       err.alreadyReported = true;
       throw err;
     }
+    // A Chromium that dies on its own (crash, OOM kill) must not stay
+    // cached: every later render would fail on the dead page. Forget it,
+    // so the next render launches a new one. Identity-checked: a browser
+    // closed by releaseBrowser/dispose has already been replaced or nulled.
+    const launched = browser;
+    launched.on('disconnected', () => {
+      if (browser !== launched) return;
+      browser = null;
+      page = null;
+      pagePromise = null;
+      specPagePromise = null;
+      for (const n of [nav, specNav]) {
+        n.assets = null;
+        n.sinceGoto = 0;
+      }
+    });
     const ctx = await browser.newContext();
     page = await ctx.newPage();
     // A new Chromium is a new set of processes to opt out; see "Windows
@@ -761,7 +802,9 @@ async function createEngine({
   }
 
   async function releaseBrowser() {
-    if (disposed || (!browser && !pagePromise)) return;
+    // Queued behind whatever was running when the delay ran out: the
+    // window may have been shown again since.
+    if (disposed || !windowHidden || (!browser && !pagePromise)) return;
     if (pagePromise) {
       try { await pagePromise; } catch { /* never launched */ }
     }
@@ -769,18 +812,28 @@ async function createEngine({
       try { await specPagePromise; } catch { /* never opened */ }
       specPagePromise = null;
     }
-    if (browser) {
-      try { await browser.close(); } catch { /* already gone */ }
+    const closing = browser;
+    if (closing) {
+      try { await closing.close(); } catch { /* already gone */ }
     }
-    browser = null;
-    page = null;
-    pagePromise = null;
+    // The close fires 'disconnected', which already forgot this browser;
+    // a launch started since (the window shown during the close, after
+    // an earlier release) must be kept, not orphaned.
+    if (browser === closing) {
+      browser = null;
+      page = null;
+      pagePromise = null;
+    }
     for (const n of [nav, specNav]) {
       n.assets = null;
       n.sinceGoto = 0;
     }
     releasedWhileHidden = true;
     c.detail('(closed Chromium while the window is hidden; it starts again when the window is shown)');
+    // Shown while the close was awaited: setWindowHidden(false) ran
+    // before the flag was set and relaunched nothing. Do it now, or the
+    // window stays up with no Chromium until the next render pays for it.
+    if (!windowHidden) setWindowHidden(false);
   }
 
   let firstPreviewDone = false;
@@ -1185,7 +1238,15 @@ async function createEngine({
           // is free to be rewritten. Guess the final HTML while Chromium
           // measures this one. See "Speculative final load" above.
           speculating = startSpeculation(pl, inputs);
-          measurements = await pl.getMeasurements(p);
+          try {
+            measurements = await pl.getMeasurements(p);
+          } catch (err) {
+            // The guess must not outlive this render: it writes
+            // dist/index.html and drives the speculative page, and the
+            // next render in the queue owns both. It never rejects.
+            if (speculating) await speculating;
+            throw err;
+          }
           m.measureKey = measureKey;
           m.measurements = structuredClone(measurements);
         }

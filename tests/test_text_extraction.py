@@ -166,5 +166,70 @@ class TestTextLayer(unittest.TestCase):
                                          f"the header reads as: {head}")
 
 
+class TestLongWords(unittest.TestCase):
+    """A word wider than its column wraps; it is not cut off or drawn
+    over the other column.
+
+    Nothing broke a word before (styles/_base.scss, overflow-wrap). A
+    160-character URL in a bullet lost everything past the page margin
+    from the PDF, pixels and text layer alike, and a long word in a
+    sidebar list ran over the divider into the summary, while the layout
+    check reported clean. Built in a copy of its own, from the template
+    with one long word in each column.
+    """
+
+    LONG = "https://example.com/" + "x" * 160
+    SIDE = "Supercalifragilisticexpialidocious" + "Pneumonoultramicroscopic"
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        sys.path.insert(0, str(ROOT / "build"))
+        import _yaml_loader
+        cls.project = Project("long-word-test")
+        data = cls.project.root / "data"
+        doc = _yaml_loader.load((data / "resume_default.yml").read_text(encoding="utf-8"))
+        jobs = next(s for s in doc["mainColumn"] if s["type"] == "experience")["jobs"]
+        jobs[0]["bullets"][0] = f"Built {cls.LONG} pipeline"
+        doc["sidebar"]["blocks"][0]["items"][0] = cls.SIDE
+        # resume.yml wins over the template in the copy's CLI build.
+        (data / "resume.yml").write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False),
+                                         encoding="utf-8")
+        problem = cls.project.build()
+        if problem:
+            cls.project.remove()
+            raise unittest.SkipTest(f"could not build the copy ({problem})")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.project.remove()
+
+    def _boxes(self, word):
+        """(left, right) of every glyph of `word` on page 1, in points."""
+        import pypdfium2 as pdfium
+        found = list(self.project.dist.glob("*_Resume.pdf"))
+        doc = pdfium.PdfDocument(str(found[0]))
+        try:
+            tp = doc[0].get_textpage()
+            text = tp.get_text_range()
+            flat = [(i, ch) for i, ch in enumerate(text) if ch not in "\r\n"]
+            joined = "".join(ch for _, ch in flat)
+            start = joined.find(word)
+            self.assertGreaterEqual(start, 0, f"{word[:24]}… is not in the text layer whole")
+            return [tp.get_charbox(i)[::2] for i, _ in flat[start:start + len(word)]]
+        finally:
+            doc.close()
+
+    def test_a_long_word_in_the_main_column_stays_on_the_page(self):
+        right = 612 - 36          # US Letter less the 0.5in margin
+        boxes = self._boxes(self.LONG)
+        self.assertLessEqual(max(r for _, r in boxes), right + 0.5)
+
+    def test_a_long_word_in_the_sidebar_stays_in_the_sidebar(self):
+        right = 36 + 2.3 * 72     # margin + --sidebar-w
+        boxes = self._boxes(self.SIDE)
+        self.assertLessEqual(max(r for _, r in boxes), right + 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

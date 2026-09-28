@@ -150,6 +150,14 @@ def read_yaml(path):
             f"{_shown(path)} could not be read as YAML.\n"
             + "\n".join(line.rstrip() for line in str(e).splitlines())
         )
+    except UnicodeDecodeError as e:
+        # A file saved as UTF-16 ("Unicode" in Notepad) or in a legacy
+        # code page. It used to surface as a traceback from the codec.
+        fail(
+            f"{_shown(path)} is not UTF-8 text (byte {e.start} is "
+            f"0x{e.object[e.start]:02x}).\n"
+            f"Save it again with the encoding set to UTF-8."
+        )
 
 
 # ─── The shared profile ──────────────────────────────────────────
@@ -761,6 +769,44 @@ def _check_optional_text(obj, key, ctx, *, example):
                     allow_blank=True)
 
 
+#: A link needs a scheme. Chromium resolves a scheme-less href against
+#: the page it prints, dist/index.html, so `href: example.com/me` went
+#: into the PDF as file:///…/dist/example.com/me: a dead link that
+#: carries the path of your project folder (on Windows, your user name)
+#: to everyone you send the file to, in the link and in its /Contents.
+#: The schemes refused are the ones that run code or read your disk.
+_HREF_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+_HREF_REFUSED = ("javascript", "vbscript", "file", "data")
+
+
+def _check_href(href, ctx):
+    """Raise SchemaError unless a non-empty `href` is a link a reader can follow.
+
+    Empty is allowed and means no link. Call after the string check.
+    """
+    if not href:
+        return
+    m = _HREF_SCHEME.match(href.strip())
+    if m is None:
+        raise SchemaError(
+            f"{ctx}: href {href!r} has no scheme, so the PDF would link to "
+            f"a file on this computer — write the whole address, e.g. "
+            f"\"https://{href.strip()}\", \"mailto:…\" or \"tel:…\""
+        )
+    if len(m.group(1)) == 1:
+        # C:\Users\… parses as scheme "c": a path on this computer, the
+        # same leak as a scheme-less href, and a dead link for everyone else.
+        raise SchemaError(
+            f"{ctx}: href {href!r} is a path on this computer, not a link — "
+            f"write a web address, e.g. \"https://…\""
+        )
+    if m.group(1).lower() in _HREF_REFUSED:
+        raise SchemaError(
+            f"{ctx}: href {href!r} — {m.group(1).lower()}: links are not "
+            f"allowed in the document; use https:, mailto: or tel:"
+        )
+
+
 def _check_keys(obj, allowed, ctx, warnings, *, strict, note="", hints=None):
     """
     Report keys of `obj` that nothing reads.
@@ -900,6 +946,7 @@ def validate_data(data):
                 raise SchemaError(f"{ctx}: 'value' must be a non-empty string")
             if "href" in row and not isinstance(row["href"], str):
                 raise SchemaError(f"{ctx}: 'href' must be a string if provided")
+            _check_href(row.get("href"), ctx)
 
     # Meta.
     meta = data["meta"]
@@ -1146,6 +1193,7 @@ def _validate_detail_rows(rows, ctx, warnings):
                 f"{rctx}: 'href' must be a string if provided, e.g. "
                 f"href: \"https://github.com/you\""
             )
+        _check_href(row.get("href"), rctx)
 
 
 def check_no_module_collisions():
