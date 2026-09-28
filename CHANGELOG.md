@@ -43,6 +43,8 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
+Nothing yet.
+
 ---
 
 ## [0.9.1] — 2026-09-27
