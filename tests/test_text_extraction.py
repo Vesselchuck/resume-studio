@@ -25,9 +25,7 @@ Both documents are built from the templates in a throwaway copy of the
 project (tests/_project.py), then read with pypdf and pdfium — the two
 extractors in requirements.txt. For each:
 
-  • every word the page shows is in the text, as often as it is shown
-    (the visually-hidden screen-reader copies are left out: they are not
-    in the PDF's text layer by design);
+  • every word the page shows is in the text, as often as it is shown;
   • no ligature code points (U+FB00–FB06) appear;
   • the name and the role read as whole words.
 
@@ -74,7 +72,6 @@ def tearDownModule():
 
 def _visible_words(html_text):
     h = re.sub(r"(?s)<(style|script|head)\b.*?</\1>", " ", html_text)
-    h = re.sub(r'(?s)<span class="visually-hidden">.*?</span>', " ", h)
     return re.findall(r"[A-Za-z]+", html.unescape(re.sub(r"<[^>]+>", " ", h)))
 
 

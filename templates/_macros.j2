@@ -127,12 +127,19 @@
          {%- if continuation %} data-continues-from="{{ b.id }}"{% else %} id="{{ b.id }}"{% endif %}
          {%- if measure %} data-measure="block" data-id="{{ b.id }}" data-type="{{ b.type }}"{% endif %}>
 {%- if not continuation %}
-  {#- Duplicate-span pattern guards against `text-transform: uppercase`
-      causing acronym-style readout in some screen-reader versions
-      (e.g. VoiceOver reading "Add" as "A.D.D."). Reviewed and
-      retained, 2026 — don't collapse to one span without re-testing
-      against current NVDA / JAWS / VoiceOver. -#}
-  <h2 class="section-heading"{% if measure %} data-measure="block-heading"{% endif %}><span class="visually-hidden">{{ b.heading }}</span><span aria-hidden="true">{{ b.heading }}</span></h2>
+  {#- One copy of the heading, visible and tagged. It used to be two:
+      an aria-hidden visible copy and an off-screen one for screen
+      readers, against `text-transform: uppercase` being read out as an
+      acronym by some screen readers in HTML. In the PDF, the document
+      people receive, that left no heading at all: Chromium does not tag
+      aria-hidden content and never draws an off-screen element, so the
+      structure tree had no H2 (veraPDF, PDF/UA-1 7.4.2).
+      tests/test_pdf_accessibility.py keeps it that way. Whether a
+      screen reader reads the uppercase PDF text as an acronym has not
+      been tried with NVDA, JAWS or VoiceOver. The <span> stays: tracked
+      text inside a child element appears to keep Chromium writing it as
+      words (see _base.scss). -#}
+  <h2 class="section-heading"{% if measure %} data-measure="block-heading"{% endif %}><span>{{ b.heading }}</span></h2>
 {%- endif %}
 {%- if b.type == "details" %}
   <address class="details-list">
@@ -234,7 +241,7 @@
 {%- if section.type == "summary" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ summary.heading }}</span><span aria-hidden="true">{{ summary.heading }}</span></h2>
+  <h2 class="section-heading"><span>{{ summary.heading }}</span></h2>
 {%- endif %}
   <p class="summary-text">{{ summary.text | e | md | safe }}</p>
 </section>
@@ -242,7 +249,7 @@
 <section class="block experience"
          {%- if section.continuation_of %} aria-label="Work experience continued"{% endif %}>
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ experience.heading }}</span><span aria-hidden="true">{{ experience.heading }}</span></h2>
+  <h2 class="section-heading"><span>{{ experience.heading }}</span></h2>
 {%- endif %}
 {% for entry in section.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
@@ -255,7 +262,7 @@
 {%- elif section.type == "education" -%}
 <section class="block">
 {%- if not section.continuation_of %}
-  <h2 class="section-heading"><span class="visually-hidden">{{ education.heading }}</span><span aria-hidden="true">{{ education.heading }}</span></h2>
+  <h2 class="section-heading"><span>{{ education.heading }}</span></h2>
 {%- endif %}
 {%- for item in education['items'] %}
 {{ render_edu_item(item) }}
