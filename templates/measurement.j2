@@ -12,10 +12,9 @@
   `body.measurement-mode` class differs, which CSS uses to disable
   fixed page height so content can flow.
 
-  Heading accessibility: each .section-heading uses the
-  visually-hidden + aria-hidden duplicate-span pattern; rationale
-  is documented at the top of templates/_macros.j2. Do not
-  collapse to a single span without reading that note first.
+  Headings: each .section-heading holds its text once, in a <span>,
+  exactly as the final templates do (see render_sidebar_block in
+  templates/_macros.j2 for why it is no longer written twice).
 
   Markers (emitted by _macros.j2 macros when called with measure=True):
     data-measure="resume-header"  — page-1 header (eats vertical space)
@@ -63,16 +62,15 @@
       <header class="resume-header" data-measure="resume-header">
         <div class="header-left">
           <h1 class="name">
-            {#- The space is text inside the first span, not whitespace
-                between two spans: Chromium drew the same gap either way,
-                but with nothing between the spans pypdf read the name as
-                one word ("GaiusCaesar"). Pixel-identical. #}
-            <span class="name-first">{{ name.first }} </span><span class="name-last">{{ name.last }}</span>
+            {#- One text run. As two spans (first, last) NVDA with Acrobat
+                read two level-1 headings, "Gaius" and "Caesar", and left the
+                name out of its heading list; and with only markup between
+                two spans pypdf had read "GaiusCaesar". Pixel-identical. #}
+            <span class="name-text">{{ name.first }} {{ name.last }}</span>
           </h1>
 {%- if role %}
           <p class="name-role">
-            <span class="visually-hidden">{{ role }}</span>
-            <span aria-hidden="true">{{ role }}</span>
+            <span>{{ role }}</span>
           </p>
 {%- endif %}
         </div>
@@ -120,14 +118,14 @@
    shared macros with measure=True. #}
 
           <section class="block" data-measure="section" data-section-type="summary">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ summary.heading }}</span><span aria-hidden="true">{{ summary.heading }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span>{{ summary.heading }}</span></h2>
             <p class="summary-text" data-measure="summary-text">{{ summary.text | e | md | safe }}</p>
           </section>
 
           <hr class="section-sep" data-measure="separator">
 
           <section class="block experience" data-measure="section" data-section-type="experience">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ experience.heading }}</span><span aria-hidden="true">{{ experience.heading }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span>{{ experience.heading }}</span></h2>
 {% for j in experience.jobs -%}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
 {{ m.render_job(j, measure=True) -}}
@@ -137,7 +135,7 @@
           <hr class="section-sep" data-measure="separator">
 
           <section class="block" data-measure="section" data-section-type="education">
-            <h2 class="section-heading" data-measure="section-heading"><span class="visually-hidden">{{ education.heading }}</span><span aria-hidden="true">{{ education.heading }}</span></h2>
+            <h2 class="section-heading" data-measure="section-heading"><span>{{ education.heading }}</span></h2>
 {%- for item in education['items'] %}
 {{ m.render_edu_item(item, measure=True) }}
 {%- endfor %}

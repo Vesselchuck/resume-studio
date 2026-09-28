@@ -38,7 +38,18 @@
        To change page break behavior, edit the solver in resume.js
        or the meta.maxPages cap in the YAML.
        ══════════════════════════════════════════════════════════════════ -->
-  <main class="resume" aria-label="Resume">
+  {#- READING ORDER. A screen reader follows the PDF's tags, and Chromium
+      builds them in document order: page by page, and on each page the
+      sidebar before the main column. So page 2's continued jobs came
+      right after page 1's sidebar headings, and read as if they belonged
+      to them. aria-owns reorders the tags without moving anything on the
+      page: every page's main column, then every sidebar, so the jobs run
+      on unbroken and a sidebar list split across pages reads as one.
+      (Chromium tags from its accessibility tree, which honors aria-owns;
+      checked on a test page and by tests/test_pdf_accessibility.py.) -#}
+  <main class="resume" aria-label="Resume"
+        aria-owns="{% for p in placement.pages %}col-main-{{ p.page_number }} {% endfor %}
+                   {%- for p in placement.pages %}col-side-{{ p.page_number }}{% if not loop.last %} {% endif %}{% endfor %}">
 
 {% for page in placement.pages %}
     <!-- ─────────────  PAGE {{ page.page_number }}  ───────────── -->
@@ -48,16 +59,16 @@
       <header class="resume-header">
         <div class="header-left">
           <h1 class="name">
-            {#- The space is text inside the first span, not whitespace
-                between two spans: Chromium drew the same gap either way,
-                but with nothing between the spans pypdf read the name as
-                one word ("GaiusCaesar"). Pixel-identical. #}
-            <span class="name-first">{{ name.first }} </span><span class="name-last">{{ name.last }}</span>
+            {#- One text run. As two spans (first, last) NVDA with Acrobat
+                read two level-1 headings, "Gaius" and "Caesar", and left the
+                name out of its heading list; and with only markup between
+                two spans pypdf had read "GaiusCaesar". The last name moves
+                0.002pt; no pixel changes by more than 2/255. #}
+            <span class="name-text">{{ name.first }} {{ name.last }}</span>
           </h1>
 {%- if role %}
           <p class="name-role">
-            <span class="visually-hidden">{{ role }}</span>
-            <span aria-hidden="true">{{ role }}</span>
+            <span>{{ role }}</span>
           </p>
 {%- endif %}
         </div>
@@ -82,11 +93,11 @@
 
       <div class="body-grid">
 
-        <aside class="sidebar" aria-label="{{ page.sidebar_aria }}">
+        <aside class="sidebar" id="col-side-{{ page.page_number }}" aria-label="{{ page.sidebar_aria }}">
 {{ m.render_sidebar_blocks(page.sidebar_blocks, block_by_id) }}
         </aside>
 
-        <div class="main-col">
+        <div class="main-col" id="col-main-{{ page.page_number }}">
 {{ m.render_main_sections(page.main_sections, summary, experience, education, job_by_id) }}
         </div>
 

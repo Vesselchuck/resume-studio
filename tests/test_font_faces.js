@@ -48,7 +48,6 @@ function inspect() {
   while ((node = walker.nextNode())) {
     if (!node.textContent.trim()) continue;
     const el = node.parentElement;
-    if (el.closest('.visually-hidden')) continue;
     const c = getComputedStyle(el);
     if (c.display === 'none' || c.visibility === 'hidden') continue;
     uses.push({

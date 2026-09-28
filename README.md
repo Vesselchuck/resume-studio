@@ -497,6 +497,37 @@ build keeps that text equal to the words on the page:
 pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
 every word on the page.
 
+### A PDF a screen reader can follow
+
+The PDFs are tagged: Chromium writes a structure tree (headings, lists,
+paragraphs, links, reading order) from the HTML, and the crop step adds
+what it leaves out. Checked with veraPDF against PDF/UA-1, the
+accessibility standard for PDF, both documents pass every rule but
+one: they do not declare themselves PDF/UA in their metadata, which is
+a claim the project does not make.
+
+- **Every heading is tagged.** Section headings and the role line are
+  written once, visible. A copy hidden from screen readers plus an
+  off-screen copy for them, the usual HTML technique, leaves nothing to
+  tag in a PDF: Chromium skips the first and never draws the second.
+- **The name is one heading**, not two (first and last name were
+  separate pieces of text, and NVDA read them as two).
+- **Main column first.** Chromium tags a page in document order,
+  sidebar before main column, so page 2's continued jobs read as if
+  they belonged to page 1's sidebar headings. `aria-owns` on `<main>`
+  reorders the tags, not the page: every main column, then every
+  sidebar.
+- **Links say where they go** (`/Contents`: the address, or host and
+  path).
+- **Decoration is marked as such.** The page background, the rules and
+  the "Page 1 of 2" footer are wrapped as artifacts, so a screen reader
+  skips them; the pages draw the same pixels.
+- **The XMP metadata is labelled** as ISO 32000 requires.
+
+`tests/test_pdf_accessibility.py` checks all of it on both documents.
+Not checked: how NVDA, JAWS or VoiceOver actually read the result, in
+particular whether they spell out an uppercase heading as an acronym.
+
 A part of the name with letters that have no ASCII form (山田,
 Смирнов) is kept in its own characters instead, with only the
 characters a filename can't hold replaced: `Ivan Petrov-Смирнов` gives
@@ -553,7 +584,8 @@ check.
 5. Renders the final paginated HTML against the solved placement.
 6. Prints to PDF via Playwright/Chromium, tagged (a structure tree
    screen readers follow), crops to exact US Letter (8.5×11 in), and
-   stamps PDF metadata, XMP and language for accessibility.
+   stamps PDF metadata, XMP and language, link descriptions and
+   artifact marks for accessibility.
 7. Optionally pixel-diffs the result against a committed snapshot to
    catch accidental visual changes (`RESUME_SNAPSHOT=on`).
 
@@ -572,7 +604,8 @@ your profile: `dist/Gaius_Caesar_Resume.pdf`.
 6.  Reload the final HTML
 7.  Check layout invariants (page count, divider, rhythm, overflow)
 8.  Print the PDF (tagged)
-9.  Crop it to US Letter, stamp metadata + XMP + /Lang
+9.  Crop it to US Letter, stamp metadata + XMP + /Lang, describe the
+    links, mark untagged decoration as artifacts
 10. Snapshot test                      — Studio: "Compare against snapshot"
 ```
 
@@ -831,7 +864,8 @@ that build a throwaway copy of the project through the CLI.
 | `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
 | `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
 | `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
-| `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; the preview's in-memory crop gives the same pixels |
+| `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; link descriptions and artifact marks; the preview's in-memory crop gives the same pixels |
+| `test_pdf_accessibility.py`   | The PDFs' tags: every heading, reading order, link descriptions, nothing drawn untagged, labelled XMP |
 | `test_preview_raster.py`      | The preview's PNG writer and per-page keys; the PDF sent as bytes renders like the file |
 | `test_letter_data.py`         | The cover letter's data layer               |
 | `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
@@ -1196,6 +1230,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_power.py                    Windows power-throttling opt-out.
     ├── test_text_extraction.py          The PDFs' text layer reads as the page.
     ├── test_pdf_fonts.py                The PDFs embed TrueType, not Type 3.
+    ├── test_pdf_accessibility.py        What a screen reader and PDF/UA need from the tags.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
     ├── test_cli_navigation.js           Build scripts don't wait for networkidle.

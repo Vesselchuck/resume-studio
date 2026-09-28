@@ -46,7 +46,25 @@ reads for pronunciation.
 
 The same values, with Chromium's /Producer, /Creator and dates, are
 also written as an XMP metadata packet (the catalog's /Metadata), the
-place PDF/UA and most document-management tools read them from.
+place PDF/UA and most document-management tools read them from. The
+stream is labelled /Type /Metadata /Subtype /XML, as ISO 32000
+requires; pypdf leaves both out, and veraPDF failed the files on it.
+
+ACCESSIBILITY (PDF/UA-1)
+────────────────────────
+Chromium tags the PDF (`tagged: true`) but leaves two things a
+screen reader and a PDF/UA validator need:
+  • Link annotations carry no /Contents, the link's text alternative.
+    describe_links() gives each the destination it points to: the
+    address for a mailto: link, host and path for a web link.
+  • Whatever Chromium does not tag — the page background, the rules,
+    the page footer — is left as unmarked content, which PDF/UA
+    forbids: content is either tagged or an artifact.
+    mark_untagged_as_artifacts() wraps each such drawing operation in
+    /Artifact BMC … EMC. Marked content draws nothing, so the pages
+    render to the same pixels.
+Both run only on a tagged PDF (the deliverable); the preview prints
+untagged and never comes here.
 
 WHAT THE CROP KEEPS
 ───────────────────
@@ -80,7 +98,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject, TextStringObject
+from pypdf.generic import ContentStream, NameObject, TextStringObject
 from pypdf.xmp import XmpInformation
 
 # Local console helper.
@@ -376,10 +394,125 @@ def apply_xmp(writer: PdfWriter, lang: str) -> None:
         xmp.xmp_modify_date = modified
     xmp.dc_language = [lang]
     writer.xmp_metadata = xmp
+    # pypdf writes the packet as a bare stream; ISO 32000 (14.3.2)
+    # requires both keys, and PDF/UA validators reject the file without.
+    stream = writer.root_object['/Metadata'].get_object()
+    stream[NameObject('/Type')] = NameObject('/Metadata')
+    stream[NameObject('/Subtype')] = NameObject('/XML')
+
+
+def is_tagged(writer: PdfWriter) -> bool:
+    """Whether Chromium wrote a structure tree (the deliverable) or not."""
+    mark = writer.root_object.get('/MarkInfo')
+    return (
+        '/StructTreeRoot' in writer.root_object
+        and mark is not None
+        and bool(mark.get_object().get('/Marked'))
+    )
+
+
+def link_description(uri: str) -> str | None:
+    """A link's text alternative: where it goes, in the words a reader
+    would see. The address of a mailto: or tel: link; host and path of
+    a web link, without the scheme or a trailing slash. None for a URI
+    with nothing readable in it."""
+    uri = uri.strip()
+    for scheme in ('mailto:', 'tel:'):
+        if uri.lower().startswith(scheme):
+            rest = uri[len(scheme):].split('?', 1)[0]
+            return rest or None
+    m = re.match(r'^[a-z][a-z0-9+.-]*://(?:www\.)?(.*)$', uri, re.IGNORECASE)
+    rest = (m.group(1) if m else uri).rstrip('/')
+    return rest or None
+
+
+def describe_links(writer: PdfWriter) -> int:
+    """Give every link annotation without one a /Contents (PDF/UA-1
+    7.18.1 and 7.18.5). Returns how many were described."""
+    count = 0
+    for page in writer.pages:
+        for ref in page.get('/Annots') or []:
+            annot = ref.get_object()
+            if annot.get('/Subtype') != '/Link' or annot.get('/Contents'):
+                continue
+            action = annot.get('/A')
+            uri = action.get_object().get('/URI') if action is not None else None
+            text = link_description(str(uri)) if uri else None
+            if text:
+                annot[NameObject('/Contents')] = TextStringObject(text)
+                count += 1
+    return count
+
+
+# Content-stream operators, by what they do (ISO 32000, Annex A).
+_PATH = {b'm', b'l', b'c', b'v', b'y', b'h', b're'}
+_PAINT = {b'f', b'F', b'f*', b'S', b's', b'B', b'B*', b'b', b'b*'}
+_SHOW = {b'Tj', b'TJ', b"'", b'"', b'Do', b'sh', b'INLINE IMAGE'}
+
+
+def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
+    """Wrap drawing that is outside every marked-content sequence in
+    /Artifact BMC … EMC (PDF/UA-1 7.1: content is tagged or an
+    artifact). Returns how many operations were wrapped.
+
+    A path is wrapped whole, from its first construction operator to
+    the operator that paints it: nothing may come between the two but
+    a clip (W, W*). A path that is only a clip (ending in n) paints
+    nothing and is left as it is. Text is wrapped one show operator at
+    a time, inside its BT … ET; an XObject, a shading and an inline
+    image, one operator each. Drawing already inside a marked-content
+    sequence — Chromium's tagged content, or anything else — is not
+    touched.
+    """
+    artifact = ([NameObject('/Artifact')], b'BMC')
+    end = ([], b'EMC')
+    wrapped = 0
+    for page in writer.pages:
+        contents = page.get_contents()
+        if contents is None:
+            continue
+        stream = ContentStream(contents, writer)
+        out = []
+        depth = 0
+        path_start = None
+        changed = False
+        for operands, op in stream.operations:
+            if op in (b'BDC', b'BMC'):
+                depth += 1
+                out.append((operands, op))
+            elif op == b'EMC':
+                depth = max(0, depth - 1)
+                out.append((operands, op))
+            elif op in _PATH:
+                if depth == 0 and path_start is None:
+                    path_start = len(out)
+                out.append((operands, op))
+            elif op in _PAINT or op == b'n':
+                if depth == 0 and op != b'n':
+                    out.insert(path_start if path_start is not None else len(out), artifact)
+                    out.append((operands, op))
+                    out.append(end)
+                    wrapped += 1
+                    changed = True
+                else:
+                    out.append((operands, op))
+                path_start = None
+            elif op in _SHOW and depth == 0:
+                out.extend([artifact, (operands, op), end])
+                wrapped += 1
+                changed = True
+            else:
+                out.append((operands, op))
+        if changed:
+            stream.operations = out
+            page.replace_contents(stream)
+            page.compress_content_streams()
+    return wrapped
 
 
 def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
-    """The whole post-process, in its one order: crop, /Info, /Lang, XMP.
+    """The whole post-process, in its one order: crop, /Info, /Lang, XMP,
+    and on a tagged PDF the link descriptions and artifacts.
 
     Both callers go through this — main() below and the Studio worker's
     crop op (build/worker.py) — so a step added here reaches both. They
@@ -390,6 +523,9 @@ def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
     apply_metadata(writer, reader, meta_path)
     lang = apply_language(writer, meta_path)
     apply_xmp(writer, lang)
+    if is_tagged(writer):
+        describe_links(writer)
+        mark_untagged_as_artifacts(writer)
     return writer
 
 

@@ -9,7 +9,12 @@ Tests for crop_pdf.py — round-trip a synthetic PDF and verify:
   • crop_pages keeps the catalog: the structure tree a tagged print
     carries (/StructTreeRoot, /MarkInfo, each page's /StructParents)
     and /ViewerPreferences
-  • apply_xmp writes an XMP packet that says what /Info says, no more
+  • apply_xmp writes an XMP packet that says what /Info says, no more,
+    in a stream labelled /Type /Metadata /Subtype /XML
+  • on a tagged PDF, link annotations get a /Contents (describe_links)
+    and drawing outside every marked-content sequence is wrapped as an
+    /Artifact (mark_untagged_as_artifacts), without changing a pixel;
+    an untagged PDF is left as it is
 
 These tests originally motivated audit-H7: production code accessed
 pypdf's private `_root_object` to set /Lang, which a pypdf version
@@ -420,6 +425,17 @@ class TestApplyXmp(unittest.TestCase):
         self.assertNotIn("pdfaid:part", packet)
         self.assertNotIn("pdfuaid:", packet)
 
+    def test_the_stream_is_labelled_metadata_xml(self):
+        # ISO 32000 14.3.2; pypdf leaves both keys out, and veraPDF
+        # failed the PDFs on it (PDF/UA-1 7.1, test 8).
+        w = PdfWriter()
+        w.add_blank_page(width=612, height=792)
+        w.add_metadata({"/Title": "T"})
+        crop_pdf.apply_xmp(w, "en-US")
+        stream = round_trip(w).trailer["/Root"]["/Metadata"].get_object()
+        self.assertEqual(stream.get("/Type"), "/Metadata")
+        self.assertEqual(stream.get("/Subtype"), "/XML")
+
     def test_the_cli_writes_it(self):
         tmp = Path(tempfile.mkdtemp())
         try:
@@ -598,6 +614,166 @@ class TestLetterUpperRight(unittest.TestCase):
 
     def test_within_tolerance_counts_as_letter(self):
         self.assertIsNotNone(crop_pdf.letter_upper_right(0, 0, 611.9995, 792))
+
+
+class TestLinkDescription(unittest.TestCase):
+    def test_forms(self):
+        cases = {
+            "mailto:gcaesar@email.com": "gcaesar@email.com",
+            "mailto:a@b.org?subject=Hi": "a@b.org",
+            "tel:+10000000000": "+10000000000",
+            "https://www.linkedin.com/in/gcaesar/": "linkedin.com/in/gcaesar",
+            "http://example.org": "example.org",
+            "https://example.org/a/b?x=1": "example.org/a/b?x=1",
+            "example.org/page": "example.org/page",
+            "mailto:": None,
+            "https://": None,
+        }
+        for uri, want in cases.items():
+            with self.subTest(uri=uri):
+                self.assertEqual(crop_pdf.link_description(uri), want)
+
+
+def make_tagged_pdf_with_content() -> PdfWriter:
+    """One tagged page like Chromium's: a background fill and a rule
+    outside any marked content, a tagged text run inside BDC … EMC,
+    an untagged text run, a clip path, and two link annotations, one
+    of which already has a /Contents."""
+    from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject,
+                               DictionaryObject, FloatObject, NameObject,
+                               NumberObject, TextStringObject)
+    w = PdfWriter()
+    page = w.add_blank_page(width=612, height=792)
+    font = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    }))
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+    })
+    stream = DecodedStreamObject()
+    stream.set_data(
+        b"0.95 0.95 0.95 rg 0 0 612 792 re f\n"
+        b"q 36 36 540 720 re W n\n"
+        b"/P <</MCID 0>> BDC BT /F1 14 Tf 0 0 0 rg 72 700 Td (Tagged) Tj ET EMC\n"
+        b"0 0 0 RG 1 w 72 690 m 540 690 l S\n"
+        b"BT /F1 9 Tf 500 40 Td (Page 1 of 1) Tj ET\n"
+        b"Q\n"
+    )
+    page[NameObject("/Contents")] = w._add_object(stream)
+
+    def link(uri, contents=None):
+        d = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in (72, 600, 200, 614)),
+            NameObject("/A"): DictionaryObject({
+                NameObject("/S"): NameObject("/URI"),
+                NameObject("/URI"): TextStringObject(uri),
+            }),
+        })
+        if contents is not None:
+            d[NameObject("/Contents")] = TextStringObject(contents)
+        return w._add_object(d)
+
+    page[NameObject("/Annots")] = ArrayObject([
+        link("mailto:gcaesar@email.com"),
+        link("https://example.org/", contents="Kept as written"),
+    ])
+    page[NameObject("/StructParents")] = NumberObject(0)
+    root = w.root_object
+    root[NameObject("/StructTreeRoot")] = w._add_object(DictionaryObject({
+        NameObject("/Type"): NameObject("/StructTreeRoot"),
+    }))
+    root[NameObject("/MarkInfo")] = DictionaryObject({
+        NameObject("/Marked"): BooleanObject(True),
+    })
+    return w
+
+
+def _operations(page, pdf):
+    from pypdf.generic import ContentStream
+    return ContentStream(page.get_contents(), pdf).operations
+
+
+def _unmarked_painting(page, pdf):
+    """Drawing operators outside every marked-content sequence."""
+    drawing = {b"f", b"F", b"f*", b"S", b"s", b"B", b"B*", b"b", b"b*",
+               b"Tj", b"TJ", b"'", b'"', b"Do", b"sh", b"INLINE IMAGE"}
+    depth, found = 0, []
+    for _, op in _operations(page, pdf):
+        if op in (b"BDC", b"BMC"):
+            depth += 1
+        elif op == b"EMC":
+            depth -= 1
+        elif op in drawing and depth == 0:
+            found.append(op)
+    return found
+
+
+class TestAccessibility(unittest.TestCase):
+    def test_links_get_a_description(self):
+        w = make_tagged_pdf_with_content()
+        self.assertEqual(crop_pdf.describe_links(w), 1)
+        annots = [a.get_object() for a in round_trip(w).pages[0]["/Annots"]]
+        self.assertEqual(annots[0]["/Contents"], "gcaesar@email.com")
+        self.assertEqual(annots[1]["/Contents"], "Kept as written")
+
+    def test_untagged_drawing_becomes_artifacts(self):
+        w = make_tagged_pdf_with_content()
+        r0 = round_trip(make_tagged_pdf_with_content())
+        self.assertEqual(_unmarked_painting(r0.pages[0], r0), [b"f", b"S", b"Tj"])
+        # The fill, the rule and the footer; not the clip, not the tagged text.
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 3)
+        r = round_trip(w)
+        self.assertEqual(_unmarked_painting(r.pages[0], r), [])
+        ops = _operations(r.pages[0], r)
+        artifacts = [o for o, op in ops if op == b"BMC" and o and o[0] == "/Artifact"]
+        self.assertEqual(len(artifacts), 3)
+        tagged = [op for _, op in ops if op == b"BDC"]
+        self.assertEqual(len(tagged), 1, "Chromium's own tags are left as they are")
+        # A path is wrapped whole: nothing between its construction and its paint.
+        names = [op for _, op in ops]
+        i = names.index(b"re")
+        self.assertEqual(names[i - 1], b"BMC")
+        self.assertEqual(names[i + 1:i + 3], [b"f", b"EMC"])
+        # The clip path (W n) is not wrapped.
+        j = names.index(b"W")
+        self.assertEqual(names[j + 1], b"n")
+        self.assertNotEqual(names[j + 2], b"EMC")
+
+    def test_a_second_pass_changes_nothing(self):
+        w = make_tagged_pdf_with_content()
+        crop_pdf.mark_untagged_as_artifacts(w)
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 0)
+
+    @unittest.skipUnless(HAVE_PDFIUM, "pypdfium2 / Pillow not installed")
+    def test_same_pixels(self):
+        before = io.BytesIO()
+        make_tagged_pdf_with_content().write(before)
+        w = make_tagged_pdf_with_content()
+        crop_pdf.mark_untagged_as_artifacts(w)
+        after = io.BytesIO()
+        w.write(after)
+        imgs = []
+        for buf in (before, after):
+            doc = pdfium.PdfDocument(buf.getvalue())
+            imgs.append(doc[0].render(scale=2).to_pil().tobytes())
+            doc.close()
+        self.assertEqual(imgs[0], imgs[1])
+
+    def test_an_untagged_pdf_is_left_alone(self):
+        # The same content with no structure tree: nothing is added.
+        src = make_tagged_pdf_with_content()
+        del src.root_object["/StructTreeRoot"]
+        del src.root_object["/MarkInfo"]
+        buf = io.BytesIO()
+        src.write(buf)
+        buf.seek(0)
+        out = round_trip(crop_pdf.crop_and_stamp(PdfReader(buf), None))
+        self.assertNotIn(b"BMC", [op for _, op in _operations(out.pages[0], out)])
+        self.assertNotIn("/Contents", out.pages[0]["/Annots"][0].get_object())
 
 
 if __name__ == "__main__":

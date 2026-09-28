@@ -168,6 +168,33 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
   the static fonts, pdftotext read it one letter at a time again at
   0.1em. The page is pixel for pixel the same as with letter-spacing,
   and every extractor tested reads the role whole.
+- **Fixed.** The PDFs had no section headings for a screen reader. Each
+  heading, and the role line, was written twice: a visible copy hidden
+  from screen readers and an off-screen copy for them. Chromium leaves
+  the first out of the PDF's tags and never draws the second, so the
+  structure tree went from the name straight to the job titles. They
+  are written once now, visible and tagged; the pages look the same,
+  pixel for pixel. Whether a screen reader reads an uppercase heading
+  as an acronym has not been tried.
+- **Fixed.** A screen reader read each page's sidebar before its main
+  column, so on page 2 the continued jobs came right after page 1's
+  sidebar headings and sounded like part of them. The PDF's tags now
+  run through every page's main column, then every sidebar; nothing
+  moves on the page.
+- **Fixed.** NVDA with Acrobat read the name as two level-1 headings,
+  "Gaius" and "Caesar", and left it out of its list of headings: first
+  and last name were separate pieces of text. The name is one piece
+  now. The last name moves by 0.002 pt, invisible.
+- **Fixed.** The XMP metadata stream lacked the `/Type /Metadata
+  /Subtype /XML` labels ISO 32000 requires, so a strict reader could
+  ignore it.
+- **Added.** Links in the PDF describe where they go (the address, or
+  host and path), and what Chromium draws without a tag — the page
+  background, the rules, the "Page 1 of 2" footer — is marked as
+  decoration. With the fixes above, veraPDF passes both documents on
+  every PDF/UA-1 rule except the one asking the file to declare
+  PDF/UA, which it does not. `tests/test_pdf_accessibility.py` guards
+  it.
 
 ---
 

@@ -69,9 +69,8 @@
   letter-spacing: 0.02em;
   line-height: 0.98;
 }
-/* Name flows inline on one line — spans are inline by default.
-   display: block removed; margin-block-start removed.             */
-.name-first, .name-last { display: inline; }
+/* The name is one inline text run (.name-text): see resume.j2 for why
+   it is no longer split into first and last.                       */
 
 /* Role line — small uppercase label in accent color. Uppercase is
    appropriate here as a structured designation, not a personal name.
