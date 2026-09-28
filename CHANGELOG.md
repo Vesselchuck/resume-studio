@@ -43,6 +43,34 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
+---
+
+## [0.9.1] — 2026-09-27
+
+*The PDFs are easier for software and people to read: every word comes
+out of the text layer as it is on the page, and a screen reader gets
+the headings, the reading order and the links (they pass PDF/UA-1,
+the accessibility standard for PDF, and say so). The fonts are static,
+which makes the PDFs about a third of their size and previews faster.
+The Studio window opens at once, gives Chromium's memory back while it
+is minimized, and stops restarting a Python worker that keeps
+crashing. Nothing you rely on changed.*
+
+### Upgrading from 0.9.0
+
+1. `py -m pip install -r requirements.txt` for ISA-L, the faster PNG
+   encoder the preview now uses. Optional: without it the preview
+   works as before.
+2. Regenerate the snapshot fixture built from your own data with
+   `python build/snapshot_pdf.py --update`. Letter edges are smoothed
+   slightly differently with the static fonts, and "fi", "ff" and "tt"
+   are drawn as separate letters, so the old fixture no longer matches.
+   The committed template fixture is already regenerated.
+3. The first `npm run studio` rebuilds the desktop shell; that takes a
+   minute or two once.
+
+### Changes
+
 - **Added.** `tests/test_anonymized.py` reads committed images. A
   screenshot of your real résumé in `docs/screenshots/` used to pass,
   because images were skipped. Their embedded metadata is now always
@@ -1145,8 +1173,10 @@ the old names can still be followed.
 | 0.8.0 | — | breaking: stricter data checks; Studio, build and security fixes |
 | 0.8.1 | — | a faster preview and faster builds, output unchanged |
 | 0.9.0 | — | breaking: one PDF per document, no grayscale variant |
+| 0.9.1 | — | readable and accessible PDFs, static fonts, a lighter Studio |
 
 [Unreleased]: #unreleased
+[0.9.1]: #091--2026-09-27
 [0.9.0]: #090--2026-09-23
 [0.8.1]: #081--2026-09-22
 [0.8.0]: #080--2026-09-21
