@@ -121,6 +121,18 @@ def _pdftotext(path):
                           text=True, encoding="utf-8", errors="replace").stdout
 
 
+def _version(name):
+    """The extractor's version, for a failure message."""
+    try:
+        if name == "pdftotext":
+            r = subprocess.run([shutil.which("pdftotext"), "-v"], capture_output=True, text=True)
+            return (r.stdout + r.stderr).strip().splitlines()[0]
+        from importlib.metadata import version
+        return version({"pdfium": "pypdfium2"}.get(name, name))
+    except Exception:  # noqa: BLE001 — only ever decoration on a failure
+        return "(version unknown)"
+
+
 EXTRACTORS = {"pypdf": _pypdf, "pdfium": _pdfium,
               "pdfplumber": _pdfplumber, "pdftotext": _pdftotext}
 
@@ -144,7 +156,13 @@ class TestTextLayer(unittest.TestCase):
                 with self.subTest(document=doc, extractor=name):
                     got = Counter(w.lower() for w in re.findall(r"[A-Za-z]+", text))
                     missing = {w: n - got[w] for w, n in want.items() if got[w] < n}
-                    self.assertEqual(missing, {}, "words on the page the text layer lacks")
+                    # What the extractor made of each lost word, and which
+                    # extractor it was: a heading split into letters reads
+                    # very differently from one dropped outright.
+                    near = [line.strip() for line in text.splitlines()
+                            if any(w in re.sub(r"[^a-z]", "", line.lower()) for w in missing)]
+                    self.assertEqual(missing, {}, "words on the page the text layer lacks; "
+                                     f"{name} ({_version(name)}) read them as {near[:6]!r}")
 
     def test_no_ligature_code_points(self):
         for doc, _ in DOCS:

@@ -165,6 +165,13 @@ async function unitTests(tmp) {
   assertEq(server.uiContentSecurityPolicy('<script>\rvar a = 1;\r</script>'),
     server.uiContentSecurityPolicy('<script>\nvar a = 1;\n</script>'),
     'CSP: ...and so does one with lone CRs');
+  // The script ends where the HTML parser ends it: `</script` then
+  // whitespace, `/` or `>`, whatever follows up to the `>`.
+  for (const end of ['</script >', '</script\t\n bar>', '</SCRIPT>', '</script/>']) {
+    assertEq(server.uiContentSecurityPolicy(`<script>var a = 1;${end}<p>x</p>`),
+      server.uiContentSecurityPolicy('<script>var a = 1;</script><p>x</p>'),
+      `CSP: the script ends at ${JSON.stringify(end)}, as the browser ends it`);
+  }
   assertTrue(/frame-ancestors 'none'/.test(csp) && /default-src 'none'/.test(csp)
     && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp),
     'CSP: no framing, nothing by default, no unsafe script sources');

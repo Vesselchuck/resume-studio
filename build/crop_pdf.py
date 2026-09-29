@@ -241,7 +241,11 @@ def crop_pdfium_page_to_letter(page) -> None:
 #: ill-formed, and pypdf and PDF/UA validators reject the whole packet.
 #: Removed from the manifest values before /Info is stamped, so /Info
 #: and the XMP apply_xmp() copies from it still say the same thing.
-_XML_ILLEGAL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]')
+#: A str.translate() table (each code point mapped to None, i.e. deleted)
+#: rather than a regex character class, so the set is spelled out as
+#: code points and no range can be misread as wider than it is.
+_XML_ILLEGAL = dict.fromkeys(
+    [*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF])
 
 
 def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None) -> None:
@@ -299,7 +303,7 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
         }
         for src, dst in mapping.items():
             if src in manifest and manifest[src]:
-                info[dst] = _XML_ILLEGAL.sub('', str(manifest[src]))
+                info[dst] = str(manifest[src]).translate(_XML_ILLEGAL)
 
     if info:
         writer.add_metadata(info)
