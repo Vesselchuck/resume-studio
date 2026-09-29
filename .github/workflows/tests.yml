@@ -159,8 +159,22 @@ jobs:
       - name: Build the cover letter
         run: node letter.js
 
+      # Which text extractors the text-layer test will find here, and
+      # their versions, which need not match the Linux job's.
+      - name: Show the text extractors
+        run: |
+          command -v pdftotext && pdftotext -v || echo "no pdftotext on PATH"
+
       - name: Run the tests
         run: npm test
+
+      - name: Keep the built PDFs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pdfs-windows
+          path: dist/*.pdf
+          if-no-files-found: ignore
 
       # The runner image ships a stable Rust toolchain. Only a check, not
       # a build: it proves the shell compiles against Cargo.lock without

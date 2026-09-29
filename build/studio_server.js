@@ -398,7 +398,10 @@ function uiContentSecurityPolicy(html) {
   // the page would run at all.
   html = html.replace(/\r\n?/g, '\n');
   const hashes = [];
-  const re = /<script(\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi;
+  // An end tag is `</script` followed by whitespace, `/` or `>`, and
+  // whatever attributes come before the `>` are ignored: `</script\t\n x>`
+  // closes the script too, so the match must end there as the parser does.
+  const re = /<script(\s[^>]*)?>([\s\S]*?)<\/script(?:[\s/][^>]*)?>/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
     if (m[1] && /\ssrc\s*=/i.test(m[1])) continue;

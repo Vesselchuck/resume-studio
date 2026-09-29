@@ -101,6 +101,49 @@ function chromiumChildren() {
   return found;
 }
 
+/**
+ * Chromium renderer processes below the given browser pids: every
+ * descendant whose command line says --type=renderer. On Linux the
+ * renderers hang off a zygote, not the browser itself, hence the walk.
+ */
+function rendererPids(browserPids) {
+  let rows;
+  if (process.platform === 'win32') {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + ' ' + " +
+      "[string]$_.ParentProcessId + ' ' + $_.CommandLine }"], { encoding: 'utf-8', maxBuffer: 64 << 20 });
+    rows = out.split(/\r?\n/).map((l) => {
+      const m = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(l);
+      return m && { pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] };
+    }).filter(Boolean);
+  } else if (fs.existsSync('/proc/self/stat')) {
+    rows = [];
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf-8');
+        const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+        const cmd = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf-8').split('\0').join(' ');
+        rows.push({ pid: Number(entry), ppid, cmd });
+      } catch { /* gone meanwhile */ }
+    }
+  } else {
+    const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf-8' });
+    rows = out.split('\n').map((l) => {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+      return m && { pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] };
+    }).filter(Boolean);
+  }
+  const below = new Set(browserPids);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const r of rows) {
+      if (!below.has(r.pid) && below.has(r.ppid)) { below.add(r.pid); grew = true; }
+    }
+  }
+  return rows.filter(r => below.has(r.pid) && /--type=renderer/.test(r.cmd)).map(r => r.pid);
+}
+
 /* ─── Engine ──────────────────────────────────────────────────── */
 
 async function chromiumKilled(createEngine, root) {
@@ -255,16 +298,27 @@ async function crashedPage(createEngine, root) {
     const browsers = chromiumChildren();
     const pl = engine.pipelines.letter;
     const load = pl.openDocument;
-    // Page.crash: the renderer dies, Chromium itself does not.
+    // The renderer dies, Chromium itself does not: its renderer
+    // processes are killed, as an out-of-memory kill or a crash would.
+    // (CDP's Page.crash was used first. On Playwright's headless shell
+    // build of Chromium 148 it left the page hung instead of crashed, so
+    // the render only ended at its 30 s deadline, with a new Chromium:
+    // not the case this checks.)
+    let killed = [];
     pl.openDocument = async (page, opts) => {
       pl.openDocument = load;
-      const cdp = await page.context().newCDPSession(page);
-      cdp.send('Page.crash').catch(() => {});
+      killed = rendererPids(browsers);
+      for (const pid of killed) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* gone already */ }
+      }
       await sleep(500);
       return load(page, opts);
     };
+    const t0 = Date.now();
     await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
-    assertTrue(!engine.status().browserOpen, 'C1: a crashed page is dropped');
+    assertTrue(killed.length > 0, `C1: the page's renderer is found and killed (${killed})`);
+    assertTrue(Date.now() - t0 < 15000, `C1: the render on a crashed page fails at once, not at a deadline (${Date.now() - t0} ms)`);
+    assertTrue(await waitFor(() => !engine.status().browserOpen, 5000), 'C1: a crashed page is dropped');
     const err = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
     assertEq(err ? err.message.split('\n')[0] : null, null, 'C1: the next render works');
     const again = await rejectsWithin(engine.renderPreview({ doc: 'resume', recompileStyles: true }));
