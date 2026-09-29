@@ -160,13 +160,19 @@ def _validate_contact(data, warnings):
     validates the whole resume schema (sidebar, mainColumn, …) that a
     cover letter doesn't have. If the resume's contact rules change,
     update both sites.
+
+    That includes strictness. An unknown key in `contact` or in a row
+    stops the build, as it does the résumé's. It used to be a warning
+    here, and the block usually comes from data/_profile.yml, which
+    both documents merge: the same `hre:` typo failed the résumé and
+    built a letter whose link was silently missing.
     """
     if "contact" in data and data["contact"] is not None:
         contact = data["contact"]
         if not isinstance(contact, dict):
             raise build.SchemaError("'contact' must be a mapping")
         build._check_keys(contact, build._KEYS_CONTACT, "contact", warnings,
-                          strict=False)
+                          strict=True)
         if "address" in contact and not isinstance(contact["address"], str):
             raise build.SchemaError("'contact.address' must be a string")
         rows = contact.get("rows")
@@ -182,7 +188,7 @@ def _validate_contact(data, warnings):
                     f"{ctx}: must be a mapping with 'value' (and optional 'href')"
                 )
             build._check_keys(row, build._KEYS_CONTACT_ROW, ctx, warnings,
-                              strict=False)
+                              strict=True)
             if not isinstance(row.get("value"), str) or not row["value"]:
                 raise build.SchemaError(f"{ctx}: 'value' must be a non-empty string")
             if "href" in row and not isinstance(row["href"], str):
@@ -204,7 +210,7 @@ def validate_data(data):
         are optional strings
       • letter is a mapping with a required non-empty 'body' list of
         non-empty strings; optional 'recipient' (a list of non-empty
-        strings, or one block of text, one line per entry)
+        strings, possibly empty, or one block of text, one line per entry)
       • 'date', 'salutation', 'closing' and 'signature' are REJECTED.
         The date is stamped by the build, the greeting and sign-off are
         ordinary paragraphs of 'body', and the name under them comes
@@ -212,9 +218,13 @@ def validate_data(data):
 
     Raises build.SchemaError on the first violation found. Returns a
     list of warnings, as build.validate_data does: keys nothing reads.
-    They are never fatal here — the letter never checked keys, and a
-    stricter build must not reject a file that used to build — but a
-    misspelled `recipent` used to vanish without a word.
+    At the top level and in `meta` and `letter` they are never fatal —
+    the letter never checked keys, and a stricter build must not reject
+    a file that used to build — but a misspelled `recipent` used to
+    vanish without a word. In `name`, `contact` and a contact row they
+    are errors, exactly as in the résumé: those blocks are shared with
+    it through the profile, and one file must not pass for one document
+    and fail for the other (see _validate_contact).
     """
     warnings = []
     for key in ("name", "letter"):
@@ -229,7 +239,7 @@ def validate_data(data):
             raise build.SchemaError(f"'name.{key}' must be a string")
     build._check_keys(data, _KEYS_TOP, "the top level", warnings, strict=False)
     build._check_keys(data["name"], build._KEYS_NAME, "name", warnings,
-                      strict=False)
+                      strict=True)
 
     # Role (optional).
     if "role" in data and not isinstance(data["role"], str):
@@ -308,6 +318,12 @@ def validate_data(data):
                     "'letter.recipient' must not be empty if provided"
                 )
         elif isinstance(recipient, list):
+            # An empty list is no address block, the same as leaving the
+            # key out: every other optional list here (education items,
+            # contact rows) reads `[]` as "none", and a letter with no
+            # recipient is a letter README's "only two fields" allows.
+            # letter.schema.json agrees (no minItems). A blank LINE in
+            # the list is still an error: it is a line you meant to fill.
             for i, line in enumerate(recipient):
                 if not isinstance(line, str) or not line.strip():
                     raise build.SchemaError(
@@ -549,7 +565,7 @@ def build_letter():
     try:
         warnings = validate_data(data)
     except build.SchemaError as e:
-        build.fail(f"invalid letter data — {e}")
+        build.fail(f"invalid letter data — {build.explain_schema_error(e)}")
     for warning in warnings:
         c.warn(warning)
 

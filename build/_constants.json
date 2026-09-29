@@ -49,6 +49,8 @@
     "RETIRED_GRAYSCALE_SUFFIXES": ["_Grayscale", "-grayscale"],
     "_comment_max_part": "Per-name-part character cap. Windows' 260-char path limit is the real constraint; two parts plus a suffix plus the dist/ prefix stays far inside it at 64 each.",
     "MAX_PART": 64,
+    "_comment_record": "The file in dist/ where a build records which PDFs it wrote: per document, the current PDF's name, the data_source and SHA-256 it was built with, and every name it has written that may still be in dist/. The prune deletes only names recorded there (plus LEGACY and the retired grayscale spellings), never a PDF you put in dist/ yourself, and snapshot_pdf.py reads the data source from it rather than from pdf_meta.json, which every live preview rewrites. Written by resume.js and letter.js; see _output_name.js.",
+    "RECORD": "outputs.json",
     "_comment_legacy": "Filenames this project used before outputs were named after you. Pruned from dist/ after a successful build so an old resume-color.pdf cannot be mistaken for today's output — by you, by the Studio tray, or by anything that globs the directory.",
     "LEGACY": {
       "resume": ["resume-color.pdf", "resume-grayscale.pdf"],

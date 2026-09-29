@@ -91,10 +91,12 @@ const crypto = require('crypto');
 
 const { createPipeline, disposeSass, warmUpSass, sassIsWarm } = require('./pipeline');
 const { detectPython } = require('./detect_python');
+const distLock = require('./_dist_lock');
 const { ENV_RESUME_SPECULATIVE } = require('./_env_contract');
 const c = require('./_console');
 
 const FRAME_PREFIX = '\x1e';
+const FRAME_PREFIX_CODE = FRAME_PREFIX.charCodeAt(0);
 const WORKER = path.join(__dirname, 'worker.py');
 
 // How long the Studio window may stay hidden before Chromium is closed.
@@ -109,6 +111,22 @@ const CRASH_WINDOW_MS = 3 * 60 * 1000;
 // A real navigation at least this often, however many in-place loads
 // would otherwise follow one another. See renderPreview.
 const GOTO_EVERY = 50;
+
+// Deadlines. Everything goes through one queue, so a single operation
+// that never returns — a worker stopped mid-request, a page whose fonts
+// never settle, a renderer spinning in a loop, a build child that hangs
+// — used to block every preview and build behind it until the Studio
+// was restarted. Past its deadline the stuck process is killed, the
+// request fails saying so, and the next one starts a fresh one.
+//
+// Generous on purpose: they are for "never", not for "slow". A preview's
+// worker requests take tens of milliseconds and its page steps well
+// under a second; Playwright's own default for a navigation is 30 s. A
+// Build with its test suites switched on takes minutes. A streamed
+// raster resets the worker's clock with every page it sends.
+const WORKER_TIMEOUT_MS = 60 * 1000;
+const PAGE_TIMEOUT_MS = 30 * 1000;
+const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
 
 /* ─── Fingerprints for the early cutoff ───────────────────────── */
@@ -178,9 +196,13 @@ function fontsFingerprint(dir) {
  * they produce identical bytes.
  */
 class PythonWorker {
-  constructor({ root, python }) {
+  constructor({ root, python, timeoutMs = WORKER_TIMEOUT_MS }) {
     this.root = root;
     this.python = python;
+    // How long one request (or the start-up handshake) may go without a
+    // frame before the process is taken to be stuck and killed. See
+    // WORKER_TIMEOUT_MS.
+    this.timeoutMs = timeoutMs;
     this.seq = 0;
     this.pending = new Map();
     this.buffer = [];   // pieces of an unfinished stdout line
@@ -227,6 +249,12 @@ class PythonWorker {
     const proc = spawn(this.python, ['-B', WORKER], {
       cwd: this.root,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // No console window of its own on Windows. The desktop app starts
+      // this server with CREATE_NO_WINDOW (main.rs), so there is no
+      // visible console to share; this makes sure the worker, a console
+      // program, never gets a visible one of its own either, whatever
+      // started the server. Ignored off Windows.
+      windowsHide: true,
       env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
     });
     this.proc = proc;
@@ -250,8 +278,17 @@ class PythonWorker {
       }
     };
 
+    // A worker that never says hello (an import stuck on a network
+    // drive, a stopped process) would leave ensure() awaiting forever.
+    const helloTimer = setTimeout(() => {
+      if (this.proc !== proc || !this._resolveReady) return;
+      c.warn(`Python worker did not start in ${this.timeoutMs / 1000} s; stopping it`);
+      proc.kill('SIGKILL');
+    }, this.timeoutMs);
+    helloTimer.unref();
+
     this.ready = new Promise((resolve, reject) => {
-      this._resolveReady = resolve;
+      this._resolveReady = (hello) => { clearTimeout(helloTimer); resolve(hello); };
       proc.once('error', (err) => {
         proc._studioDead = true;
         recordCrash();
@@ -367,15 +404,36 @@ class PythonWorker {
         line = this.buffer.join('');
         this.buffer = [];
       }
-      if (!line.startsWith(FRAME_PREFIX)) {
-        if (line.trim()) c.detail(`[worker] ${line}`);
-        continue;
-      }
+      // The frame starts at the LAST RS on the line, not necessarily at
+      // its start: output written to the pipe without a newline (a C
+      // library printing straight to the fd) glues itself to the front
+      // of the next frame, and requiring RS first dropped that frame and
+      // left its request waiting forever. The frame's JSON cannot hold
+      // a raw RS (JSON escapes control characters), so the last one is
+      // the frame's own.
+      //
+      // The usual line starts with RS and is parsed as it is: a page
+      // frame is ~1 MB, and lastIndexOf walks all of it (~0.2-0.3 ms a
+      // frame). A line that starts with RS but does not parse must have
+      // glued output of its own starting with RS (the frame's JSON never
+      // holds a raw RS, so junk + RS + frame cannot parse as JSON), and
+      // takes the slow path.
       let frame;
-      try {
-        frame = JSON.parse(line.slice(1));
-      } catch {
-        continue;
+      if (line.charCodeAt(0) === FRAME_PREFIX_CODE) {
+        try { frame = JSON.parse(line.slice(1)); } catch { frame = undefined; }
+      }
+      if (frame === undefined) {
+        const at = line.lastIndexOf(FRAME_PREFIX);
+        if (at === -1) {
+          if (line.trim()) c.detail(`[worker] ${line}`);
+          continue;
+        }
+        if (at > 0 && line.slice(0, at).trim()) c.detail(`[worker] ${line.slice(0, at)}`);
+        try {
+          frame = JSON.parse(line.slice(at + 1));
+        } catch {
+          continue;
+        }
       }
       if (frame.op === 'hello') {
         const r = this._resolveReady;
@@ -385,6 +443,8 @@ class PythonWorker {
       }
       const waiter = this.pending.get(frame.id);
       if (!waiter) continue;
+      // Any frame is a sign of life: a long streamed raster is not stuck.
+      if (waiter.touch) waiter.touch();
       // A partial frame is one instalment of an answer still in
       // progress (the rasterizer's per-page frames). The request stays
       // pending until the frame without the flag arrives, which is what
@@ -401,6 +461,7 @@ class PythonWorker {
         continue;
       }
       this.pending.delete(frame.id);
+      if (waiter.done) waiter.done();
       waiter.resolve(frame);
     }
     if (start < chunk.length) this.buffer.push(chunk.slice(start));
@@ -414,16 +475,53 @@ class PythonWorker {
         return;
       }
       const proc = this.proc;
-      this.pending.set(id, { resolve, reject, proc, onPartial });
+      // Past the deadline with no frame, the process is stuck: kill it,
+      // so this request fails now and the next one starts a fresh worker
+      // (ensure). The exit that follows counts as a crash, so a worker
+      // that hangs on every request stops being restarted like one that
+      // crashes on every request.
+      let timer = null;
+      // Re-armed on every frame with refresh(), which moves the one
+      // timer's deadline instead of allocating a new one per frame.
+      const touch = () => {
+        if (timer) { timer.refresh(); return; }
+        timer = setTimeout(() => {
+          if (!this.pending.delete(id)) return;
+          const err = new Error(
+            `The Python worker did not answer a '${req.op}' request in `
+            + `${this.timeoutMs / 1000} s, so it was stopped; the next render starts a new one.`);
+          err.kind = 'timeout';
+          c.warn(err.message);
+          // Dead from now on, not from when the exit event arrives: a
+          // request made in between would be written to it and fail.
+          // Counted here, because by the time it exits a new worker may
+          // have replaced it and its exit is no longer counted.
+          proc._studioDead = true;
+          if (!proc._studioCounted) {
+            proc._studioCounted = true;
+            this.crashes.push(this.now());
+          }
+          try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+          reject(err);
+        }, this.timeoutMs);
+        timer.unref();
+      };
+      const done = () => clearTimeout(timer);
+      touch();
+      this.pending.set(id, {
+        resolve, reject: (err) => { done(); reject(err); }, proc, onPartial, touch, done,
+      });
       try {
         proc.stdin.write(JSON.stringify({ ...req, id }) + '\n', (err) => {
           if (!err) return;
           if (this.pending.delete(id)) {
+            done();
             reject(new Error(`build/worker.py is not accepting requests (${err.code || err.message})`));
           }
         });
       } catch (err) {
         this.pending.delete(id);
+        done();
         reject(err);
       }
     });
@@ -458,6 +556,20 @@ class PythonWorker {
       throw err;
     }
     return frame;
+  }
+
+  /**
+   * Run `fn` with `env` as the per-render env overrides (see buildEnv),
+   * cleared afterwards whether it succeeded or threw: a failed render
+   * used to leave its data selection behind for the next caller.
+   */
+  async withEnv(env, fn) {
+    this.buildEnv = env && Object.keys(env).length ? env : null;
+    try {
+      return await fn();
+    } finally {
+      this.buildEnv = null;
+    }
   }
 
   /**
@@ -568,15 +680,22 @@ class PythonWorker {
  *   final HTML speculatively (see "Speculative final load"). Null, the
  *   default, follows RESUME_SPECULATIVE; a boolean overrides it. Only
  *   the tests pass it, to compare the two paths in one process.
+ * @param {?object} opts.timeouts — {workerMs, pageMs, buildMs}, the
+ *   deadlines after which a stuck worker, Chromium or build is killed
+ *   (see WORKER_TIMEOUT_MS). Only the tests pass it.
  */
 async function createEngine({
   root, python, warm = false, speculative = null, hiddenReleaseMs = HIDDEN_RELEASE_MS,
-  platform = process.platform,
+  platform = process.platform, timeouts = {},
 } = {}) {
   root = root || path.join(__dirname, '..');
   const interpreter = python || detectPython();
+  const pageTimeoutMs = timeouts.pageMs || PAGE_TIMEOUT_MS;
+  const buildTimeoutMs = timeouts.buildMs || BUILD_TIMEOUT_MS;
 
-  const worker = new PythonWorker({ root, python: interpreter });
+  const worker = new PythonWorker({
+    root, python: interpreter, timeoutMs: timeouts.workerMs || WORKER_TIMEOUT_MS,
+  });
   const workerReady = worker.start();
 
   // Declared before anything is launched. Chromium's launch below runs on
@@ -628,12 +747,25 @@ async function createEngine({
   // One launch, however many callers ask at once: a warm start may still
   // be launching Chromium when the first preview arrives, and that
   // preview must wait for the same launch rather than start a second.
+  //
+  // A disposed engine launches nothing. dispose() closes the browser it
+  // can see; one launched after that — by a render that was queued or
+  // still running, which asks for the page once its own work is done —
+  // would outlive the engine with nothing left to close it.
   function browserPage() {
+    if (disposed) return Promise.reject(new Error('the engine has been shut down'));
     if (!pagePromise) {
-      pagePromise = launchBrowser().catch((err) => {
-        pagePromise = null;
+      // A browser whose page was dropped (see 'crash' below) is still
+      // good: open a new page in it rather than launching another.
+      // Identity-checked, like the 'disconnected' handler: a Chromium
+      // that died mid-launch has already had its promise forgotten, and
+      // the launch that replaced it must not be forgotten in turn when
+      // this one fails, or the next caller starts a third.
+      const launching = (browser ? openPage(browser) : launchBrowser()).catch((err) => {
+        if (pagePromise === launching) pagePromise = null;
         throw err;
       });
+      pagePromise = launching;
     }
     return pagePromise;
   }
@@ -646,7 +778,12 @@ async function createEngine({
       c.err('Chromium launch failed');
       err.message.split('\n').forEach(line => c.detail(line));
       c.detail('');
-      c.detail('Is Chromium installed? Run:  npx playwright install chromium');
+      // Only a missing executable is an installation problem. A Chromium
+      // that started and then died (killed, out of memory) is not, and
+      // telling that user to reinstall sends them the wrong way.
+      c.detail(/Executable doesn't exist/i.test(err.message)
+        ? 'Is Chromium installed? Run:  npx playwright install chromium'
+        : 'Chromium started but closed before it was ready. The next render launches it again.');
       err.alreadyReported = true;
       throw err;
     }
@@ -657,7 +794,44 @@ async function createEngine({
     const launched = browser;
     launched.on('disconnected', () => {
       if (browser !== launched) return;
-      browser = null;
+      forgetBrowser();
+    });
+    const opened = await openPage(launched);
+    // A new Chromium is a new set of processes to opt out; see "Windows
+    // power throttling". Queued, so it runs after whatever launched it.
+    optOutOfPowerThrottling();
+    return opened;
+  }
+
+  function forgetBrowser() {
+    browser = null;
+    page = null;
+    pagePromise = null;
+    specPagePromise = null;
+    for (const n of [nav, specNav]) {
+      n.assets = null;
+      n.sinceGoto = 0;
+    }
+  }
+
+  /*
+   * The main page, in a context of its own.
+   *
+   * A renderer can crash while the browser lives on (out of memory, a
+   * GPU or Skia fault): Playwright then fails every later call on that
+   * page with "Page crashed", and the page used to stay cached, so every
+   * render failed until Chromium itself went away. Now a crashed page is
+   * dropped — with its context, which also holds the speculative page —
+   * and the next render opens a fresh one in the same browser. The
+   * render that was running when it crashed still fails; a real
+   * navigation follows, since the new page has no history.
+   */
+  async function openPage(b) {
+    const ctx = await b.newContext();
+    const opened = await ctx.newPage();
+    opened.on('crash', () => {
+      if (page !== opened) return;
+      c.warn('The Chromium page crashed; the next render opens a new one');
       page = null;
       pagePromise = null;
       specPagePromise = null;
@@ -665,13 +839,46 @@ async function createEngine({
         n.assets = null;
         n.sinceGoto = 0;
       }
+      ctx.close().catch(() => { /* the browser went with it */ });
     });
-    const ctx = await browser.newContext();
-    page = await ctx.newPage();
-    // A new Chromium is a new set of processes to opt out; see "Windows
-    // power throttling". Queued, so it runs after whatever launched it.
-    optOutOfPowerThrottling();
-    return page;
+    page = opened;
+    return opened;
+  }
+
+  /**
+   * `step` (a promise for something Chromium is doing), or a rejection
+   * once PAGE_TIMEOUT_MS has passed without it settling. Then the
+   * browser is closed and forgotten, so what was stuck is gone and the
+   * next render launches a new one. Nothing Chromium is asked to do
+   * during a render has a deadline of its own: page.evaluate and
+   * page.pdf wait forever, and document.fonts.ready can simply never
+   * resolve.
+   */
+  function withinDeadline(step, what) {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(
+          `Chromium did not finish ${what} in ${pageTimeoutMs / 1000} s, so it was closed; `
+          + 'the next render starts a new one.');
+        err.kind = 'timeout';
+        c.warn(err.message);
+        abandonBrowser();
+        reject(err);
+      }, pageTimeoutMs);
+      timer.unref();
+    });
+    return Promise.race([step, deadline]).finally(() => clearTimeout(timer));
+  }
+
+  function abandonBrowser() {
+    const stuck = browser;
+    if (!stuck) return;
+    forgetBrowser();
+    // Not awaited: the queue must not wait on a browser that is already
+    // not answering. close() ends Chromium's processes even with a
+    // renderer busy in a loop (Chromium's own process is what answers).
+    stuck.close().catch(() => { /* already gone */ });
   }
 
   /* ── The speculative page ──────────────────────────────────────
@@ -685,13 +892,24 @@ async function createEngine({
   let specPagePromise = null;
   function speculativePage() {
     if (!specPagePromise) {
-      specPagePromise = (async () => {
+      const opening = (async () => {
         const main = await browserPage();
-        return main.context().newPage();
+        const spec = await main.context().newPage();
+        // Crashed on its own: drop it, as the main page is (openPage),
+        // or every later guess fails on it and speculation quietly stops.
+        spec.on('crash', () => {
+          if (specPagePromise !== opening) return;
+          specPagePromise = null;
+          specNav.assets = null;
+          specNav.sinceGoto = 0;
+          spec.close().catch(() => { /* gone with its renderer */ });
+        });
+        return spec;
       })().catch((err) => {
         specPagePromise = null;
         throw err;
       });
+      specPagePromise = opening;
     }
     return specPagePromise;
   }
@@ -1059,8 +1277,10 @@ async function createEngine({
         if (!html) return { failed: 'the speculative build wrote no HTML' };
         const token = digestOf([html, String(t0), String(++specSeq)]);
         const pg = await speculativePage();
-        await pl.openDocument(pg, specNavOptions(inputs, record));
-        await pg.evaluate((t) => { window.__studioSpeculation = t; }, token);
+        await withinDeadline(pl.openDocument(pg, specNavOptions(inputs, record)),
+          'loading the speculative page');
+        await withinDeadline(pg.evaluate((t) => { window.__studioSpeculation = t; }, token),
+          'marking the speculative page');
         return { placement, html, page: pg, token, how: record.how, ms: Date.now() - t0 };
       } catch (err) {
         return { failed: String(err.message || err).split('\n')[0], ms: Date.now() - t0 };
@@ -1080,7 +1300,8 @@ async function createEngine({
     const finalHtml = readOrMissing(pl.paths.html);
     if (!finalHtml || !spec.html.equals(finalHtml)) return null;
     try {
-      const token = await spec.page.evaluate(() => window.__studioSpeculation);
+      const token = await withinDeadline(
+        spec.page.evaluate(() => window.__studioSpeculation), 'checking the speculative page');
       if (token !== spec.token) return null;
     } catch {
       return null;
@@ -1129,6 +1350,26 @@ async function createEngine({
     return run;
   }
 
+  // The queue keeps this process's own work apart; dist/'s lock keeps
+  // it apart from a `node resume.js` or `node letter.js` running
+  // alongside, which write the same metadata, placement and HTML. Taken
+  // around each preview and each exclusive() job, and not around
+  // build(): the CLI child takes it itself, and this queue keeps
+  // previews out until the child is done. See build/_dist_lock.js.
+  function withDist(fn) {
+    return async () => {
+      const release = await distLock.acquire(path.join(root, 'dist'), {
+        owner: 'the Studio',
+        onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
+      });
+      try {
+        return await fn();
+      } finally {
+        release();
+      }
+    };
+  }
+
   /**
    * Render the document and hand back rasterized pages of the real PDF.
    *
@@ -1160,7 +1401,8 @@ async function createEngine({
    *   returned page carries a PNG.
    */
   function renderPreview(opts = {}) {
-    const run = serial(async () => {
+    // The env is set for this render only, and cleared however it ends.
+    const run = serial(withDist(() => worker.withEnv(opts.env, async () => {
       const doc = opts.doc === 'letter' ? 'letter' : 'resume';
       const pl = pipelines[doc];
       const started = Date.now();
@@ -1169,8 +1411,6 @@ async function createEngine({
       const mark = (name, t0) => { timings[name] = Date.now() - t0; };
       const scale = opts.scale || 2.0;
       const m = memo[doc];
-
-      worker.buildEnv = opts.env && Object.keys(opts.env).length ? opts.env : null;
 
       let t = Date.now();
       if (opts.recompileStyles || pl.stylesAreStale()) {
@@ -1233,13 +1473,14 @@ async function createEngine({
           const p = await needPage();
           t = Date.now();
           m.measureKey = null;
-          await pl.openDocument(p, navOptions(inputs, timings));
+          await withinDeadline(pl.openDocument(p, navOptions(inputs, timings)),
+            'loading the measurement page');
           // The measurement HTML is in the page now, so dist/index.html
           // is free to be rewritten. Guess the final HTML while Chromium
           // measures this one. See "Speculative final load" above.
           speculating = startSpeculation(pl, inputs);
           try {
-            measurements = await pl.getMeasurements(p);
+            measurements = await withinDeadline(pl.getMeasurements(p), 'measuring');
           } catch (err) {
             // The guess must not outlive this render: it writes
             // dist/index.html and drives the speculative page, and the
@@ -1279,7 +1520,6 @@ async function createEngine({
         const images = forCaller(doc, m.result.images, scale, opts, timings);
         remember(doc, m.result.images, scale);
         const meta = JSON.parse(fs.readFileSync(pl.paths.pdfMeta, 'utf-8'));
-        worker.buildEnv = null;
         return {
           doc,
           pages: m.result.pages,
@@ -1315,17 +1555,23 @@ async function createEngine({
         // CLI) treats the same violation as fatal.
         t = Date.now();
         try {
-          await pl.verifyInvariants(printFrom, placement.pages.length,
+          await withinDeadline(pl.verifyInvariants(printFrom, placement.pages.length,
             navOptions(inputs, timings),
             // Already loaded, and proved to be the final HTML.
-            printFrom === p ? {} : { loaded: speculated.how || 'goto' });
+            printFrom === p ? {} : { loaded: speculated.how || 'goto' }), 'checking the layout');
         } catch (err) {
+          // A stuck page is not a layout verdict: fail the render.
+          if (err.kind === 'timeout') throw err;
           invariants = { ok: false, message: err.message };
+        }
+        // How full each page is, for the Studio's last-page chip.
+        if (invariants.ok && Array.isArray(pl.lastFill)) {
+          invariants = { ok: true, fill: pl.lastFill };
         }
         mark('invariants', t);
       } else {
         t = Date.now();
-        await pl.openDocument(p, navOptions(inputs, timings));
+        await withinDeadline(pl.openDocument(p, navOptions(inputs, timings)), 'loading the letter');
         mark('load', t);
       }
 
@@ -1335,7 +1581,7 @@ async function createEngine({
       // printPreviewPdf in build/pipeline.js. The bytes go to the worker
       // directly; nothing is written to disk.
       t = Date.now();
-      const pdfBytes = await pl.printPreviewPdf(printFrom);
+      const pdfBytes = await withinDeadline(pl.printPreviewPdf(printFrom), 'printing');
       mark('print', t);
 
       // Pages whose pixels did not change since this document's last
@@ -1409,7 +1655,6 @@ async function createEngine({
       mark('raster', t);
 
       const meta = JSON.parse(fs.readFileSync(pl.paths.pdfMeta, 'utf-8'));
-      worker.buildEnv = null;
 
       const pages = placement ? placement.pages.length : raster.pageCount;
       // Remembered only when complete: every page with its PNG. A caller
@@ -1430,7 +1675,7 @@ async function createEngine({
         timings,
         totalMs: Date.now() - started,
       };
-    });
+    })));
     const after = () => {
       afterFirstPreview();
       // A save while the window is hidden renders, and may have
@@ -1445,8 +1690,8 @@ async function createEngine({
   /**
    * Produce the real deliverables by running the CLI.
    *
-   * Deliberately a subprocess rather than an in-process call. `npm run
-   * resume` runs the unit tests first and the snapshot diff last, and
+   * Deliberately a subprocess rather than an in-process call. `node
+   * resume.js` runs the unit tests first and the snapshot diff last, and
    * it is the only path that writes the PDFs in dist/. Routing the
    * app's Build button through it means there is exactly one way to
    * produce a PDF worth sending, and the app cannot quietly grow a
@@ -1463,6 +1708,22 @@ async function createEngine({
    *   metadata; its return value is the result's `after` field
    */
   let buildChild = null;
+
+  /** Stop a build child and what it started (see runBuild's spawn). */
+  function killBuildTree(child, signal = 'SIGTERM') {
+    try {
+      if (process.platform === 'win32') {
+        // /T: the tree. TerminateProcess on the child alone left its
+        // Python and Chromium running, holding its pipes.
+        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'],
+          { stdio: 'ignore', windowsHide: true }).on('error', () => child.kill());
+      } else {
+        process.kill(-child.pid, signal);
+      }
+    } catch {
+      try { child.kill(signal); } catch { /* already gone */ }
+    }
+  }
 
   function build({ script = 'resume.js', env = {}, after = null } = {}) {
     return serial(async () => {
@@ -1494,7 +1755,11 @@ async function createEngine({
       const child = spawn(process.execPath, [path.join(root, script)], {
         cwd: root,
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true, // as the worker's: no console window per Build
         env: childEnv,
+        // Its own process group on POSIX, so stopping it (killBuildTree)
+        // reaches the Python and Chromium it runs, which inherit its pipes.
+        detached: process.platform !== 'win32',
       });
       // Tracked so dispose() can stop a build still running at shutdown
       // instead of leaving it writing into dist/ with nobody watching.
@@ -1526,15 +1791,55 @@ async function createEngine({
       forward(child.stdout, false);
       forward(child.stderr, true);
 
+      // A build that never ends (a hung Chromium or worker of its own, a
+      // stopped process) would hold the queue, and every preview, for
+      // good. Past the deadline it is stopped, and killed outright if it
+      // does not go.
+      let timedOut = false;
+      const deadline = setTimeout(() => {
+        timedOut = true;
+        c.warn(`${script} did not finish in ${Math.round(buildTimeoutMs / 1000)} s; stopping it`);
+        killBuildTree(child);
+        const hard = setTimeout(() => killBuildTree(child, 'SIGKILL'), 5000);
+        hard.unref();
+        child.once('exit', () => clearTimeout(hard));
+      }, buildTimeoutMs);
+      deadline.unref();
+      // After a timeout, the child's exit is the end: 'close' waits for
+      // its pipes, which a hung grandchild (python, from execFileSync)
+      // holds open, so the queue stayed blocked for as long as that one
+      // hung — the very thing the deadline is for. Measured: rejected
+      // 40 s after a 3 s deadline, when the grandchild's sleep ended.
+      child.once('exit', () => {
+        if (!timedOut) return;
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.emit('close', null);
+      });
+
       child.once('error', (err) => {
+        clearTimeout(deadline);
         if (buildChild === child) buildChild = null;
         const e = new Error(`could not run ${script}: ${err.message}`);
         e.alreadyReported = true;
         reject(e);
       });
 
-      child.once('close', (code) => {
+      let settled = false;
+      child.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
         if (buildChild === child) buildChild = null;
+        if (timedOut) {
+          const e = new Error(`${script} did not finish in ${Math.round(buildTimeoutMs / 1000)} s `
+            + 'and was stopped');
+          e.kind = 'timeout';
+          e.alreadyReported = true;
+          e.failures = failures.slice(-12);
+          reject(e);
+          return;
+        }
         if (code === 0) {
           resolve({ script, ms: Date.now() - started });
           return;
@@ -1554,7 +1859,7 @@ async function createEngine({
       hiddenTimer = null;
     }
     if (buildChild) {
-      try { buildChild.kill(); } catch { /* already gone */ }
+      killBuildTree(buildChild);
       buildChild = null;
     }
     disposeSass();
@@ -1587,8 +1892,9 @@ async function createEngine({
     renderPreview,
     build,
     // Run fn on the same queue as previews and builds, for work that
-    // reads what they write (dist/'s metadata, the shared worker).
-    exclusive: serial,
+    // reads what they write (dist/'s metadata, the shared worker), and
+    // under dist/'s lock, which a CLI build holds while it writes them.
+    exclusive: fn => serial(withDist(fn)),
     setWindowHidden,
     dispose,
     status: () => ({

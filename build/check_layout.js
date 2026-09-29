@@ -6,7 +6,8 @@
  *     a Playwright Page (already navigated to the resume HTML) plus an
  *     optional { expectedPageCount } override (defaults to
  *     LAYOUT_CONSTANTS.EXPECTED_PAGE_COUNT). Returns { ok, violations,
- *     rhythmMeasurements }. Does not throw.
+ *     rhythmMeasurements, fill } — fill[i] is how full page i+1 is, 0–1
+ *     (see invariant 4). Does not throw.
  *
  * The four invariants checked:
  *   1. EXPECTED_PAGE_COUNT .page elements exist.
@@ -131,11 +132,20 @@ async function checkLayoutInvariants(page, options = {}) {
     // padding-bottom. If something overflows, the layout solver
     // produced a placement that doesn't actually fit — fail loudly
     // here rather than ship a clipped PDF.
+    //
+    // The same walk yields how full each page is (`fill`): the lowest
+    // content in either column, as a fraction of the body grid's height
+    // (its top to the bottom margin). Not an invariant, a measurement the
+    // Studio shows for the last page — "how much room is left".
+    const fill = [];
     pages.forEach((p, i) => {
       const pageRect = p.getBoundingClientRect();
       const cs = window.getComputedStyle(p);
       const padBottom = parseFloat(cs.paddingBottom);
       const contentBottom = pageRect.bottom - padBottom;
+      const grid = p.querySelector('.body-grid');
+      const gridTop = grid ? grid.getBoundingClientRect().top : pageRect.top;
+      let lowest = gridTop;
       // Check sidebar and main-col separately so error messages
       // identify which column is overflowing.
       ['sidebar', 'main-col'].forEach((colClass) => {
@@ -150,6 +160,7 @@ async function checkLayoutInvariants(page, options = {}) {
             culprit = el;
           }
         });
+        if (maxBottom > lowest) lowest = maxBottom;
         if (maxBottom > contentBottom + TOL) {
           violations.push({
             invariant: 'content-overflow',
@@ -161,10 +172,13 @@ async function checkLayoutInvariants(page, options = {}) {
           });
         }
       });
+      const room = contentBottom - gridTop;
+      fill.push(room > 0 ? Math.max(0, Math.min(1, (lowest - gridTop) / room)) : null);
     });
 
     return {
       violations,
+      fill,
       rhythmMeasurements: rhythmMeasurements.map((m) => ({
         column: m.column,
         gap_px: m.gap_px.toFixed(2),
@@ -181,6 +195,7 @@ async function checkLayoutInvariants(page, options = {}) {
     ok: result.violations.length === 0,
     violations: result.violations,
     rhythmMeasurements: result.rhythmMeasurements,
+    fill: result.fill || [],
   };
 }
 

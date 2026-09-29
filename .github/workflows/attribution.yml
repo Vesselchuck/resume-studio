@@ -43,10 +43,14 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # Pinned to a commit, as in tests.yml. persist-credentials: false:
+      # the one later fetch (a tag's own object) reads a public
+      # repository and needs no token.
       - name: Check out the repository with its full history
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Everything reaches the script through env, never through ${{ }}
       # inside it: a pull request's title and description are anyone's

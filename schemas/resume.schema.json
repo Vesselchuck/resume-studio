@@ -104,7 +104,8 @@
         },
         "href": {
           "type": "string",
-          "description": "What clicking it does. 'tel:+15551234567' opens the dialer, 'mailto:you@example.com' opens mail, 'https://...' opens a site.",
+          "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)",
+          "description": "What clicking it does. 'tel:+15551234567' opens the dialer, 'mailto:you@example.com' opens mail, 'https://...' opens a site. Only https:, http:, mailto: and tel: links are allowed, written in full; empty means no link.",
           "examples": ["tel:+15551234567", "mailto:you@example.com", "https://example.com"]
         }
       }
@@ -169,7 +170,7 @@
                   "properties": {
                     "label": { "type": ["string", "integer"], "description": "The left-hand label. May be empty (\"\") to continue the row above." },
                     "value": { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S", "description": "The right-hand value." },
-                    "href": { "type": "string", "description": "Optional — makes the value a link." }
+                    "href": { "type": "string", "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)", "description": "Optional — makes the value a link: https:, http:, mailto: or tel:, written in full." }
                   }
                 }
               }

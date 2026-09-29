@@ -26,12 +26,16 @@ Workflow
        node resume.js
    The snapshot test runs automatically. Exit 0 = the PDF matches
    within tolerance. Exit 1 = visible regression; side-by-side diff
-   images written to tests/fixtures/diff_pageN.png.
+   images written to tests/fixtures/diff_pageN.png. Exit 2 = nothing
+   was compared (a missing fixture, dependency or build, metadata it
+   cannot trust, or the tool itself failing); the message says which.
+   Only 1 means "the PDF differs", and only 1 is answered with advice
+   to run --update.
 
 3. After an INTENTIONAL change (new content, design tweak, etc.):
        python3 build/snapshot_pdf.py --update
    Refreshes the fixture matching the data source of the most recent
-   build (read from dist/pdf_meta.json).
+   build (read from the build record, dist/outputs.json).
 
 4. To refresh BOTH fixtures (default + mine):
        python3 build/snapshot_pdf.py --update-all
@@ -53,12 +57,12 @@ The fixtures below keep their fixed, document-shaped names. A
 fixture is a committed reference image, and naming it after
 whoever last built would both churn the directory and put a real
 name into a repository the placeholder data exists to keep it out
-of. The build's own dist/pdf_meta.json says where to find the
-PDF to compare.
+of. The build's own record, dist/outputs.json, says where to find
+the PDF to compare.
 
 The build can use either data/resume_default.yml (placeholder, committed)
 or data/resume.yml (your real data, gitignored). The snapshot
-test reads dist/pdf_meta.json to learn which one was loaded and
+test reads the build record to learn which one was loaded and
 picks the matching fixture:
 
   data_source = 'default' → tests/fixtures/expected_resume.pdf      (committed)
@@ -67,6 +71,18 @@ picks the matching fixture:
                             named through RESUME_DATA_FILE, and no
                             fixture describes it. Compare, bootstrap and
                             --update all stop with an explanation.
+
+Why the build record, not dist/pdf_meta.json
+─────────────────────────────────────────────
+pdf_meta.json is rewritten by every live preview in the Studio; the
+PDF in dist/ is written only by a Build. After a Build of your own
+data and a preview of the template, pdf_meta.json said 'default'
+while dist/ still held your PDF — and when the two share a file name
+(a profile still carrying the template's name, which is how everyone
+starts), --update copied your résumé into the COMMITTED template
+fixture. The record is written by the Build, beside the PDF, with the
+PDF's SHA-256: this tool uses the PDF only if its bytes are still the
+ones that Build recorded.
 
 Tolerances
 ──────────
@@ -112,11 +128,12 @@ from _env_contract import (  # noqa: E402
 
 ROOT = Path(__file__).parent.parent          # project root (build/ → ..)
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
-PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
+DIST_DIR = ROOT / "dist"
+RECORD_FILE = DIST_DIR / _output_name.RECORD
 
 # Built PDF — resume.js produces one, in dist/, named after you
-# (Gaius_Caesar_Resume.pdf). The stem comes from the build's own
-# metadata rather than from a constant here, because it follows
+# (Gaius_Caesar_Resume.pdf). The name comes from the build record
+# rather than from a constant here, because it follows
 # `name.first` / `name.last` and therefore changes when they do.
 
 # Fixtures — one per data_source. The default fixture is committed to
@@ -127,11 +144,11 @@ FIXTURE_MINE    = FIXTURE_DIR / "expected_resume.mine.pdf"
 
 
 def built_pdf():
-    """Where the last build put the PDF.
+    """Where the last build put the PDF, or None if no build recorded one.
 
     A function rather than a module constant because the path is
-    resolved from dist/pdf_meta.json, which the build rewrites on every
-    run — reading it once at import time would pin the path to whatever
+    resolved from the build record, which every build rewrites —
+    reading it once at import time would pin the path to whatever
     the *previous* build was called, and snapshot_pdf.py's --update-all
     runs two builds inside one process.
 
@@ -141,8 +158,31 @@ def built_pdf():
     time someone edited their surname, and would leak that name into a
     repository the placeholder data exists precisely to keep it out of.
     """
-    stem = _output_name.stem_from_meta(PDF_META_FILE, 'resume')
-    return _output_name.output_pdf(ROOT / "dist", stem)
+    rec = _output_name.recorded_build(DIST_DIR, 'resume')
+    return rec["pdf"] if rec else None
+
+
+def verify_built_pdf(pdf_path) -> bool:
+    """True if `pdf_path` still holds the bytes the Build recorded.
+
+    Anything else — the PDF replaced by hand, restored from a backup,
+    or written by something that did not update the record — is not
+    the PDF the record's data_source describes, so no fixture may be
+    compared against it or overwritten with it.
+    """
+    import hashlib
+    rec = _output_name.recorded_build(DIST_DIR, 'resume')
+    try:
+        digest = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    if rec is not None and digest == rec["sha256"]:
+        return True
+    c.err(f"{Path(pdf_path).name} in dist/ is not the PDF the last build "
+          f"recorded in {RECORD_FILE.relative_to(ROOT)}.")
+    c.detail("It changed after that build wrote it, so there is no telling")
+    c.detail("which data file it came from. Rebuild with `node resume.js`.")
+    return False
 
 
 #: The data_source values that have fixtures. build.py can also stamp
@@ -153,22 +193,20 @@ FIXTURE_SOURCES = ('default', 'mine')
 
 def read_data_source():
     """
-    The `data_source` the last build stamped into dist/pdf_meta.json,
-    or None if the file is missing, unreadable or has no such field.
+    The `data_source` the last build recorded for the PDF it wrote,
+    or None if there is no usable record or it has no such field.
+
+    Deliberately not dist/pdf_meta.json: a Studio preview rewrites that
+    for whatever it last rendered. See "Why the build record" above.
     """
-    try:
-        meta = json.loads(PDF_META_FILE.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(meta, dict):
-        return None
-    return meta.get('data_source')
+    rec = _output_name.recorded_build(DIST_DIR, 'resume')
+    return rec["data_source"] if rec else None
 
 
 def refuse_explicit_source():
     """Explain why a build of an arbitrary file has no fixture, and exit."""
     c.err(
-        f"{PDF_META_FILE.relative_to(ROOT)} says the last build read an "
+        f"{RECORD_FILE.relative_to(ROOT)} says the last build read an "
         f"explicitly named data file (data_source='explicit')."
     )
     c.detail("Snapshot fixtures exist only for the default template")
@@ -185,7 +223,7 @@ def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     """
     Choose the fixture file based on which data file backed the build.
 
-    Reads dist/pdf_meta.json's `data_source` field:
+    Reads the build record's `data_source` field:
       • 'default'  → committed fixture
       • 'mine'     → gitignored fixture
       • 'explicit' → refused: an arbitrary file has no fixture, and
@@ -214,7 +252,7 @@ def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     if source is None:
         if require_meta:
             c.err(
-                f"{PDF_META_FILE.relative_to(ROOT)} is missing or has no "
+                f"{RECORD_FILE.relative_to(ROOT)} is missing or has no "
                 f"data_source, so there is no telling which data file the "
                 f"PDFs in dist/ came from."
             )
@@ -229,16 +267,15 @@ def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     if source == 'explicit':
         refuse_explicit_source()
     c.err(
-        f"{PDF_META_FILE.relative_to(ROOT)} has data_source={source!r}, "
+        f"{RECORD_FILE.relative_to(ROOT)} has data_source={source!r}, "
         f"which this script does not recognize."
     )
-    c.detail("Expected 'default' or 'mine'.")
-    c.detail(
-        "A value of 'local' means the file was written before the data "
-        "files were renamed — rebuild with `node resume.js` to refresh it."
-    )
+    c.detail("Expected 'default' or 'mine'. Rebuild with `node resume.js`")
+    c.detail("to refresh it.")
     c.detail("Refusing to guess which fixture to compare against.")
-    sys.exit(1)
+    # 2, not 1: nothing was compared. resume.js reads 1 as "the PDF
+    # differs" and suggests --update, which is the wrong advice here.
+    sys.exit(2)
 
 
 def safe_copy(src: Path, dst: Path) -> bool:
@@ -274,6 +311,11 @@ SCALE = RENDER_DPI / 72  # PDF points per inch / 72
 PIXEL_RGB_TOLERANCE = 4         # 0–255 per channel
 MAX_DIFF_FRACTION = 0.001       # 0.1% of pixels
 
+# How much the third panel of a diff image brightens each difference.
+# 8 lifts a difference just over the tolerance (5) to 40, visible
+# against the black of "no change"; anything from 32 up is white.
+DIFF_GAIN = 8
+
 
 def render_pdf_pages(pdfium, path, prepare=None, only=None) -> list:
     """Rasterize all pages of a PDF to PIL Images at RENDER_DPI.
@@ -303,7 +345,11 @@ def render_pdf_pages(pdfium, path, prepare=None, only=None) -> list:
     than deleted. It matters now that build/worker.py rasterizes
     throwaway preview PDFs it then removes.
     """
-    pdf = pdfium.PdfDocument(path if isinstance(path, (bytes, bytearray)) else str(path))
+    # An already open document (the worker renders several pages of one
+    # print one at a time) is used as it is and left open for its owner.
+    owned = not isinstance(path, pdfium.PdfDocument)
+    pdf = (pdfium.PdfDocument(path if isinstance(path, (bytes, bytearray)) else str(path))
+           if owned else path)
     try:
         images = []
         for index in range(len(pdf)):
@@ -320,7 +366,8 @@ def render_pdf_pages(pdfium, path, prepare=None, only=None) -> list:
             images.append(image if image.mode == "RGB" else image.convert("RGB"))
         return images
     finally:
-        pdf.close()
+        if owned:
+            pdf.close()
 
 
 def diff_images(Image, ImageChops, actual, expected, page_num: int):
@@ -363,13 +410,16 @@ def diff_images(Image, ImageChops, actual, expected, page_num: int):
             f"({differing_pixels}/{total_pixels} = {fraction:.4%} differ)"
         ), None
 
-    # Write side-by-side diff image: [expected | actual | diff×4 amplified]
+    # Write side-by-side diff image: [expected | actual | diff amplified]
     w, h = actual.size
     side_by_side = Image.new("RGB", (w * 3, h), (255, 255, 255))
     side_by_side.paste(expected, (0, 0))
     side_by_side.paste(actual, (w, 0))
     # Amplify diff for visibility (raw differences are usually invisible).
-    amplified = ImageChops.multiply(diff, Image.new("RGB", diff.size, (8, 8, 8)))
+    # A gain, per channel and clamped at white. Not ImageChops.multiply:
+    # that computes a*b/255, so "multiply by 8" divided every difference
+    # by ~32 and the panel came out black even for a moved paragraph.
+    amplified = diff.point(lambda v: min(255, v * DIFF_GAIN))
     side_by_side.paste(amplified, (w * 2, 0))
     out_path = FIXTURE_DIR / f"diff_page{page_num}.png"
     side_by_side.save(out_path)
@@ -440,15 +490,15 @@ def update_all_fixtures():
         Returns the list of fixture paths copied, or None on error.
 
         Checks first that the build it is copying from really read that
-        data source, by what the build itself stamped into
-        dist/pdf_meta.json. The environment above is the intent; the
-        manifest is the fact, and a fixture is committed on the fact.
+        data source, by what the build itself recorded beside the PDF
+        (dist/outputs.json). The environment above is the intent; the
+        record is the fact, and a fixture is committed on the fact.
         """
         actual = read_data_source()
         if actual != source_kind:
             c.err(
                 f"the {source_kind!r} pass built from data_source="
-                f"{actual!r} (per {PDF_META_FILE.relative_to(ROOT)}), not "
+                f"{actual!r} (per {RECORD_FILE.relative_to(ROOT)}), not "
                 f"{source_kind!r}."
             )
             c.detail("Refusing to copy its PDFs over the "
@@ -457,8 +507,10 @@ def update_all_fixtures():
                      "something outside this script, then re-run.")
             return None
         pdf_path = built_pdf()
-        if not pdf_path.exists():
-            c.err(f"{pdf_path.relative_to(ROOT)} missing after build.")
+        if pdf_path is None or not pdf_path.exists():
+            c.err("No built PDF in dist/ after the build.")
+            return None
+        if not verify_built_pdf(pdf_path):
             return None
         target = FIXTURE_MINE if source_kind == 'mine' else FIXTURE_DEFAULT
         if not safe_copy(pdf_path, target):
@@ -508,8 +560,8 @@ def main() -> int:
     parser.add_argument(
         "--update", action="store_true",
         help="Replace the fixture matching the LAST build's data source "
-             "(read from dist/pdf_meta.json) with the PDF that build "
-             "wrote to dist/.",
+             "(read from the build record, dist/outputs.json) with the "
+             "PDF that build wrote to dist/.",
     )
     parser.add_argument(
         "--update-all", action="store_true",
@@ -531,10 +583,13 @@ def main() -> int:
             return 2
         return update_all_fixtures()
 
-    # Check that the last build produced something at all.
+    # Check that the last build produced something at all, and that it
+    # is still exactly what that build recorded.
     pdf_path = built_pdf()
-    if not pdf_path.exists():
+    if pdf_path is None or not pdf_path.exists():
         c.err("No built PDF in dist/. Run `node resume.js` first.")
+        return 2
+    if not verify_built_pdf(pdf_path):
         return 2
 
     # --update: refresh the current data-source fixture.
@@ -606,5 +661,25 @@ def main() -> int:
     return 0 if all_ok else 1
 
 
+def cli() -> int:
+    """main(), with a crash reported as "not compared" (exit 2).
+
+    An uncaught exception exits Python with 1, which is this tool's
+    code for a visible difference. A fixture pdfium cannot open, a
+    full disk while writing a diff image, a bug here: each used to
+    reach resume.js as "Snapshot differs", followed by advice to run
+    --update, which would overwrite the fixture with a PDF nobody had
+    compared against anything.
+    """
+    try:
+        return main()
+    except Exception:  # noqa: BLE001 — any crash means nothing was compared
+        import traceback
+        traceback.print_exc()
+        c.err("The snapshot test failed before it could compare the PDFs.")
+        c.detail("Nothing was compared. The error above says why.")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())

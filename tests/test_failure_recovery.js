@@ -10,9 +10,23 @@
  *   • The window shown again while a hidden-release is already queued
  *     (behind a render, when the delay ran out): Chromium stays open. It
  *     used to be closed anyway, and not relaunched while shown.
+ *   • A page that never settles (document.fonts.ready that never
+ *     resolves) or a renderer spinning in a loop: the render fails at
+ *     its deadline, Chromium is closed, and the next render works. It
+ *     used to block the engine's queue, and every render behind it,
+ *     forever. A build that never ends likewise.
+ *   • A renderer that crashes while Chromium lives on: the next render
+ *     opens a new page in the same Chromium. The crashed page used to
+ *     stay cached, and every render failed with "Page crashed".
+ *   • A failed render leaves no data selection behind on the worker.
  *   • GET /api/datafiles with a folder named x.yml and a dangling
  *     symlink (Emacs's .#x.yml lock) in data/: the other files are
  *     listed. One unreadable entry used to fail the whole request (500).
+ *   • dispose() with a render in flight or queued: no Chromium is left
+ *     running. A render that asked for the page after dispose() had
+ *     closed the browser used to launch a new one.
+ *   • Chromium killed while it is being launched: the message does not
+ *     tell the user to reinstall it, and the next render works.
  *   • A failed render ends with a render event on /api/events, so every
  *     other window that saw it start stops showing "Rendering". Only a
  *     successful render used to send one.
@@ -44,6 +58,14 @@ async function waitFor(pred, ms = 15000) {
 
 async function rejects(promise) {
   try { await promise; return null; } catch (err) { return err; }
+}
+
+/** rejects(), but a promise still pending after `ms` is a failure too. */
+function rejectsWithin(promise, ms = 20000) {
+  return Promise.race([rejects(promise), new Promise((resolve) => {
+    // Unref'd: a settled race must not keep the suite running.
+    setTimeout(() => resolve(new Error(`still pending after ${ms} ms`)), ms).unref();
+  })]);
 }
 
 /** Direct children of this process whose command name is Chromium's. */
@@ -131,6 +153,141 @@ async function shownWhileReleaseQueued(createEngine, root) {
     assertEq(r.timings.browserLaunch, 0, 'N3: ...so the next render pays no launch');
   } finally {
     await engine.dispose();
+  }
+}
+
+async function disposeWithRenderInFlight(createEngine, root) {
+  const engine = await createEngine({ root, warm: true });
+  await engine.renderPreview({ doc: 'resume' });
+  // A render in flight and one queued behind it when dispose() runs.
+  // Both end in errors; neither may leave a Chromium behind.
+  const settle = p => p.then(() => null, e => e);
+  const a = settle(engine.renderPreview({ doc: 'resume', recompileStyles: true }));
+  const b = settle(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+  await sleep(50);
+  await engine.dispose();
+  await Promise.all([a, b]);
+  await sleep(1000);
+  const left = chromiumChildren();
+  for (const pid of left) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+  assertEq(left, [], 'N4: dispose() with renders in flight and queued leaves no Chromium running');
+}
+
+async function chromiumKilledWhileLaunching(createEngine, root) {
+  const engine = await createEngine({ root, warm: false });
+  const said = [];
+  const write = process.stderr.write;
+  process.stderr.write = function (chunk, ...rest) {
+    said.push(String(chunk));
+    return write.call(this, chunk, ...rest);
+  };
+  // Kill the Chromium the first render launches, as soon as it appears.
+  let killed = false;
+  const watch = setInterval(() => {
+    for (const pid of chromiumChildren()) {
+      killed = true;
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    }
+  }, 1);
+  try {
+    const err = await rejects(engine.renderPreview({ doc: 'letter', scale: 1 }));
+    clearInterval(watch);
+    assertTrue(killed && err, `N5: the render whose Chromium was killed while launching fails (${killed})`);
+    const text = said.join('');
+    assertTrue(!/npx playwright install/.test(text),
+      'N5: a Chromium killed while launching is not reported as a missing installation');
+    assertTrue(/closed before it was ready/.test(text), 'N5: ...it is reported as having closed');
+    assertEq(await rejects(engine.renderPreview({ doc: 'letter', scale: 1 })), null,
+      'N5: the next render launches a new one');
+  } finally {
+    clearInterval(watch);
+    process.stderr.write = write;
+    await engine.dispose();
+  }
+}
+
+async function stuckPage(createEngine, root) {
+  const engine = await createEngine({ root, warm: true, timeouts: { pageMs: 1500 } });
+  try {
+    await engine.renderPreview({ doc: 'letter' });
+    const pl = engine.pipelines.letter;
+    const load = pl.openDocument;
+
+    // A failed render's env is not left on the worker for the next caller.
+    const worker = pl.python;
+    const envErr = await rejectsWithin(engine.renderPreview({ doc: 'letter',
+      env: { LETTER_DATA_FILE: path.join(root, 'data', 'missing.yml') } }));
+    assertTrue(Boolean(envErr), 'E1: a render of a missing file fails');
+    assertEq(worker.buildEnv, null, 'E1: ...and leaves no env behind on the worker');
+
+    // The shape of a font load that never finishes.
+    pl.openDocument = page => page.evaluate(() => new Promise(() => {}));
+    let t0 = Date.now();
+    let err = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertEq(err && err.kind, 'timeout', `T1: a page that never settles fails the render (${err && err.message})`);
+    assertTrue(Date.now() - t0 < 10000, `T1: ...at its deadline (${Date.now() - t0} ms)`);
+    pl.openDocument = load;
+    let next = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertEq(next ? next.message.split('\n')[0] : null, null, 'T1: the next render works');
+
+    // A renderer busy forever: the print never answers.
+    pl.openDocument = async (page, opts) => {
+      await load(page, opts);
+      page.evaluate(() => { for (;;) { /* spin */ } }).catch(() => {});
+    };
+    t0 = Date.now();
+    err = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertEq(err && err.kind, 'timeout', `T1: a spinning renderer fails the render (${err && err.message})`);
+    assertTrue(Date.now() - t0 < 10000, `T1: ...at its deadline (${Date.now() - t0} ms)`);
+    pl.openDocument = load;
+    next = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertEq(next ? next.message.split('\n')[0] : null, null, 'T1: the next render works again');
+
+  } finally {
+    await engine.dispose();
+  }
+}
+
+async function crashedPage(createEngine, root) {
+  const engine = await createEngine({ root, warm: true });
+  try {
+    await engine.renderPreview({ doc: 'resume' });
+    const browsers = chromiumChildren();
+    const pl = engine.pipelines.letter;
+    const load = pl.openDocument;
+    // Page.crash: the renderer dies, Chromium itself does not.
+    pl.openDocument = async (page, opts) => {
+      pl.openDocument = load;
+      const cdp = await page.context().newCDPSession(page);
+      cdp.send('Page.crash').catch(() => {});
+      await sleep(500);
+      return load(page, opts);
+    };
+    await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertTrue(!engine.status().browserOpen, 'C1: a crashed page is dropped');
+    const err = await rejectsWithin(engine.renderPreview({ doc: 'letter', recompileStyles: true }));
+    assertEq(err ? err.message.split('\n')[0] : null, null, 'C1: the next render works');
+    const again = await rejectsWithin(engine.renderPreview({ doc: 'resume', recompileStyles: true }));
+    assertEq(again ? again.message.split('\n')[0] : null, null, 'C1: ...and the one after');
+    assertEq(chromiumChildren(), browsers, 'C1: ...in the same Chromium, not a new one');
+  } finally {
+    await engine.dispose();
+  }
+}
+
+async function stuckBuild(createEngine, root) {
+  fs.writeFileSync(path.join(root, 'hang.js'), 'setInterval(() => {}, 1000);\n');
+  const engine = await createEngine({ root, timeouts: { buildMs: 1000 } });
+  try {
+    const t0 = Date.now();
+    const err = await rejectsWithin(engine.build({ script: 'hang.js' }));
+    assertEq(err && err.kind, 'timeout', `B1: a build that never ends fails at its deadline (${err && err.message})`);
+    assertTrue(Date.now() - t0 < 10000, `B1: ...and not later (${Date.now() - t0} ms)`);
+    const next = await rejectsWithin(engine.renderPreview({ doc: 'letter' }));
+    assertEq(next ? next.message.split('\n')[0] : null, null, 'B1: the queue behind it moves on');
+  } finally {
+    await engine.dispose();
+    fs.rmSync(path.join(root, 'hang.js'), { force: true });
   }
 }
 
@@ -317,6 +474,11 @@ async function serverTests(root) {
     const { createEngine } = project.require('build/engine');
     await run('N1 run', () => chromiumKilled(createEngine, project.root));
     await run('N3 run', () => shownWhileReleaseQueued(createEngine, project.root));
+    await run('N4 run', () => disposeWithRenderInFlight(createEngine, project.root));
+    await run('N5 run', () => chromiumKilledWhileLaunching(createEngine, project.root));
+    await run('T1 run', () => stuckPage(createEngine, project.root));
+    await run('C1 run', () => crashedPage(createEngine, project.root));
+    await run('B1 run', () => stuckBuild(createEngine, project.root));
     await run('server run', () => serverTests(project.root));
   } finally {
     project.remove();

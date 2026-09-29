@@ -50,6 +50,24 @@ class TestDescendants(unittest.TestCase):
         # The System Idle Process reports pid 0 with parent 0.
         self.assertEqual(_power.descendants({0: 0, 4: 0}, 0), [0, 4])
 
+    def test_an_orphan_of_a_reused_pid_is_not_a_child(self):
+        # 30 was started by an earlier process 10 that has exited; the
+        # pid 10 now belongs to the engine's Node server, which is
+        # younger than 30. Windows still lists 10 as 30's parent.
+        parents = {10: 1, 11: 10, 30: 10, 31: 30}
+        created = {1: 0, 10: 500, 11: 600, 30: 100, 31: 150}.get
+        self.assertEqual(_power.descendants(parents, 10, created), [10, 11])
+
+    def test_an_unknown_creation_time_trusts_the_edge(self):
+        # A process that could not be opened is not dropped on a guess.
+        parents = {10: 1, 11: 10, 12: 10}
+        created = {10: 500, 11: 600}.get
+        self.assertEqual(_power.descendants(parents, 10, created), [10, 11, 12])
+
+    def test_a_child_created_in_the_same_tick_is_a_child(self):
+        self.assertEqual(_power.descendants({10: 1, 11: 10}, 10, {10: 5, 11: 5}.get),
+                         [10, 11])
+
 
 @unittest.skipIf(sys.platform == "win32", "the no-op path is for other platforms")
 class TestOffWindows(unittest.TestCase):

@@ -19,7 +19,10 @@
  *   • a close never lands in the middle of a render;
  *   • renders before and after a close give identical pixels;
  *   • dispose() with a close pending leaves nothing running;
- *   • the server's POST /api/visibility reaches the engine.
+ *   • the server's POST /api/visibility reaches the engine;
+ *   • it counts each page for itself: one page in the background (a
+ *     Studio tab another site opened, say) does not hide the others,
+ *     and a page coming forward does not undo the shell's "minimized".
  *
  * Runs in a throwaway copy of the project (tests/_project.js). Needs
  * Chromium; without it this prints the runner's SKIP marker.
@@ -126,6 +129,28 @@ function post(port, route, body) {
 }
 
 /**
+ * A page of the Studio, as far as the server can tell: an event
+ * stream. Resolves with the client id its `hello` names.
+ */
+function viewer(port) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/events',
+      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      let buf = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk) => {
+        buf += chunk;
+        const m = /event: hello\ndata: (.+)\n/.exec(buf);
+        if (m) resolve({ client: JSON.parse(m[1]).client, close: () => req.destroy() });
+      });
+      // No hello at all: an id-less page, which the assertions then catch.
+      setTimeout(() => resolve({ client: null, close: () => req.destroy() }), 3000);
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
  * The server, as its own process (its shutdown ends the process): the
  * endpoint answers and the engine behind it takes the report.
  */
@@ -153,6 +178,48 @@ async function serverTest(project) {
     assertEq(r.data, { hidden: true }, 'and echoes what it was told');
     const back = await post(port, '/api/visibility', { hidden: false });
     assertEq(back.data, { hidden: false }, 'shown again');
+
+    // Two pages: the desktop window's and one another site opened.
+    const own = await viewer(port);
+    const foreign = await viewer(port);
+    const say = (who, hidden) => post(port, '/api/visibility', who ? { hidden, client: who.client } : { hidden })
+      .then(res => res.data.hidden);
+    // Each page reports on hello (ui/index.html); these two do it here.
+    await say(own, false);
+    await say(foreign, false);
+    assertEq(await say(foreign, true), false, 'per page: one page hidden while another is shown is not hidden');
+    assertEq(await say(own, true), true, 'per page: every page hidden is hidden');
+    assertEq(await say(foreign, false), false, 'per page: one page shown again is shown');
+    assertEq(await say(null, true), true, "per page: the shell's minimized hides, whatever its page says");
+    assertEq(await say(foreign, false), true, "per page: ...and a page coming forward does not undo it");
+    assertEq(await say(null, false), false, 'per page: the shell restored is shown');
+    await say(foreign, true);
+    own.close();
+    await sleep(200);
+    const status = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/status', headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => resolve(JSON.parse(buf)));
+      }).on('error', reject);
+    });
+    assertEq(status.windowHidden, true, 'per page: a closed page no longer counts; the one left is hidden');
+    assertEq(await say({ client: 'no-such-page' }, false), true, 'per page: a report from an unknown page is ignored');
+    // The hidden page's stream drops and reconnects: until it reports,
+    // the new stream must not count as a page that is shown.
+    foreign.close();
+    const again = await viewer(port);
+    await sleep(200);
+    const status2 = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/status', headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => resolve(JSON.parse(buf)));
+      }).on('error', reject);
+    });
+    assertEq(status2.windowHidden, true, 'per page: a reconnected page that has not reported yet changes nothing');
+    assertEq(await say(again, false), false, 'per page: ...until it says it is shown');
+    again.close();
   } finally {
     const exited = new Promise(res => child.once('exit', res));
     child.stdin.end();

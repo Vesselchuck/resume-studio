@@ -16,8 +16,16 @@
  *   • a crash older than the window stops counting;
  *   • allowRestart() (the Re-render button) starts it again at once;
  *   • a worker stopped on purpose is not counted as a crash;
+ *   • a worker that stops answering (stopped, deadlocked) fails the
+ *     request after its deadline, is killed, and the next request
+ *     starts a fresh one — it used to block the queue forever;
  *   • end to end, renderPreview fails fast once the worker is down and
  *     `retry: true` brings it back.
+ *
+ * And, because a request that never gets its reply hangs the queue
+ * just as a dead worker did: output written to the worker's stdout
+ * without a newline, glued to the front of a frame, is logged and the
+ * frame after it still delivered.
  *
  * The crashing worker is Node itself standing in for Python: `node -B
  * build/worker.py` exits at once ("bad option"), on every platform.
@@ -34,7 +42,7 @@ const { tempProject, realDistFingerprint } = require('./_project');
 const ROOT = path.join(__dirname, '..');
 const SUITE = 'test_worker_restarts';
 
-const { PythonWorker } = require('../build/engine');
+const { PythonWorker, FRAME_PREFIX } = require('../build/engine');
 const { detectPython } = require('../build/detect_python');
 
 /** ensure() on a worker whose interpreter dies at once: the error it gives. */
@@ -94,7 +102,49 @@ async function unitTests() {
     await real.stop();
     await new Promise(res => setTimeout(res, 300));
     assertEq(real.crashes.length, 0, 'stop() is not counted as a crash');
+
+    // A worker that never answers. Its requests are swallowed before
+    // they reach it: alive, and silent, on every platform.
+    const hung = new PythonWorker({ root: ROOT, python, timeoutMs: 500 });
+    await hung.start();
+    const stuck = hung.proc;
+    stuck.stdin.write = () => true;
+    const t0 = Date.now();
+    const err = await Promise.race([hung.run({ op: 'ping' }).then(() => null, e => e),
+      new Promise(res => setTimeout(() => res(new Error('still pending after 10 s')), 10000).unref())]);
+    assertEq(err && err.kind, 'timeout', 'a request with no answer fails when its deadline passes');
+    assertTrue(Date.now() - t0 < 5000, `...after the deadline, not never (${Date.now() - t0} ms)`);
+    assertTrue(err && /stopped/.test(err.message), '...saying the worker was stopped');
+    assertTrue(!hung.alive(), '...and the stuck worker is no longer used');
+    assertEq(hung.crashes.length, 1, '...and counts as a crash');
+    const frame = await Promise.race([hung.run({ op: 'ping' }).then(f => f, e => e),
+      new Promise(res => setTimeout(() => res(new Error('still pending after 10 s')), 10000).unref())]);
+    assertTrue(frame && frame.ok && hung.proc !== stuck, 'the next request starts a fresh worker and is answered');
+    await hung.stop();
   }
+}
+
+function framing() {
+  const worker = new PythonWorker({ root: ROOT, python: process.execPath });
+  const got = [];
+  const wait = id => worker.pending.set(id, {
+    resolve: frame => got.push(frame.id), reject() {}, proc: null, onPartial: null,
+  });
+  const frame = id => FRAME_PREFIX + JSON.stringify({ id, ok: true, result: {} }) + '\n';
+
+  wait(1);
+  worker._consume(`written to fd 1 by a C library${frame(1)}`);
+  assertEq(got, [1], 'a frame with output glued to its front is still delivered');
+
+  // The same, arriving in pieces, the junk in one chunk and the frame
+  // split across the next two.
+  wait(2);
+  const glued = `more junk${FRAME_PREFIX}junk that looked like a frame${frame(2)}`;
+  worker._consume(glued.slice(0, 12));
+  worker._consume(glued.slice(12, 40));
+  worker._consume(glued.slice(40));
+  assertEq(got, [1, 2], 'and when it arrives in pieces, after a stray RS');
+  assertEq(worker.pending.size, 0, 'nothing is left waiting');
 }
 
 async function endToEnd() {
@@ -151,6 +201,24 @@ async function endToEnd() {
     w.python = realPython;         // "fix what it tripped on"
     const back = await engine.renderPreview({ doc: 'letter', retry: true });
     assertTrue(back.images.length > 0, 'e2e: Re-render (retry) brings the worker back');
+
+    // A worker stopped by a signal (SIGSTOP; POSIX only) mid-render: the
+    // render fails at the deadline and the next one renders.
+    if (process.platform !== 'win32') {
+      w.timeoutMs = 1000;
+      const pid = w.proc.pid;
+      process.kill(pid, 'SIGSTOP');
+      const t1 = Date.now();
+      const stuck = await Promise.race([
+        engine.renderPreview({ doc: 'letter', recompileStyles: true }).then(() => null, e => e),
+        new Promise(res => setTimeout(() => res(new Error('still pending after 15 s')), 15000).unref())]);
+      try { process.kill(pid, 'SIGCONT'); } catch { /* killed, as it should be */ }
+      assertEq(stuck && stuck.kind, 'timeout', 'e2e: a render on a stopped worker fails at its deadline');
+      assertTrue(Date.now() - t1 < 10000, `e2e: ...instead of waiting forever (${Date.now() - t1} ms)`);
+      const next = await engine.renderPreview({ doc: 'letter', recompileStyles: true });
+      assertTrue(next.images.length > 0 && w.proc.pid !== pid, 'e2e: the next render gets a new worker');
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
   } catch (err) {
     fail('worker restart end-to-end run', { error: err.stack || err.message });
   } finally {
@@ -163,6 +231,7 @@ async function endToEnd() {
 (async () => {
   try {
     await unitTests();
+    framing();
     await endToEnd();
   } catch (err) {
     fail('worker restart run', { error: err.stack || err.message });

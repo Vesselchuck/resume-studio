@@ -40,6 +40,7 @@ import re
 import json
 import argparse
 import difflib
+import html
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -133,6 +134,17 @@ def _shown(path):
         return Path(path)
 
 
+#: The text read_yaml last parsed, by path, until apply_profile moves the
+#: document's and its profile's into _LAST_MERGE. Held for one purpose:
+#: locate_schema_error, which re-parses it, with positions, only when a
+#: file has already failed validation.
+_READ_TEXT = {}
+
+#: [(path, text), ...] of the last merge: the document first, then the
+#: profile merged under it when there was one.
+_LAST_MERGE = []
+
+
 def read_yaml(path):
     """
     Parse one YAML file through the project loader, or fail cleanly.
@@ -143,8 +155,12 @@ def read_yaml(path):
     column — and the traceback is dropped.
     """
     try:
-        with Path(path).open(encoding="utf-8") as f:
-            return _yaml_loader.load(f)
+        # Read to text first and keep it: locate_schema_error needs the
+        # exact text that was parsed, not whatever is on disk by the time
+        # validation fails (an editor may have saved again in between).
+        text = Path(path).read_text(encoding="utf-8")
+        _READ_TEXT[str(path)] = text
+        return _yaml_loader.load(text)
     except _yaml_loader.YAMLError as e:
         fail(
             f"{_shown(path)} could not be read as YAML.\n"
@@ -186,7 +202,7 @@ def profile_for(doc_path):
     matters more than it looks, because the template is what the
     COMMITTED snapshot fixtures are rendered from
     (`snapshot_pdf.py --update-all` builds it and writes
-    tests/fixtures/expected_resume-*.pdf, which git tracks). If the
+    tests/fixtures/expected_resume.pdf, which git tracks). If the
     template merged your real profile, any key it left out — delete its
     `contact` block and let the profile "fill it in" — would put your
     real phone number into a file that goes to the repository. Keeping
@@ -271,10 +287,16 @@ def apply_profile(data, doc_path):
     number came from.
     """
     profile_path = profile_for(doc_path)
+    # Remembered for locate_schema_error. The document alone until the
+    # profile below is known to take part in the merge.
+    _LAST_MERGE[:] = [(doc_path, _READ_TEXT.pop(str(doc_path), None))]
     if not profile_path.exists():
+        _READ_TEXT.clear()
         return data
 
     profile = read_yaml(profile_path)
+    profile_text = _READ_TEXT.pop(str(profile_path), None)
+    _READ_TEXT.clear()
 
     # An empty file is a reasonable thing to leave lying around while
     # you decide what to put in it; a list or a string is a mistake.
@@ -291,6 +313,7 @@ def apply_profile(data, doc_path):
         shown = profile_path.relative_to(ROOT)
     except ValueError:
         shown = profile_path
+    _LAST_MERGE.append((profile_path, profile_text))
     supplied = _profile_contributions(profile, data)
     c.ok_pair(
         "Shared profile",
@@ -600,7 +623,13 @@ def write_favicon(data, out_path, accent_hex):
     """
     first = (data.get('name', {}).get('first') or '').strip()
     last  = (data.get('name', {}).get('last')  or '').strip()
-    initials = (first[:1] + last[:1]).upper() or '?'
+    # Escaped: the initials are the first character of each name part,
+    # and a name starting with & or < ("&Co", "<b>") otherwise wrote
+    # an SVG no browser would parse, so the tab showed no icon at all.
+    # A control character (YAML lets "\x01" through) is not escapable
+    # in XML at all, so it is dropped rather than escaped.
+    initials = ''.join(ch for ch in first[:1] + last[:1] if ch.isprintable())
+    initials = html.escape(initials.upper() or '?')
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
         f'<rect width="16" height="16" rx="2" fill="{accent_hex}"/>'
@@ -626,6 +655,184 @@ ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 class SchemaError(Exception):
     """Raised when the YAML data fails structural validation."""
+
+
+# ─── Where a SchemaError is ──────────────────────────────────────
+#
+# The validators see the MERGED data, so on their own they can say
+# "mainColumn[experience].jobs[2]: 'title' is blank" but not which file
+# or line, and a bad `maxPages` that came from _profile.yml was blamed
+# on the document, which never mentions it. Every message already
+# starts with its path (see "Validation helpers" below), so the
+# location is found after the fact: the two files are parsed again with
+# positions and the path is followed through them the way deep_merge
+# combined them. Nothing is recorded while loading; the cost is paid
+# only by a file that failed.
+
+#: The path a message starts with: `sidebar.blocks[2].items[0]`,
+#: `mainColumn[experience].jobs[1]`, or quoted, `'meta.maxPages'`.
+_CTX_PATH = re.compile(r"'?([A-Za-z]\w*(?:\.[A-Za-z]\w*|\[[^\]\s]+\])*)")
+_CTX_SEGMENT = re.compile(r"\.([A-Za-z]\w*)|\[([^\]]+)\]")
+_NULL_TAG = "tag:yaml.org,2002:null"
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+def _editor_position(text, mark):
+    """
+    (line, column), 1-based, as an editor counts them, for a YAML mark.
+
+    YAML counts U+0085, U+2028 and U+2029 as line breaks, and editors do
+    not (VS Code, Notepad: CR, LF, CRLF only), so mark.line was one too
+    far down for every one of them above the error — and text pasted
+    from a word processor carries U+2028. Columns are UTF-16 units, as
+    in an editor's goto-line, so an emoji earlier on the line does not
+    shift them. mark.index counts code points after any BOM (libyaml)
+    or including it (the pure-Python reader); stripping the BOM from
+    `text` before composing makes both agree.
+    """
+    head = text[:mark.index]
+    breaks = list(re.finditer(r"\r\n|\r|\n", head))
+    start = breaks[-1].end() if breaks else 0
+    return len(breaks) + 1, len(head[start:].encode("utf-16-le")) // 2 + 1
+
+
+def _is_null(node):
+    return node.tag == _NULL_TAG
+
+
+def _node_step(node, seg):
+    """One path step into a composed node: (child, mark) or None."""
+    import yaml  # already imported by _yaml_loader; the error path only
+    if isinstance(seg, str) and isinstance(node, yaml.MappingNode):
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.value == seg \
+                    and key_node.tag != _MERGE_TAG:
+                # The key's own line, which is where an editor should land.
+                return value_node, key_node.start_mark
+        # Not written here: maybe merged in with `<<: *anchor` (or a list
+        # of them, earlier ones winning), which is still THIS file. Missed,
+        # the walk fell through to the profile and blamed it for a value
+        # the document set.
+        for key_node, value_node in node.value:
+            if key_node.tag != _MERGE_TAG:
+                continue
+            sources = value_node.value if isinstance(value_node, yaml.SequenceNode) \
+                else [value_node]
+            for src in sources:
+                found = _node_step(src, seg)
+                if found:
+                    return found
+        return None
+    if isinstance(node, yaml.SequenceNode):
+        if isinstance(seg, int):
+            if 0 <= seg < len(node.value):
+                return node.value[seg], node.value[seg].start_mark
+            return None
+        if not isinstance(seg, tuple):
+            return None
+        # mainColumn[experience]: the section whose `type` is that.
+        for item in node.value:
+            found = _node_step(item, "type")
+            if found and isinstance(found[0], yaml.ScalarNode) \
+                    and found[0].value == seg[1]:
+                return item, item.start_mark
+    return None
+
+
+def locate_schema_error(message, merge=None):
+    """
+    Where the value a SchemaError message is about was written.
+
+    Returns (path, line, column, from_profile), 1-based, or (path, None,
+    None, False) when the message names no path (a missing top-level
+    key: the document as a whole), or None when there is nothing to
+    locate against (validate_data called directly, as the tests do).
+
+    The walk mirrors deep_merge: the document's value wins; where the
+    document leaves a key out or null, the profile's is the one that
+    was used; mappings present in both are followed in both. Lists
+    are replaced wholesale, so below a list only one file is left.
+    """
+    import yaml
+    merge = _LAST_MERGE if merge is None else merge
+    if not merge or merge[0][1] is None:
+        return None
+    merge = [(path, text.lstrip("\ufeff") if text is not None else None)
+             for path, text in merge]
+    try:
+        trees = [(path, _yaml_loader.compose(text) if text is not None else None)
+                 for path, text in merge]
+    except yaml.YAMLError:          # it parsed a moment ago; be safe anyway
+        return None
+    doc_path, doc = trees[0]
+    prof_path, prof = trees[1] if len(trees) > 1 else (None, None)
+
+    m = _CTX_PATH.match(message)
+    root = m.group(1).split(".")[0].split("[")[0] if m else None
+    if not m or doc is None or _node_step(doc, root) is None \
+            and (prof is None or _node_step(prof, root) is None):
+        return (_shown(doc_path), None, None, False)
+
+    segments = [root]
+    for key, bracket in _CTX_SEGMENT.findall(m.group(1)[len(root):]):
+        if key:
+            segments.append(key)
+        elif bracket.isdigit():
+            segments.append(int(bracket))
+        else:
+            segments.append(("type", bracket))
+    # A quoted key after the path narrows it: "…jobs[2]: 'title' is
+    # blank" points at the title, not the job. The first quoted word
+    # that is a key there; ids and values quoted in the text are not.
+    tail = re.findall(r"'(\w+)'", message[m.end():])
+
+    d = (doc, doc.start_mark)
+    p = (prof, prof.start_mark) if prof is not None else None
+    steps = list(segments)
+    while steps:
+        seg = steps.pop(0)
+        nd = _node_step(d[0], seg) if d else None
+        np = _node_step(p[0], seg) if p else None
+        if nd is not None and not _is_null(nd[0]):
+            both_maps = np is not None and isinstance(nd[0], yaml.MappingNode) \
+                and isinstance(np[0], yaml.MappingNode)
+            np = np if both_maps else None
+        elif np is not None and not _is_null(np[0]):
+            nd = None                   # absent or null here: the profile's
+        elif nd is None and np is None:
+            break                       # deeper than either file goes
+        else:
+            np = None
+        d, p = nd, np
+        if not steps and tail:
+            node = (d or p)[0]
+            steps = [w for w in tail if _node_step(node, w)][:1]
+            tail = []
+
+    if d is not None:
+        return (_shown(doc_path), *_editor_position(merge[0][1], d[1]), False)
+    return (_shown(prof_path), *_editor_position(merge[1][1], p[1]), True)
+
+
+def explain_schema_error(e, merge=None):
+    """
+    A SchemaError's message led by `file:line:column`, the form editors
+    and terminals turn into a link, and naming the profile when the bad
+    value came from there rather than from the document.
+    """
+    message = str(e)
+    where = locate_schema_error(message, merge)
+    if where is None:
+        return message
+    path, line, column, from_profile = where
+    if line is None:
+        return f"{path}: {message}"
+    if from_profile:
+        doc = _shown((merge or _LAST_MERGE)[0][0])
+        return (f"{path}:{line}:{column}: {message} (this value is not in "
+                f"{doc}; it comes from {path}, the shared profile merged "
+                f"under it)")
+    return f"{path}:{line}:{column}: {message}"
 
 
 def _validate_id(value, ctx):
@@ -774,9 +981,21 @@ def _check_optional_text(obj, key, ctx, *, example):
 #: into the PDF as file:///…/dist/example.com/me: a dead link that
 #: carries the path of your project folder (on Windows, your user name)
 #: to everyone you send the file to, in the link and in its /Contents.
-#: The schemes refused are the ones that run code or read your disk.
+#:
+#: Only the four kinds of link a résumé has are allowed, not everything
+#: but a list of known-bad ones: a PDF viewer hands any other scheme to
+#: whatever the reader's system registered for it (smb:, search-ms:,
+#: ms-msdt: on Windows), and a list of the bad ones is never finished.
+#: The allowlist also catches `localhost:3000`, which parses as the
+#: scheme "localhost" and is a dead link, and a bare `https:`.
+#: schemas/*.schema.json carry the same rule as a pattern; keep them in
+#: step (tests/test_yaml_typing.py checks that they agree).
 _HREF_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
-_HREF_REFUSED = ("javascript", "vbscript", "file", "data")
+_HREF_ALLOWED = re.compile(r"^(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\s]"
+                           r"|[Mm][Aa][Ii][Ll][Tt][Oo]:\s*\S"
+                           r"|[Tt][Ee][Ll]:\s*\S)")
+_HREF_EXAMPLE = {"http": "https://example.com/me", "https": "https://example.com/me",
+                 "mailto": "mailto:you@example.com", "tel": "tel:+15550100"}
 
 
 def _check_href(href, ctx):
@@ -786,25 +1005,47 @@ def _check_href(href, ctx):
     """
     if not href:
         return
-    m = _HREF_SCHEME.match(href.strip())
+    link = href.strip()
+    if _HREF_ALLOWED.match(link):
+        return
+    m = _HREF_SCHEME.match(link)
     if m is None:
+        # The advice is the address it most likely is: `//host/…` is a
+        # web address missing only its scheme, `you@host` a mail address.
+        if link.startswith("//"):
+            fixed = f"https:{link}"
+        elif re.fullmatch(r"[^\s@/:]+@[^\s@/:]+", link):
+            fixed = f"mailto:{link}"
+        else:
+            fixed = f"https://{link}"
         raise SchemaError(
             f"{ctx}: href {href!r} has no scheme, so the PDF would link to "
             f"a file on this computer — write the whole address, e.g. "
-            f"\"https://{href.strip()}\", \"mailto:…\" or \"tel:…\""
+            f"\"{fixed}\""
         )
-    if len(m.group(1)) == 1:
+    scheme, rest = m.group(1).lower(), link[m.end():]
+    if len(scheme) == 1:
         # C:\Users\… parses as scheme "c": a path on this computer, the
         # same leak as a scheme-less href, and a dead link for everyone else.
         raise SchemaError(
             f"{ctx}: href {href!r} is a path on this computer, not a link — "
             f"write a web address, e.g. \"https://…\""
         )
-    if m.group(1).lower() in _HREF_REFUSED:
+    if scheme in _HREF_EXAMPLE:
         raise SchemaError(
-            f"{ctx}: href {href!r} — {m.group(1).lower()}: links are not "
-            f"allowed in the document; use https:, mailto: or tel:"
+            f"{ctx}: href {href!r} has no address after {scheme}: — write "
+            f"the whole link, e.g. \"{_HREF_EXAMPLE[scheme]}\""
         )
+    if re.match(r"\d+(?:[/?#]|$)", rest):
+        # host:port — the host reads as the scheme.
+        raise SchemaError(
+            f"{ctx}: href {href!r} has no scheme — write the whole "
+            f"address, e.g. \"https://{link}\""
+        )
+    raise SchemaError(
+        f"{ctx}: href {href!r} — {scheme}: links are not allowed in the "
+        f"document; use https:, http:, mailto: or tel:"
+    )
 
 
 def _check_keys(obj, allowed, ctx, warnings, *, strict, note="", hints=None):
@@ -1056,6 +1297,15 @@ def validate_data(data):
             "with a 'title' (and optional 'subtitle' and 'institution'); "
             "use items: [] for none"
         )
+    if not items:
+        # Allowed ("items: [] for none") because the section itself is
+        # required, but the heading still prints, alone. Said, so an
+        # empty list left over from editing is not a surprise in the PDF.
+        warnings.append(
+            "mainColumn[education]: 'items' is empty, so the "
+            f"{sections['education'].get('heading')!r} heading prints "
+            "with nothing under it"
+        )
     for i, item in enumerate(items):
         ctx = f"mainColumn[education].items[{i}]"
         if not isinstance(item, dict):
@@ -1077,7 +1327,8 @@ def validate_data(data):
     # entries skip bullets, regular jobs require a non-empty list.
     experience = sections["experience"]
     if not isinstance(experience.get("jobs"), list) or not experience["jobs"]:
-        raise SchemaError("'experience.jobs' must be a non-empty list")
+        raise SchemaError(
+            "'mainColumn[experience].jobs' must be a non-empty list")
     seen_job_ids = set()
     for i, job in enumerate(experience["jobs"]):
         ctx = f"mainColumn[experience].jobs[{i}]"
@@ -1086,6 +1337,16 @@ def validate_data(data):
         _validate_id(job.get("id"), ctx)
         if job["id"] in seen_job_ids:
             raise SchemaError(f"{ctx}: duplicate job id {job['id']!r}")
+        # Jobs and sidebar blocks are two lists in the file but one page:
+        # both ids become HTML ids on it (_macros.j2), and a page with two
+        # elements of the same id is invalid HTML whose fragment links and
+        # aria references reach only the first.
+        if job["id"] in seen_block_ids:
+            raise SchemaError(
+                f"{ctx}: id {job['id']!r} is also a sidebar block's id — "
+                f"jobs and sidebar blocks share one set of ids, because "
+                f"each becomes an id on the page. Rename one of them"
+            )
         seen_job_ids.add(job["id"])
         _check_keys(job, _KEYS_JOB, ctx, warnings, strict=True)
         _check_text(job.get("title"), ctx, what="'title'",
@@ -1163,6 +1424,21 @@ def _validate_list_items(items, ctx, warnings):
         _check_text(item, ictx, what="list entry",
                     example="- Latin, or - group: \"Languages\" for a "
                             "heading")
+    # A group heading labels the lines below it. One with none (the last
+    # entry, or followed straight by another group) prints as a heading
+    # over nothing, and a list of only groups is a block of headings.
+    # Warned, not refused: such a file has always built, and a stricter
+    # build must not reject it (see _check_keys).
+    for j, item in enumerate(items):
+        if not (isinstance(item, dict) and "group" in item):
+            continue
+        following = items[j + 1] if j + 1 < len(items) else None
+        if following is None or isinstance(following, dict) and "group" in following:
+            warnings.append(
+                f"{ctx}[{j}]: group {item['group']!r} has no entries under "
+                f"it, so its heading prints over nothing — add lines "
+                f"below it, or delete it"
+            )
 
 
 def _validate_detail_rows(rows, ctx, warnings):
@@ -1400,7 +1676,7 @@ def build(mode='final'):
     try:
         warnings = validate_data(data)
     except SchemaError as e:
-        fail(f"invalid resume data — {e}")
+        fail(f"invalid resume data — {explain_schema_error(e)}")
     # Reported, never fatal: a key the build does not read in an object
     # the schema leaves open. See _check_keys.
     for warning in warnings:

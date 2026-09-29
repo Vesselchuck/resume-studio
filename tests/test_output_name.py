@@ -161,6 +161,30 @@ class TestFilesystemSafety(unittest.TestCase):
         long_stem = stem("A" * 200, "B" * 200)
         self.assertLessEqual(len(long_stem), 2 * on.MAX_PART + 32)
 
+    def test_bidi_controls_never_survive(self):
+        # U+202E in a filename displays the rest of it backwards: the
+        # classic "Resume\u202efdp.exe" disguise. Only the non-ASCII
+        # fallback kept them.
+        for ch in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
+            with self.subTest(ch=hex(ord(ch))):
+                got = stem(f"山田{ch}fdp.exe", f"{ch}Иван")
+                self.assertNotIn(ch, got)
+                self.assertTrue(got.startswith("山田"), got)
+
+    def test_a_long_non_latin_name_fits_the_filesystem_in_bytes(self):
+        # ext4 and APFS allow 255 BYTES per name; 64 CJK characters per
+        # part are 192 bytes each. Both parts are shortened from the end.
+        for variant in ("resume", "letter"):
+            with self.subTest(variant=variant):
+                got = stem("山" * 200, "Иванова" * 30, variant)
+                self.assertLessEqual(len((got + ".pdf").encode("utf-8")), 255)
+                self.assertTrue(got.startswith("山") and got.endswith(on.DOC_SUFFIX[variant]))
+                self.assertIn("_Иван", got)
+
+    def test_names_that_fit_are_not_touched_by_the_byte_cap(self):
+        # 64 CJK characters and 10 more: 238 bytes with "_Resume.pdf".
+        self.assertEqual(stem("山" * 64, "田" * 10), "山" * 64 + "_" + "田" * 10 + "_Resume")
+
     def test_the_cap_does_not_leave_a_trailing_separator(self):
         # Cutting mid-run would otherwise yield "Foo_..._" + "_Resume".
         raw = ("x" * (on.MAX_PART - 1)) + "  yyy"

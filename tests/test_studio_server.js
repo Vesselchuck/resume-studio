@@ -23,6 +23,22 @@
  *   • A save is picked up after a 20 ms debounce, and a preview that
  *     fails the way a half-written data file would, shortly after a
  *     change, is tried once more before the error is shown.
+ *   • Editors' own files (swap, lock, backup, atomic-save temps) set off
+ *     no render; the atomic save itself sets off exactly one.
+ *   • A dropped file named for a Windows device (CON.yml), or with a
+ *     ':' (an NTFS stream) or a control character, is refused.
+ *   • A preview's scale is clamped and its page list cleaned, so a bad
+ *     value can neither fail the worker nor ask it for gigapixels.
+ *   • /api/status stays busy while any preview or build is under way.
+ *   • An event-stream client that stops reading is dropped, instead of
+ *     having every page image queued for it without limit.
+ *   • The UI's settings (/api/prefs) keep only known keys with valid
+ *     values, under the same Host/Origin/JSON rules as every write, and
+ *     the page is served with them (theme on <html>, all in a <meta>)
+ *     without its CSP changing.
+ *   • /api/open opens only an existing file in data/ or styles/, and
+ *     the command it runs is a program and its arguments — never a
+ *     shell — with a vscode:// link percent-encoded.
  *
  * ISOLATION
  * ---------
@@ -140,6 +156,15 @@ async function unitTests(tmp) {
   const digest = require('crypto').createHash('sha256').update('var a = 1;').digest('base64');
   assertTrue(csp.includes(`script-src 'sha256-${digest}';`),
     `CSP: the inline script is allowed by its hash, the src= one adds none (${csp})`);
+  // Line endings: the browser hashes the script after turning CRLF and
+  // a lone CR into LF, so a page saved with Windows endings must get the
+  // hash of the LF text or nothing on it runs.
+  assertEq(server.uiContentSecurityPolicy('<script>\r\nvar a = 1;\r\n</script>'),
+    server.uiContentSecurityPolicy('<script>\nvar a = 1;\n</script>'),
+    'CSP: a page saved with CRLF gets the hash the browser computes');
+  assertEq(server.uiContentSecurityPolicy('<script>\rvar a = 1;\r</script>'),
+    server.uiContentSecurityPolicy('<script>\nvar a = 1;\n</script>'),
+    'CSP: ...and so does one with lone CRs');
   assertTrue(/frame-ancestors 'none'/.test(csp) && /default-src 'none'/.test(csp)
     && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp),
     'CSP: no framing, nothing by default, no unsafe script sources');
@@ -200,6 +225,95 @@ async function unitTests(tmp) {
     'half-written: a schema error is not retried');
   assertEq(fn.calls(), 1, 'half-written: ...not even once');
 
+  // Names a dropped file may not have.
+  for (const name of ['CON.yml', 'con.yml', 'nul.backup.yml', 'COM1.yaml', 'LPT9.yml', 'COM¹.yml',
+    'aux .yml', 'x.yml:y.yml', 'tab\there.yml', 'a<b.yml', 'x.yml.']) {
+    assertTrue(server.unportableName(name) !== null, `unportableName: ${JSON.stringify(name)} is refused`);
+  }
+  for (const name of ['CONSOLE.yml', 'com10.yml', 'my con.yml', 'résumé 2026.yml', 'resume_default.yml']) {
+    assertEq(server.unportableName(name), null, `unportableName: ${JSON.stringify(name)} is allowed`);
+  }
+
+  // Preview parameters.
+  assertEq([server.previewScale(2), server.previewScale(100), server.previewScale(-1), server.previewScale(0.01)],
+    [2, 4, 0.25, 0.25], 'previewScale: clamped to 0.25–4');
+  assertEq([server.previewScale('2'), server.previewScale(NaN), server.previewScale(null)],
+    [undefined, undefined, undefined], 'previewScale: not a finite number is the default');
+  assertEq(server.previewPages([2, 1, 1, 'x', 1.5, 0, -3, 65]), [1, 2],
+    'previewPages: whole page numbers from 1, each once');
+  assertEq([server.previewPages(3), server.previewPages(['x']), server.previewPages(null)], [null, null, null],
+    'previewPages: anything else is every page');
+
+  // What the watcher renders for.
+  for (const name of ['resume.yml', 'letter.yaml', '_profile.yml', 'styles.scss', '_base.scss']) {
+    assertTrue(server.isWatchedInput(name), `isWatchedInput: ${name} is an input`);
+  }
+  for (const name of ['.resume.yml.swp', '.resume.yml.swx', '4913', 'resume.yml~', '.#resume.yml',
+    '#resume.yml#', 'resume.yml___jb_tmp___', 'resume.yml___jb_old___', 'resume.yml.tmp',
+    'resume.yml.4f2a.tmp', '~$sume.yml', '.~lock.resume.yml#']) {
+    assertTrue(!server.isWatchedInput(name), `isWatchedInput: ${name} is not`);
+  }
+
+  // Settings: only known keys, each checked.
+  assertEq(server.sanitizePrefs({ theme: 'dark', zoom: 1000, fit: 'bogus', snapshot: true,
+    tests: 'yes', highlight: false, evil: '<x>', __proto__: { theme: 'light' } }),
+  { theme: 'dark', zoom: 200, snapshot: true, highlight: false },
+  'sanitizePrefs: known keys with valid values only, zoom clamped');
+  assertEq([server.sanitizePrefs(null), server.sanitizePrefs([1]), server.sanitizePrefs('x')], [{}, {}, {}],
+    'sanitizePrefs: anything but an object is nothing');
+  assertEq(server.sanitizePrefs({ theme: 'dark" onload="x' }), {},
+    'sanitizePrefs: a theme is one of three words, nothing else');
+  const prefsFile = path.join(tmp, 'prefs', 'p.json');
+  assertEq(server.writePrefs({ theme: 'light', bogus: 1 }, prefsFile), { theme: 'light' },
+    'writePrefs: writes what passes');
+  assertEq(server.writePrefs({ zoom: 150 }, prefsFile), { theme: 'light', zoom: 150 },
+    'writePrefs: merges into what is there');
+  fs.writeFileSync(prefsFile, '{not json');
+  assertEq(server.readPrefs(prefsFile), {}, 'readPrefs: a damaged file is no settings, not an error');
+  const served = server.pageWithPrefs('<html lang="en"><head><title>t</title></head></html>',
+    { theme: 'dark', note: '"><script>alert(1)</script>' });
+  assertTrue(served.includes('<html lang="en" data-theme="dark">'), 'pageWithPrefs: the theme is on <html>');
+  assertTrue(!served.includes('<script>') && served.includes('&quot;&gt;&lt;script&gt;'),
+    'pageWithPrefs: the settings JSON is escaped into its attribute');
+  assertTrue(!server.pageWithPrefs('<html lang="en"><head></head>', { theme: 'system' }).includes('data-theme'),
+    'pageWithPrefs: System sets no theme attribute');
+
+  // Opening a file: what is run, and what may be opened.
+  const win = server.openCommand('C:\\Users\\A B\\res#ume\\data\\r%s.yml',
+    { line: 42, col: 5, vscode: true, platform: 'win32' });
+  assertTrue(/explorer\.exe$/i.test(win.cmd) && path.win32.isAbsolute(win.cmd), `openCommand: vscode through explorer.exe by full path (${win.cmd})`);
+  assertEq(win.args, ['vscode://file/C:/Users/A%20B/res%23ume/data/r%25s.yml:42:5'],
+    'openCommand: the vscode:// link is percent-encoded, drive colon kept, line and column last');
+  const plain = server.openCommand('C:\\x\\data\\a.yml', { platform: 'win32' });
+  assertTrue(/explorer\.exe$/i.test(plain.cmd) && plain.args.length === 1 && plain.editor === 'default',
+    'openCommand: without VS Code, explorer.exe opens the file itself');
+  assertEq(server.openCommand('/p/data/a.yml', { platform: 'darwin' }), { editor: 'default', cmd: 'open', args: ['/p/data/a.yml'] },
+    'openCommand: macOS uses open');
+  assertEq(server.openCommand('/p/data/a.yml', { platform: 'linux' }), { editor: 'default', cmd: 'xdg-open', args: ['/p/data/a.yml'] },
+    'openCommand: Linux uses xdg-open');
+  // explorer.exe splits its command line at commas, quoted or not: a
+  // file named `run.bat,x.yml` would open (run) run.bat.
+  assertEq([server.openCommand('C:\\x\\data\\run.bat,x.yml', { platform: 'win32' }),
+    server.openCommand('C:\\x, y\\data\\a.yml', { platform: 'win32' })], [null, null],
+    'openCommand: explorer.exe is never handed a path with a comma');
+  assertTrue(server.openCommand('C:\\x\\data\\run.bat,x.yml', { platform: 'win32', vscode: true }).args[0].includes('%2C'),
+    'openCommand: ...while the vscode:// link encodes it');
+  assertEq(server.openCommand('\\\\srv\\share\\data\\a.yml', { platform: 'win32', vscode: true }).editor, 'default',
+    'openCommand: a UNC path, which has no vscode://file/ form, goes to its default program');
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    for (const vscode of [true, false]) {
+      const c = server.openCommand('/p/data/a b;&|.yml', { platform, vscode });
+      assertTrue(!/(^|[\\/])(cmd|powershell|pwsh|sh|bash)(\.exe)?$/i.test(c.cmd),
+        `openCommand: never a shell (${platform}, vscode ${vscode}: ${c.cmd})`);
+    }
+  }
+  assertTrue(server.resolveOpenable('data/resume_default.yml') !== null, 'resolveOpenable: a data file is openable');
+  assertTrue(server.resolveOpenable('styles/styles.scss') !== null, 'resolveOpenable: a stylesheet is openable');
+  for (const bad of ['package.json', 'build/engine.js', '../package.json', 'data/../package.json',
+    'data', 'data/', 'data/no-such.yml', '/etc/passwd', 'styles/../build/engine.js', '']) {
+    assertEq(server.resolveOpenable(bad), null, `resolveOpenable: ${JSON.stringify(bad)} is refused`);
+  }
+
   // writeNew: never replaces.
   const target = path.join(tmp, 'wn', 'a.yml');
   assertTrue(server.writeNew(target, 'one'), 'writeNew: writes a free name');
@@ -214,8 +328,10 @@ function startServer(projectDir) {
   for (const k of ['RESUME_DATA_SOURCE', 'RESUME_DATA_FILE', 'LETTER_DATA_FILE', 'STUDIO_PORT']) {
     delete env[k];
   }
+  // --open-dry-run: /api/open reports what it would run instead of
+  // starting an editor.
   const child = spawn(process.execPath,
-    [path.join(projectDir, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent'],
+    [path.join(projectDir, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent', '--open-dry-run'],
     { cwd: projectDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const log = [];
   return new Promise((resolve, reject) => {
@@ -392,6 +508,41 @@ async function cspTests(port, chromium) {
 }
 
 
+/**
+ * A keyboard user who presses Build keeps focus on the button: while
+ * the build runs (the button is unavailable, not removed from the tab
+ * order) and after it ends, so Enter builds again.
+ */
+async function buildFocusTests(port, chromium) {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${port}/`);
+    await page.waitForSelector('.sheet img', { timeout: 90000 });
+    // Unavailable either way a button can say so, so a regression back
+    // to `disabled` fails on focus rather than on a timeout.
+    const isBusy = (want) => want === [...document.querySelectorAll('button')]
+      .some(b => /^Build .* PDF$/.test(b.textContent.trim())
+        && (b.disabled || b.getAttribute('aria-disabled') === 'true'));
+    const busy = () => page.evaluate(isBusy, true);
+    const focused = () => page.evaluate(() => document.activeElement.textContent.trim());
+    const button = page.locator('button', { hasText: /^Build Cover Letter PDF$/ });
+    await button.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(isBusy, true, { timeout: 5000 });
+    assertEq(await focused(), 'Build Cover Letter PDF', 'focus: the Build button keeps focus while it builds');
+    await page.waitForFunction(isBusy, false, { timeout: 90000 });
+    assertEq(await focused(), 'Build Cover Letter PDF', 'focus: ...and after the build');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(100);
+    assertTrue(await busy(), 'focus: Enter on it builds again');
+    await page.waitForFunction(isBusy, false, { timeout: 90000 });
+  } finally {
+    await browser.close();
+  }
+}
+
+
 /* ─── Endpoint tests ──────────────────────────────────────────── */
 
 async function httpTests(project, srv) {
@@ -416,6 +567,13 @@ async function httpTests(project, srv) {
   }
   assertEq((await api('GET', '/fonts/variable/..%2F..%2Fpackage.woff2')).status, 404,
     'the font route serves nothing outside fonts/variable/');
+  // HEAD gets the headers GET would; any other method is not a page load.
+  const headFont = await api('HEAD', faces[0] || '/fonts/variable/Manrope.woff2');
+  assertEq([headFont.status, headFont.headers['content-type']], [200, 'font/woff2'],
+    'HEAD on a font answers as GET does');
+  assertEq((await api('HEAD', '/')).status, 200, 'HEAD on the page answers as GET does');
+  assertEq((await api('POST', '/', {})).status, 404, 'a POST to the page is not answered with it');
+  assertEq((await api('DELETE', '/index.html')).status, 404, '...nor a DELETE');
   assertEq((await api('POST', '/api/datasource', { source: null },
     { headers: { origin: 'http://evil.example' } })).status, 403,
     'a cross-origin POST is refused');
@@ -456,6 +614,100 @@ async function httpTests(project, srv) {
     `the page is sent with its Content-Security-Policy (${pagePolicy})`);
   assertEq(pagePolicy, server.uiContentSecurityPolicy(page.text),
     "the page's policy hashes the page as served");
+
+  // Settings over HTTP: kept in the project's dist/, filtered, and
+  // served back inside the page.
+  let pr = await api('GET', '/api/prefs');
+  assertEq([pr.status, pr.data.prefs], [200, {}], 'prefs: a fresh project has none saved');
+  assertEq((await api('PUT', '/api/prefs', { theme: 'dark' },
+    { headers: { 'content-type': 'text/plain' } })).status, 415, 'prefs: a non-JSON PUT is refused');
+  assertEq((await api('PUT', '/api/prefs', { theme: 'dark' },
+    { headers: { origin: 'http://evil.example' } })).status, 403, 'prefs: a cross-origin PUT is refused');
+  assertEq((await api('PUT', '/api/prefs', { theme: 'dark' },
+    { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403, 'prefs: a cross-site PUT is refused');
+  assertEq((await api('PUT', '/api/prefs', [1, 2])).status, 500, 'prefs: a PUT that is not an object is refused');
+  assertEq((await api('PUT', '/api/prefs', { theme: 'dark', pad: 'x'.repeat(64 * 1024) })).status, 413,
+    'prefs: an oversized PUT is refused (a few settings are a few hundred bytes)');
+  pr = await api('PUT', '/api/prefs', { theme: 'dark', zoom: 125, fit: 'none', evil: 'x', snapshot: 'yes' });
+  assertEq([pr.status, pr.data.prefs, pr.data.ignored.sort()],
+    [200, { theme: 'dark', zoom: 125, fit: 'none' }, ['evil', 'snapshot']],
+    'prefs: known keys with valid values are kept; the rest are named as ignored');
+  assertEq(JSON.parse(fs.readFileSync(path.join(project, 'dist', '.studio-prefs.json'), 'utf-8')),
+    { theme: 'dark', zoom: 125, fit: 'none' }, "prefs: written to the project's dist/.studio-prefs.json");
+  const themed = await api('GET', '/');
+  assertTrue(/<html lang="en" data-theme="dark">/.test(themed.text),
+    'prefs: the page is served in the saved theme (no flash of the other one)');
+  const metaMatch = /<meta name="studio-prefs" content="([^"]*)">/.exec(themed.text);
+  assertEq(metaMatch && JSON.parse(metaMatch[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&')),
+    { theme: 'dark', zoom: 125, fit: 'none' }, 'prefs: ...with every saved setting in its <meta>');
+  assertEq(themed.headers['content-security-policy'], pagePolicy,
+    "prefs: ...and the same Content-Security-Policy (the script's hash is unchanged)");
+  await api('PUT', '/api/prefs', { theme: 'system' });
+  assertTrue(!/<html[^>]*data-theme=/.test((await api('GET', '/')).text), 'prefs: System leaves the theme to the OS');
+  fs.rmSync(path.join(project, 'dist', '.studio-prefs.json'));
+
+  // Opening a file in the editor: inputs only, and never through a shell.
+  const editor = (await api('GET', '/api/open')).data.editor;
+  if (process.platform !== 'win32') {
+    assertEq(editor, 'default', 'open: off Windows there is no vscode:// handler to look for');
+  }
+  let op = await api('POST', '/api/open', { path: 'data/resume_default.yml', line: 12, col: 3 });
+  assertEq([op.status, op.data.opened, op.data.editor], [200, 'data/resume_default.yml', editor],
+    `open: a data file is opened (${op.data && op.data.error})`);
+  assertTrue(Array.isArray(op.data.command) && (editor === 'vscode'
+    ? /^vscode:\/\/file\/.*resume_default\.yml:12:3$/.test(op.data.command[1])
+    : op.data.command[1] === fs.realpathSync.native(path.join(project, 'data', 'resume_default.yml'))
+      && op.data.command.length === 2),
+    `open: ...as a program and its arguments, the file named in full (${JSON.stringify(op.data.command)})`);
+  op = await api('POST', '/api/open', { path: 'styles/_base.scss', line: 'x', col: -4 });
+  assertEq(op.status, 200, 'open: a stylesheet is opened, a bad line or column is just 1');
+  for (const bad of ['../../../etc/passwd', 'build/engine.js', 'package.json', 'data/../package.json',
+    'data', 'data/missing.yml', path.join(project, 'build', 'engine.js'), '']) {
+    op = await api('POST', '/api/open', { path: bad, line: 1 });
+    assertEq(op.status, 500, `open: ${JSON.stringify(bad)} is refused`);
+  }
+  // Only the inputs' kinds: "open" hands a file to its default program,
+  // which runs a .bat, .exe, .desktop or .sh. The file a link finally
+  // leads to must be one of them too; a link to a .yml elsewhere is fine.
+  {
+    const dataDir = path.join(project, 'data');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-open-outside-'));
+    const made = [];
+    const make = (name, fn) => {
+      const f = path.join(dataDir, name);
+      try { fn(f); made.push(f); return true; } catch { return false; }
+    };
+    try {
+      for (const name of ['x.bat', 'x.sh', 'x.desktop', 'x.yml.exe', 'x.YML.lnk']) {
+        make(name, f => fs.writeFileSync(f, ''));
+        op = await api('POST', '/api/open', { path: `data/${name}` });
+        assertEq(op.status, 500, `open: data/${name} is not an input, refused`);
+      }
+      fs.writeFileSync(path.join(outside, 'tool.exe'), '');
+      fs.writeFileSync(path.join(outside, 'synced.yml'), 'a: 1\n');
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+      if (make('prog.yml', f => fs.symlinkSync(path.join(outside, 'tool.exe'), f))) {
+        op = await api('POST', '/api/open', { path: 'data/prog.yml' });
+        assertEq(op.status, 500, 'open: a .yml link to a program elsewhere is refused');
+      }
+      if (make('outdir', f => fs.symlinkSync(outside, f, linkType))) {
+        op = await api('POST', '/api/open', { path: 'data/outdir/tool.exe' });
+        assertEq(op.status, 500, 'open: a directory link out of data/ does not reach a program');
+      }
+      if (make('synced.yml', f => fs.symlinkSync(path.join(outside, 'synced.yml'), f))) {
+        op = await api('POST', '/api/open', { path: 'data/synced.yml' });
+        assertEq([op.status, op.data.opened], [200, 'data/synced.yml'],
+          'open: a data file linked from another folder opens (the app reads it too)');
+      }
+    } finally {
+      for (const f of made) fs.rmSync(f, { force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  }
+  assertEq((await api('POST', '/api/open', { path: 'data/resume_default.yml' },
+    { headers: { origin: 'http://evil.example' } })).status, 403, 'open: a cross-origin request is refused');
+  assertEq((await api('POST', '/api/open', { path: 'data/resume_default.yml' },
+    { headers: { 'content-type': 'text/plain' } })).status, 415, 'open: a non-JSON body is refused');
 
   // M9 — a malformed Host does not take the server down.
   const bad = await rawRequest(port, `GET /api/status HTTP/1.1\r\nHost: [::bad\r\nConnection: close\r\n\r\n`);
@@ -499,6 +751,122 @@ async function httpTests(project, srv) {
     'adopt-as: the taken file is unchanged');
   await api('POST', '/api/pick', { doc: 'letter', name: null });
   fs.rmSync(path.join(project, 'data', 'dropped.yml'));
+
+  // Names Windows reads as something else are refused before anything
+  // is written: CON.yml is the console, x.yml:y.yml a hidden stream.
+  for (const name of ['CON.yml', 'nul.backup.yml', 'x.yml:y.yml']) {
+    r = await api('POST', '/api/adopt', { filename: name, content: letterYml });
+    assertTrue(r.status === 500 && /reserves|not allowed/.test(r.data.error),
+      `adopt: ${name} is refused (${r.status} ${r.data && r.data.error})`);
+    assertTrue(!fs.existsSync(path.join(project, 'data', name)), `adopt: ${name} was not written`);
+  }
+  r = await api('POST', '/api/adopt-as', { doc: 'letter', name: 'COM1.yaml', content: letterYml });
+  assertTrue(r.status === 500 && /reserves/.test(r.data.error), 'adopt-as: COM1.yaml is refused');
+  if (process.platform === 'win32') {
+    r = await api('POST', '/api/pick', { doc: 'letter', name: 'AUX.yml' });
+    assertTrue(r.status === 500 && /reserves/.test(r.data.error), 'pick: AUX.yml is refused');
+  } else {
+    // An existing file is readable under the name it already has here.
+    for (const name of ['aux.yml', 'Resume 9:2026.yml']) {
+      fs.writeFileSync(path.join(project, 'data', name), letterYml);
+      r = await api('POST', '/api/pick', { doc: 'letter', name });
+      assertEq(r.status, 200, `pick: an existing ${name} opens (${r.data && r.data.error})`);
+      r = await api('GET', `/api/datafile?name=${encodeURIComponent(name)}`);
+      assertEq(r.status, 200, `datafile: an existing ${name} is read (${r.data && r.data.error})`);
+      fs.rmSync(path.join(project, 'data', name));
+    }
+    await api('POST', '/api/pick', { doc: 'letter', name: null });
+  }
+  assertTrue(server.unreadableName('AUX.yml', 'win32') !== null, 'unreadableName: AUX.yml on Windows');
+  assertEq(server.unreadableName('Resume 9:2026.yml', 'darwin'), null, 'unreadableName: an existing macOS name');
+
+  // Preview parameters: a bad scale or page list renders with defaults
+  // rather than failing in the worker, and a huge scale is clamped.
+  r = await api('POST', '/api/preview', { doc: 'letter', scale: 'abc', pages: 3 });
+  assertEq([r.status, r.data.images && r.data.images.length], [200, 1],
+    `preview: a scale that is not a number and a bare page number render anyway (${r.data && r.data.error})`);
+  r = await api('POST', '/api/preview', { doc: 'letter', scale: 50, pages: ['x'] });
+  assertEq([r.status, r.data.images && r.data.images[0].width], [200, 8.5 * 72 * 4],
+    `preview: scale 50 is rendered at 4 (${r.data && r.data.error})`);
+
+  // Busy while anything is under way. The build waits behind the
+  // preview on the engine's queue; once the preview is done, the build
+  // still runs, and a single flag used to say idle then.
+  const previewing = api('POST', '/api/preview', { doc: 'letter', scale: 1.5 });
+  const building = api('POST', '/api/build', { doc: 'letter', scale: 1 });
+  await previewing;
+  let busyNow = (await api('GET', '/api/status')).data.busy;
+  const buildDone = (await building).status;
+  assertEq([busyNow, buildDone], [true, 200], 'status: busy after a preview ends while a build still runs');
+  busyNow = (await api('GET', '/api/status')).data.busy;
+  assertEq(busyNow, false, 'status: ...and idle once both are done');
+
+  // Editors' own files. vim's swap file and Emacs's lock and autosave
+  // appear while typing, before any save; none of them may render. An
+  // atomic save (JetBrains' safe write: temp file, old copy, rename over
+  // the input) renders once, for the input.
+  const changes = [];
+  const watch = await events(port, (name, data) => {
+    if (name === 'changed') changes.push(data.file ? path.basename(data.file) : null);
+  });
+  try {
+    const dataDir = path.join(project, 'data');
+    const target = path.join(dataDir, 'letter_default.yml');
+    const settle = () => new Promise(res => setTimeout(res, 1300));   // debounce and a poll
+    await settle();
+    changes.length = 0;
+    fs.writeFileSync(path.join(dataDir, '.letter_default.yml.swp'), 'b0VIM 9.0');
+    fs.writeFileSync(path.join(dataDir, '4913'), '');
+    fs.rmSync(path.join(dataDir, '4913'));
+    fs.writeFileSync(path.join(dataDir, '#letter_default.yml#'), 'autosave');
+    fs.writeFileSync(path.join(dataDir, '~$tter_default.yml'), 'lock');
+    await settle();
+    assertEq(changes, [], 'watch: swap, probe, autosave and lock files render nothing');
+    for (const f of ['.letter_default.yml.swp', '#letter_default.yml#', '~$tter_default.yml']) {
+      fs.rmSync(path.join(dataDir, f));
+    }
+    await settle();
+    changes.length = 0;
+    const before = fs.readFileSync(target, 'utf-8');
+    fs.writeFileSync(`${target}___jb_tmp___`, `${before}\n# saved\n`);
+    fs.renameSync(target, `${target}___jb_old___`);
+    fs.renameSync(`${target}___jb_tmp___`, target);
+    fs.rmSync(`${target}___jb_old___`);
+    await settle();
+    assertEq(changes, ['letter_default.yml'], 'watch: an atomic save renders once, for the input');
+    fs.writeFileSync(target, before);
+    await settle();
+  } finally {
+    watch.close();
+  }
+
+  // An event-stream client that stops reading. Streamed renders at the
+  // largest scale queue a few MB each for it; past the limit it is
+  // dropped, which its EventSource would answer by reconnecting.
+  const stalled = await new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/events',
+      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      res.pause();
+      req.socket.pause();
+      resolve({ req, res });
+    });
+  });
+  for (let i = 0; i < 12; i++) {
+    r = await api('POST', '/api/preview',
+      { doc: 'resume', scale: 3.9 + i / 100, stream: true, renderId: `stall-${i}` });
+    assertEq(r.status, 200, `SSE: streamed render ${i} succeeds with a stalled client (${r.data && r.data.error})`);
+  }
+  const closedByServer = await new Promise((resolve) => {
+    stalled.res.on('end', () => resolve(true));
+    stalled.res.on('error', () => resolve(true));
+    stalled.res.on('close', () => resolve(true));
+    stalled.res.on('data', () => {});
+    stalled.req.socket.resume();
+    stalled.res.resume();
+    setTimeout(() => resolve(false), 5000);
+  });
+  stalled.req.destroy();
+  assertTrue(closedByServer, 'SSE: a client that stopped reading is dropped rather than buffered for');
 
   // H1 — the letter's data is the letter card's choice alone.
   const mine = letterYml.replace('first: Gaius', 'first: Testy').replace('last: Caesar', 'last: McTest');
@@ -715,6 +1083,7 @@ async function httpTests(project, srv) {
     srv = await startServer(project);
     const workerPid = await httpTests(project, srv);
     await cspTests(srv.port, chromium);
+    await buildFocusTests(srv.port, chromium);
 
     // L-c — closing stdin (what the desktop shell does) is a graceful
     // shutdown: the server exits by itself and takes the worker with it.

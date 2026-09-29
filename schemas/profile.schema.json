@@ -37,7 +37,8 @@
               "value": { "type": "string", "minLength": 1, "description": "The text people see." },
               "href": {
                 "type": "string",
-                "description": "What clicking it does: 'tel:', 'mailto:' or 'https:'.",
+                "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)",
+                "description": "What clicking it does: 'tel:', 'mailto:', 'https:' or 'http:', written in full. Empty means no link.",
                 "examples": ["tel:+15551234567", "mailto:you@example.com"]
               }
             }

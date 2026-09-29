@@ -18,14 +18,15 @@
  * It listens on 127.0.0.1 only, on an ephemeral port by default, and
  * prints the chosen URL as a framed line the Rust side reads. Every
  * request must name this server in its Host header, an Origin must be
- * its own, and POST bodies must be JSON — see checkRequest.
+ * its own, and POST and PUT bodies must be JSON — see checkRequest.
  *
  * ENDPOINTS
  *   GET  /                 the UI
  *   GET  /api/status       engine + data-source state
  *   GET  /api/datafiles    what's in data/
  *   GET  /api/datafile     ?name= -> one file's contents
- *   GET  /api/events       SSE: log lines, render/build state, and the
+ *   GET  /api/events       SSE: a `hello` naming this connection's client
+ *                          id, log lines, render/build state, and the
  *                          `page` events of a streamed render
  *   POST /api/preview      {doc, scale, pages, from, known, stream,
  *                          renderId, order, retry} -> rasterized PDF pages;
@@ -47,9 +48,16 @@
  *                          reports a conflict rather than ever replacing
  *   POST /api/adopt-as     {doc, name, content} -> save under a chosen free name
  *   POST /api/reveal       {path} -> show it in the OS file manager
- *   POST /api/visibility   {hidden} -> the page is hidden or shown; after
- *                          five minutes hidden the engine closes Chromium
- *                          (see "Releasing Chromium while hidden")
+ *   POST /api/visibility   {hidden, client} -> a page (client: its id from
+ *                          `hello`) or, without client, the desktop shell
+ *                          is hidden or shown; after five minutes of the
+ *                          shell or every page hidden the engine closes
+ *                          Chromium (see "Releasing Chromium while hidden")
+ *   GET  /api/prefs        the UI's saved settings (theme, zoom, …)
+ *   PUT  /api/prefs        {key: value, …} -> merged into them; see PREFS_FILE
+ *   GET  /api/open         {editor: 'vscode'|'default'}: what Open would use
+ *   POST /api/open         {path, line, col} -> open a data/ or styles/ file
+ *                          in the editor, at that line where it can
  *   POST /api/shutdown
  *
  * Run standalone:  node build/studio_server.js [--port 4173] [--open]
@@ -72,7 +80,7 @@ const os = require('os');
 
 const { createEngine } = require('./engine');
 const {
-  outputPaths, outputPattern, RETIRED_GRAYSCALE_SUFFIXES, DOC_SUFFIX, SEPARATOR,
+  outputPaths, outputPattern, readRecord, RETIRED_GRAYSCALE_SUFFIXES, DOC_SUFFIX, SEPARATOR,
 } = require('./_output_name');
 const {
   ENV_RESUME_SNAPSHOT,
@@ -210,16 +218,23 @@ function readJson(file) {
 /**
  * What a document's built PDFs are called, as of now.
  *
- * The metadata's name wins when a PDF by that name exists. Otherwise
- * dist/ is searched with the document's own output pattern — a Build
- * deletes every other file matching it, so what is left is the last
- * Build's — newest first. With nothing built, the metadata's name is
- * still returned so the tray's tooltip has a path to show.
+ * The build record (dist/outputs.json, which only a Build writes)
+ * names it when that PDF exists. Then the metadata's name, when a PDF
+ * by that name exists. Otherwise, for a dist/ from before the record,
+ * dist/ is searched with the document's own output pattern, newest
+ * first. With nothing built, the metadata's name is still returned so
+ * the tray's tooltip has a path to show.
  */
 function discoverBuilt(doc) {
   const fromMeta = outputPaths(DIST, doc.meta, doc.variant);
   let chosen = fromMeta;
-  if (!fs.existsSync(fromMeta.pdf)) {
+  const recorded = readRecord(DIST)[doc.variant];
+  if (recorded && typeof recorded.pdf === 'string' && path.basename(recorded.pdf) === recorded.pdf
+      && outputPattern(doc.variant).test(recorded.pdf)
+      && fs.existsSync(path.join(DIST, recorded.pdf))) {
+    const stem = recorded.pdf.slice(0, -'.pdf'.length);
+    chosen = { stem, pdf: path.join(DIST, recorded.pdf) };
+  } else if (!fs.existsSync(fromMeta.pdf)) {
     // A current output's stem is the bare document suffix or ends in
     // "<separator><suffix>"; anything else the pattern admits (a
     // retired grayscale spelling, from back when a second PDF was
@@ -281,9 +296,24 @@ for (const doc of Object.values(DOCS)) {
  */
 const clients = new Set();
 
+// How much may wait unsent for one event-stream client before it is
+// dropped. A client that stops reading — a suspended tab, a stalled
+// socket — used to have every event queued in this process for it,
+// page images included (~1.5 MB a render), without limit. Dropped, it
+// reconnects by itself (EventSource does), and the UI refreshes and
+// renders once on reconnecting; a page event it missed it asks for
+// again. A reading client never gets near this: it drains in
+// microseconds on loopback.
+const SSE_BACKLOG_LIMIT = 16 * 1024 * 1024;
+
 function broadcast(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
+    if (res.writableLength > SSE_BACKLOG_LIMIT) {
+      clients.delete(res);
+      res.destroy();
+      continue;
+    }
     try { res.write(payload); } catch { clients.delete(res); }
   }
 }
@@ -359,6 +389,14 @@ const SECURITY_HEADERS = {
  * honored everywhere the Studio runs.
  */
 function uiContentSecurityPolicy(html) {
+  // The browser hashes the script as the HTML parser hands it over, and
+  // the parser has already turned every CRLF and lone CR into LF: that
+  // is HTML's input-stream preprocessing (HTML Standard §13.2.3.5,
+  // "Preprocessing the input stream"), not a rule of CSP. A copy
+  // of the page saved with Windows line endings would otherwise be sent
+  // with the hash of bytes the browser never hashes, and no script on
+  // the page would run at all.
+  html = html.replace(/\r\n?/g, '\n');
   const hashes = [];
   const re = /<script(\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi;
   let m;
@@ -380,6 +418,245 @@ function uiContentSecurityPolicy(html) {
   ].join('; ');
 }
 
+/* ─── Preferences ─────────────────────────────────────────────── */
+
+/*
+ * The UI's own settings (theme, zoom, which panels are open), kept by
+ * this server rather than in the page's localStorage.
+ *
+ * WHY NOT localStorage
+ * --------------------
+ * localStorage belongs to an origin, and the desktop app's origin is
+ * http://127.0.0.1:<port> on a port chosen fresh at every launch. Every
+ * launch was therefore a new origin with empty storage, and every
+ * setting the page "remembered" was forgotten the next time the app
+ * started. The page still mirrors them into localStorage, as a fallback
+ * for a page that cannot reach this route.
+ *
+ * WHERE
+ * -----
+ * dist/.studio-prefs.json by default. dist/ is the one folder the app
+ * already writes (the PDFs, outputs.json, .lock), it is git-ignored in
+ * its entirety, and it is per project, so two checkouts do not fight
+ * over one file. data/ is never written: that folder is the user's, and
+ * the app's promise is that it reads it and nothing more. Deleting
+ * dist/ resets the settings, which is the right outcome for "start
+ * over".
+ *
+ * Only the keys below are stored, each checked against its own rule, so
+ * the file can neither grow without bound nor carry anything the page
+ * would later trust (the theme is written into the page's markup).
+ */
+const PREFS_FILE = path.join(DIST, '.studio-prefs.json');
+// A settings PUT is a handful of keys; nothing near this is legitimate.
+const PREFS_BODY_LIMIT = 16 * 1024;
+
+// --open-dry-run: POST /api/open answers with the command it would run
+// and runs nothing. For the test suites, which start this server as a
+// child process; not a user setting, so a switch rather than an
+// environment variable that every child of a shell would inherit.
+const OPEN_DRY_RUN = require.main === module && process.argv.slice(2).includes('--open-dry-run');
+
+const bool = v => (typeof v === 'boolean' ? v : undefined);
+const PREF_RULES = {
+  theme: v => (['system', 'light', 'dark'].includes(v) ? v : undefined),
+  // Percent of a page's true size (8.5in = 816 CSS px); the UI's range.
+  zoom: v => (Number.isFinite(v) ? Math.round(Math.min(200, Math.max(25, v))) : undefined),
+  fit: v => (['none', 'width', 'page'].includes(v) ? v : undefined),
+  snapshot: bool,
+  tests: bool,
+  highlight: bool,
+  diagnostics: bool,
+};
+
+/** Only the known keys, each valid; anything else is dropped. */
+function sanitizePrefs(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [key, rule] of Object.entries(PREF_RULES)) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+    const value = rule(input[key]);
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function readPrefs(file = PREFS_FILE) {
+  try {
+    return sanitizePrefs(JSON.parse(fs.readFileSync(file, 'utf-8')));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merge `patch` into the stored settings; written whole, then renamed.
+ *
+ * On Windows a rename over a file that another process has open without
+ * FILE_SHARE_DELETE (a virus scanner, a sync client) fails with EPERM,
+ * EACCES or EBUSY for a moment; it is tried again briefly, then the file
+ * is written in place. The temporary file never outlives the call.
+ */
+function writePrefs(patch, file = PREFS_FILE) {
+  const next = { ...readPrefs(file), ...sanitizePrefs(patch) };
+  const text = `${JSON.stringify(next, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, text);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        fs.renameSync(tmp, file);
+        return next;
+      } catch (err) {
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(err.code) || attempt >= 4) break;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
+    fs.writeFileSync(file, text);
+    return next;
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* already renamed */ }
+  }
+}
+
+/**
+ * The page as served: the saved theme on <html>, and every saved
+ * setting in a <meta>, so the first paint is already in the right theme
+ * at the right zoom — no flash of the light theme, no second request
+ * before the page can lay itself out. Neither is script, so the CSP's
+ * script hash is unaffected. The values have passed sanitizePrefs, and
+ * the JSON is attribute-escaped all the same.
+ */
+function pageWithPrefs(html, prefs) {
+  const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let out = html;
+  if (prefs.theme === 'light' || prefs.theme === 'dark') {
+    out = out.replace(/<html\b([^>]*)>/i, `<html$1 data-theme="${prefs.theme}">`);
+  }
+  return out.replace(/<head>/i,
+    `<head>\n<meta name="studio-prefs" content="${attr(JSON.stringify(prefs))}">`);
+}
+
+
+/* ─── Opening a source file at a line ─────────────────────────── */
+
+/**
+ * Is VS Code registered as the handler for vscode:// links? Windows
+ * only, asked of the registry once and remembered: the per-user key
+ * first (a user install writes HKCU), then HKCR (a system install).
+ * `reg` is run directly with its arguments, never through a shell.
+ */
+let vscodeHandler = null;
+function hasVscodeHandler() {
+  if (vscodeHandler) return vscodeHandler;
+  if (process.platform !== 'win32') {
+    vscodeHandler = Promise.resolve(false);
+    return vscodeHandler;
+  }
+  const { execFile } = require('child_process');
+  const reg = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+  const query = key => new Promise((resolve) => {
+    execFile(reg, ['query', key, '/v', 'URL Protocol'], { windowsHide: true, timeout: 5000 },
+      err => resolve(!err));
+  });
+  vscodeHandler = query('HKCU\\Software\\Classes\\vscode')
+    .then(found => found || query('HKCR\\vscode'))
+    .catch(() => false);
+  return vscodeHandler;
+}
+
+/**
+ * The vscode:// link that opens `file` at line:column.
+ *
+ * https://code.visualstudio.com/docs/configure/command-line#_opening-vs-code-with-urls
+ * Every path segment is percent-encoded (a space, '#', '?' or '%' in a
+ * folder name would otherwise end or change the URL); the drive's colon
+ * is left as it is. Forward slashes, as the link format uses.
+ */
+function vscodeUrl(file, line, col) {
+  const parts = String(file).replace(/\\/g, '/').split('/');
+  const encoded = parts.map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg)
+    ? seg : encodeURIComponent(seg))).join('/');
+  return `vscode://file/${encoded.replace(/^\/+/, '')}:${line}:${col}`;
+}
+
+/**
+ * The program and arguments that open `file`, and what they open it in.
+ * Returned rather than run, so a test can check it on any platform.
+ *
+ * Never a shell: no `cmd /c start`, no PowerShell, no `shell: true`, so
+ * nothing in a path is ever read as a command.
+ *
+ * On Windows both the vscode:// link and a plain file go to
+ * explorer.exe (by full path, not looked up on PATH), which hands them
+ * to the running shell to open with their registered program — the
+ * same route /api/reveal takes. Not `rundll32 url.dll,FileProtocolHandler`
+ * (the other common no-shell route, e.g. github.com/pkg/browser): that
+ * runs ShellExecute inside rundll32, so the editor it starts would be a
+ * child of this server, inside the desktop shell's job object
+ * (main.rs, KILL_ON_JOB_CLOSE), and closing the Studio would close an
+ * editor that was not already running. The link's characters are all
+ * percent-encoded or URL-safe (vscodeUrl), so Node passes it as one
+ * argument with nothing to quote.
+ */
+function openCommand(file, { line = 1, col = 1, vscode = false, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    const explorer = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+    // A UNC path (\\server\share\…, \\?\…) has no drive for the link's
+    // file/C:/… form: the file's own program opens it instead.
+    const unc = /^[\\/]{2}/.test(file);
+    if (vscode && !unc) return { editor: 'vscode', cmd: explorer, args: [vscodeUrl(file, line, col)] };
+    // explorer.exe reads its command line with its own parser, which
+    // splits at commas (the `/select,<path>` syntax) whether or not the
+    // argument is quoted: a file named `run.bat,x.yml` would become the
+    // two arguments `…\run.bat` and `x.yml`, and the first one would be
+    // opened, i.e. run. A path with a comma is not handed to it.
+    if (file.includes(',')) return null;
+    return { editor: 'default', cmd: explorer, args: [file] };
+  }
+  if (platform === 'darwin') return { editor: 'default', cmd: 'open', args: [file] };
+  return { editor: 'default', cmd: 'xdg-open', args: [file] };
+}
+
+/** What an "Open" may open: the inputs' own kinds, never a program. */
+const OPENABLE_EXT = /\.(ya?ml|scss)$/i;
+
+/**
+ * A path the page may ask to have opened: an existing *.yml, *.yaml or
+ * *.scss file inside data/ or styles/ — the inputs, which are what an
+ * error can point at — and nothing else. Same containment rule as
+ * /api/reveal (resolveInsideRoot), narrowed to those two folders.
+ * Returns the absolute path to open, or null.
+ *
+ * The kind matters as much as the folder: "open" means "hand it to its
+ * default program", and for a .bat, .exe, .lnk, .url, .desktop or .sh
+ * that program runs it. So the name must be one of the inputs' kinds,
+ * and so must the file it finally is, after every symbolic link and
+ * junction: data/notes.yml -> C:\tools\x.exe is refused. A link to a
+ * .yml elsewhere (a resume kept in a synced folder, say) is allowed —
+ * the app already reads it, and the editor is where it belongs. No
+ * colon past the drive either: data\a.exe:b.yml names an NTFS stream.
+ */
+function resolveOpenable(raw) {
+  const target = resolveInsideRoot(raw);
+  if (!target) return null;
+  const inside = [DATA_DIR, path.join(ROOT, 'styles')].some(
+    dir => target.startsWith(path.resolve(dir) + path.sep));
+  if (!inside) return null;
+  if (!OPENABLE_EXT.test(target) || path.relative(path.resolve(ROOT), target).includes(':')) return null;
+  let real;
+  try {
+    real = fs.realpathSync.native(target);
+    if (!fs.statSync(real).isFile()) return null;
+  } catch {
+    return null;
+  }
+  if (!OPENABLE_EXT.test(real)) return null;
+  return real;
+}
+
 function readBody(req, limitBytes = 8 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -387,8 +664,14 @@ function readBody(req, limitBytes = 8 * 1024 * 1024) {
     req.on('data', (chunk) => {
       size += chunk.length;
       if (size > limitBytes) {
-        reject(new Error(`request body over ${Math.round(limitBytes / 1024)} KB`));
-        req.destroy();
+        // Answered with a 413, not a dropped connection: the rest of the
+        // body is read and thrown away so the reply can be sent.
+        const err = new Error(`request body over ${Math.round(limitBytes / 1024)} KB`);
+        err.status = 413;
+        req.removeAllListeners('data');
+        req.removeAllListeners('end');
+        req.resume();
+        reject(err);
         return;
       }
       chunks.push(chunk);
@@ -516,7 +799,7 @@ function checkRequest(req, port, extraHosts = []) {
       && (pathname === '/' || pathname === '/index.html');
     if (!navigation) return [403, 'requests from other sites are not accepted'];
   }
-  if (req.method === 'POST') {
+  if (req.method === 'POST' || req.method === 'PUT') {
     const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
     if (type !== 'application/json') {
       return [415, 'POST bodies must be sent as application/json'];
@@ -542,6 +825,73 @@ function writeNew(target, content) {
     if (err && err.code === 'EEXIST') return false;
     throw err;
   }
+}
+
+/**
+ * Why a file name from the page cannot be used as-is, or null if it can.
+ *
+ * The data folder is on Windows for its owner, and Windows gives some
+ * names meanings of their own that no extension removes: `CON.yml`,
+ * `nul.backup.yml` and `COM1.yaml` are devices, not files (reading one
+ * can block, writing one goes nowhere), and `x.yml:y.yml` writes an
+ * alternate data stream of `x.yml` that no folder listing shows. Also
+ * refused: control characters and the other characters Windows forbids,
+ * so a name saved on one system is a name on every system, and trailing
+ * dots and spaces, which Windows strips silently.
+ * https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+ */
+function unportableName(name) {
+  if (/[\x00-\x1f\x7f<>:"/\\|?*]/.test(name)) {
+    return `${JSON.stringify(name)} has a character that is not allowed in a file name`;
+  }
+  if (/[. ]$/.test(name)) return `${JSON.stringify(name)} ends in a dot or a space`;
+  // The part before the first dot, as Windows reads it (it ignores
+  // spaces before the dot), in any case. Microsoft's list is CON, PRN,
+  // AUX, NUL, COM1–COM9, COM¹–COM³, LPT1–LPT9 and LPT¹–LPT³ (the page
+  // above). COM0 and LPT0 are not on it; refusing them as well is our
+  // own conservative addition.
+  const stem = name.split('.')[0].replace(/ +$/, '');
+  if (/^(CON|PRN|AUX|NUL|COM[0-9\u00b9\u00b2\u00b3]|LPT[0-9\u00b9\u00b2\u00b3])$/i.test(stem)) {
+    return `${name} is a name Windows reserves for a device — choose another`;
+  }
+  return null;
+}
+
+/**
+ * unportableName, for a file that is to be READ rather than created
+ * (/api/pick, /api/datafile). Only Windows needs it there: CON.yml
+ * "exists" and reading it waits on the console. Elsewhere a file that
+ * is in data/ has, by being there, a name this system allows — and
+ * /api/datafiles lists it — so "aux.yml" or "Resume 9:2026.yml" (how
+ * macOS stores a Finder name with a slash) was listed and then refused.
+ */
+function unreadableName(name, platform = process.platform) {
+  return platform === 'win32' ? unportableName(name) : null;
+}
+
+/**
+ * The raster scale a preview may ask for: a finite number, clamped to
+ * PREVIEW_SCALE_RANGE; anything else is the default. Unchecked, a
+ * string reached the worker as a Python error, a negative scale as a
+ * crop error, and a large one as a bitmap of gigabytes (scale 30 is
+ * about 18,000 × 24,000 pixels a page). The UI asks for 2.
+ */
+const PREVIEW_SCALE_RANGE = [0.25, 4];
+function previewScale(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.min(PREVIEW_SCALE_RANGE[1], Math.max(PREVIEW_SCALE_RANGE[0], value));
+}
+
+/**
+ * The pages a preview may ask for: whole page numbers from 1, each
+ * once, at most 64 of them; null (every page) for anything that is not
+ * a list of those. A bare number used to fail inside the worker and a
+ * list of strings to come back with no pages at all.
+ */
+function previewPages(value) {
+  if (!Array.isArray(value)) return null;
+  const pages = [...new Set(value.filter(n => Number.isInteger(n) && n > 0 && n <= 64))];
+  return pages.length ? pages.sort((a, b) => a - b) : null;
 }
 
 /**
@@ -580,6 +930,26 @@ function resolveInsideRoot(raw) {
  */
 function isDocumentFile(name) {
   return /\.ya?ml$/i.test(name) && !name.startsWith('_');
+}
+
+/**
+ * Is a change to this file in data/ or styles/ a reason to render?
+ *
+ * Only the inputs: *.yml, *.yaml and *.scss. Editors keep files of their
+ * own next to the one being edited, and every one of them used to set
+ * off a render, most while you were still typing and had saved nothing:
+ * vim's .x.yml.swp (rewritten every few seconds) and its 4913 probe,
+ * Emacs's .#x.yml lock (made on the first keystroke) and #x.yml#
+ * autosave, x.yml~ backups, JetBrains' x.yml___jb_tmp___, the
+ * x.yml.tmp of an atomic save, Word's ~$x.yml lock. The extension rules
+ * out most; the prefixes rule out the two that end in .yml anyway.
+ *
+ * An atomic save still renders: its last step, the rename over the real
+ * file, is reported under the real file's name, and the poll sees the
+ * real file's new size and mtime whatever the watcher reported.
+ */
+function isWatchedInput(name) {
+  return /\.(ya?ml|scss)$/i.test(name) && !/^(\.#|~\$)/.test(name);
 }
 
 /**
@@ -755,7 +1125,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   // Which YAML the next render reads. Mirrors RESUME_DATA_SOURCE:
   // null means build.py's own rule (local if present, else default).
   let dataSource = null;
-  let busy = false;
+  // Previews and builds under way, counted rather than flagged: they
+  // overlap (one waits on the engine's queue while another runs), and a
+  // flag let the first to finish report the Studio idle while the other
+  // was still running.
+  let busy = 0;
 
   // A file the user has picked for a document, read in place.
   //
@@ -846,11 +1220,55 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     };
   }
 
+  /*
+   * Who is looking, for "Releasing Chromium while hidden" in engine.js.
+   *
+   * The engine has one switch, and it used to be thrown by whichever
+   * report came last. Any page on the server reports — including a
+   * Studio tab that another site opened with a link (that navigation is
+   * allowed; see checkRequest) and a second window of `npm run ui` — so
+   * such a tab going to the background closed Chromium under the
+   * visible desktop window, and coming forward undid the shell's
+   * "minimized".
+   *
+   * Now each page reports for itself, under the id its event stream was
+   * given (`hello`), and forgets it when that stream closes. Hidden
+   * means: the shell says its window is minimized — it is the only one
+   * that can, since WebView2 never tells its page — or every page is
+   * hidden, or every page that was ever open has gone (a browser tab
+   * closed). A report without an id is the shell's (main.rs,
+   * post_visibility), unchanged.
+   */
+  const viewers = new Map();   // client id -> { hidden: true | false | null }
+  let viewersSeen = false;
+  let shellHidden = false;
+  let pagesHidden = false;
+  function windowHidden() {
+    if (viewersSeen) {
+      // A page whose stream has just opened has not said yet (null), and
+      // has no say until it does: counted as shown, a hidden tab's
+      // EventSource reconnecting relaunched a released Chromium, which
+      // its report a moment later closed again 5 minutes on. With only
+      // such pages, the last verdict stands.
+      const known = [...viewers.values()].filter(v => v.hidden !== null);
+      if (!(viewers.size > 0 && known.length === 0)) pagesHidden = known.every(v => v.hidden);
+    }
+    return shellHidden || (viewersSeen && pagesHidden);
+  }
+  function applyVisibility() {
+    // Read when the engine is there, not now: reports can arrive while
+    // it is still starting, and the last one must be what it gets.
+    engineReady.then(e => e.setWindowHidden(windowHidden())).catch(() => {});
+    return windowHidden();
+  }
+
+  const ENGINELESS_ROUTES = new Set(['GET /api/prefs', 'PUT /api/prefs', 'GET /api/open', 'POST /api/open']);
+
   const routes = {
     'GET /api/status': async () => ({
       ...engine.status(),
       dataSource,
-      busy,
+      busy: busy > 0,
       // Every .yml in data/, so the inspector can offer them directly
       // rather than making you open a dialog to find out what exists.
       dataFiles: listDataFiles(),
@@ -919,18 +1337,32 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       if (path.dirname(target) !== path.resolve(DATA_DIR) || !/\.ya?ml$/i.test(target)) {
         throw new Error('that is not a data file');
       }
+      // CON.yml "exists" on Windows, and reading it waits on the console.
+      const unportable = unreadableName(path.basename(target));
+      if (unportable) throw new Error(unportable);
       if (!fs.existsSync(target)) throw new Error(`no such file: ${name}`);
       return { name, content: fs.readFileSync(target, 'utf-8') };
     },
 
     'POST /api/visibility': async (body) => {
-      engine.setWindowHidden(body.hidden === true);
-      return { hidden: body.hidden === true };
+      const hidden = body.hidden === true;
+      if (typeof body.client === 'string') {
+        // A page. An id this server does not know (its stream dropped
+        // since) is ignored: the page's new stream says hello, and the
+        // page reports again then.
+        const viewer = viewers.get(body.client);
+        if (viewer) viewer.hidden = hidden;
+      } else {
+        shellHidden = hidden;
+      }
+      return { hidden: applyVisibility() };
     },
 
     'POST /api/preview': async (body) => {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const doc = DOCS[id];
+      const scale = previewScale(body.scale);
+      const pages = previewPages(body.pages);
       // from:'built' asks for the file in dist/ rather than a fresh
       // render — what the app wants immediately after a Build, and the
       // only thing it can show for a document with no live pipeline.
@@ -939,9 +1371,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // reads what a running build is still writing.
       if (!doc.live || body.from === 'built') {
         return await engine.exclusive(
-          () => renderFromBuilt(id, { scale: body.scale, pages: body.pages }));
+          () => renderFromBuilt(id, { scale, pages }));
       }
-      busy = true;
+      busy += 1;
       broadcast('render', { state: 'start', doc: id });
       let ended = false;
       try {
@@ -976,7 +1408,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         const sent = new Set();
 
         const result = await retryIfHalfWritten(() => engine.renderPreview({
-          doc: id, scale: body.scale, pages: body.pages, env: envForRender(id), known,
+          doc: id, scale, pages, env: envForRender(id), known,
           retry: body.retry === true,
           order: streaming ? order : undefined,
           onPage: streaming ? (im) => {
@@ -997,7 +1429,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         });
         return { mode: 'live', ...result, images, renderId, streamed: true };
       } finally {
-        busy = false;
+        busy -= 1;
         // Every window that saw 'start' is showing "Rendering"; a failed
         // render must end that too, not only a successful one.
         if (!ended) broadcast('render', { state: 'failed', doc: id });
@@ -1008,7 +1440,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const doc = DOCS[id];
 
-      busy = true;
+      busy += 1;
       broadcast('build', { state: 'start', doc: id });
       try {
         // The snapshot check is off unless the document's checkbox asks
@@ -1043,7 +1475,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
               // be reported as failed because the pane could not be
               // refreshed.
               try {
-                return await renderFromBuilt(id, { scale: body.scale });
+                return await renderFromBuilt(id, { scale: previewScale(body.scale) });
               } catch (err) {
                 console.log(`  (built, but could not rasterize it for the preview: ${err.message})`);
                 return null;
@@ -1076,7 +1508,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         err.failures = err.failures || [];
         throw err;
       } finally {
-        busy = false;
+        busy -= 1;
       }
     },
 
@@ -1110,6 +1542,8 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       if (path.dirname(target) !== path.resolve(DATA_DIR) || !/\.ya?ml$/i.test(target)) {
         throw new Error('that is not a data file');
       }
+      const unportable = unreadableName(path.basename(target));
+      if (unportable) throw new Error(unportable);
       if (!isDocumentFile(path.basename(target))) {
         throw new Error(
           `${path.basename(target)} is a shared profile, not a document — ` +
@@ -1177,6 +1611,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
       const base = path.basename(body.filename || 'dropped.yml');
       if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      // Before anything is written: see unportableName.
+      const unportable = unportableName(base);
+      if (unportable) throw new Error(unportable);
       // The same rule /api/pick applies: an underscore name is a support
       // file (_profile.yml), merged into every build, never a document.
       if (!isDocumentFile(base)) {
@@ -1219,6 +1656,8 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       const id = DOCS[body.doc] ? body.doc : 'resume';
       const base = path.basename(body.name || '');
       if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      const unportable = unportableName(base);
+      if (unportable) throw new Error(unportable);
       if (!isDocumentFile(base)) {
         throw new Error(`${base} starts with an underscore, which marks a shared `
           + `profile rather than a document — choose another name`);
@@ -1328,6 +1767,55 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       return { revealed: path.relative(root, target).replace(/\\/g, '/') || '.' };
     },
 
+    /**
+     * Open an input file in the user's editor, at a line and column —
+     * what "Open in editor" on a render error does. The path must be an
+     * existing file in data/ or styles/ (resolveOpenable); line and
+     * column are whole numbers, 1 when absent. VS Code, through its
+     * vscode:// link, when Windows says it is installed; otherwise the
+     * file's default program, which cannot be told a line.
+     *
+     * With --open-dry-run (a switch for the tests, not for users) it
+     * reports the command instead of running it, so the tests can check
+     * exactly what would be run.
+     */
+    'GET /api/open': async () => ({
+      editor: (await hasVscodeHandler()) ? 'vscode' : 'default',
+    }),
+
+    'POST /api/open': async (body) => {
+      const raw = String(body.path || '').trim();
+      if (!raw) throw new Error('no path given');
+      const target = resolveOpenable(raw);
+      if (!target) throw new Error('only an existing .yml, .yaml or .scss file in data/ or styles/ can be opened');
+      const whole = (v) => (Number.isInteger(v) && v >= 1 && v <= 1e7 ? v : 1);
+      const command = openCommand(target, {
+        line: whole(body.line), col: whole(body.col), vscode: await hasVscodeHandler(),
+      });
+      const opened = path.relative(path.resolve(ROOT), resolveInsideRoot(raw)).replace(/\\/g, '/');
+      if (!command) throw new Error(`${opened}: a path with a comma cannot be opened from here; open it from your editor`);
+      if (OPEN_DRY_RUN) {
+        return { opened, editor: command.editor, command: [command.cmd, ...command.args] };
+      }
+      const child = spawn(command.cmd, command.args,
+        { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', (err) => {
+        console.log(`  (could not open ${opened}: ${err.message})`);
+      });
+      child.unref();
+      return { opened, editor: command.editor };
+    },
+
+    'GET /api/prefs': async () => ({ prefs: readPrefs(), file: path.relative(ROOT, PREFS_FILE).replace(/\\/g, '/') }),
+
+    'PUT /api/prefs': async (body) => {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new Error('send the settings as a JSON object');
+      }
+      const ignored = Object.keys(body).filter(k => !(k in sanitizePrefs(body)));
+      return { prefs: writePrefs(body), ignored };
+    },
+
     'POST /api/shutdown': async () => {
       setTimeout(() => { shutdown('request'); }, 50);
       return { bye: true };
@@ -1378,7 +1866,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         continue;
       }
       for (const name of names) {
-        if (!/\.(ya?ml|scss)$/i.test(name)) continue;
+        if (!isWatchedInput(name)) continue;
         const full = path.join(dir, name);
         try {
           const st = fs.statSync(full);
@@ -1408,10 +1896,11 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       if (!fs.existsSync(dir)) continue;
       try {
         const w = fs.watch(dir, { persistent: false }, (_event, filename) => {
-          // No extension filter. An atomic save can surface under the
-          // temp file's name, and these directories hold nothing but
-          // inputs anyway — a spurious render costs half a second.
-          noteChange(filename ? path.join(dir, filename) : null);
+          // Only the inputs; see isWatchedInput. An atomic save's temp
+          // file is left out, and its rename over the input is not. No
+          // name at all (some platforms) is still a change.
+          if (filename && !isWatchedInput(path.basename(String(filename)))) return;
+          noteChange(filename ? path.join(dir, String(filename)) : null);
         });
         watchers.push(w);
       } catch (err) {
@@ -1465,18 +1954,34 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         connection: 'keep-alive',
       });
       res.write(': connected\n\n');
+      // This page's id for its visibility reports; see `viewers`.
+      const client = crypto.randomUUID();
+      res.write(`event: hello\ndata: ${JSON.stringify({ client })}\n\n`);
       clients.add(res);
-      req.on('close', () => clients.delete(res));
+      viewers.set(client, { hidden: null });
+      viewersSeen = true;
+      applyVisibility();
+      req.on('close', () => {
+        clients.delete(res);
+        viewers.delete(client);
+        applyVisibility();
+      });
       return;
     }
 
-    if (url.pathname === '/' || url.pathname === '/index.html') {
+    // GET, and HEAD for a client that asks first (Node sends HEAD the
+    // headers alone). Any other method is not a page load, and falls
+    // through to the route table's 404 rather than being handed the UI.
+    const reading = req.method === 'GET' || req.method === 'HEAD';
+
+    if (reading && (url.pathname === '/' || url.pathname === '/index.html')) {
       const file = path.join(UI_DIR, 'index.html');
       if (!fs.existsSync(file)) {
         return json(res, 500, { error: `UI missing at ${path.relative(ROOT, file)}` });
       }
-      const html = fs.readFileSync(file);
-      const csp = uiContentSecurityPolicy(html.toString('utf8'));
+      const source = fs.readFileSync(file, 'utf8');
+      const csp = uiContentSecurityPolicy(source);
+      const html = pageWithPrefs(source, readPrefs());
       // The header says whether the engine was up when the page was
       // served. Nothing in the app reads it; it is how a test can show
       // that the page does not wait for the engine without timing two
@@ -1493,7 +1998,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     // The UI's own typefaces (fonts/variable/*.woff2), so the page needs
     // nothing from the network. The pattern admits a file name only: no
     // separators beyond the one folder, so no way out of fonts/.
-    if (req.method === 'GET' && /^\/fonts\/variable\/[A-Za-z0-9_-]+\.woff2$/.test(url.pathname)) {
+    // A device name (CON.woff2) is not a font either; see unportableName.
+    if (reading && /^\/fonts\/variable\/[A-Za-z0-9_-]+\.woff2$/.test(url.pathname)
+        && !unportableName(path.basename(url.pathname))) {
       const file = path.join(ROOT, url.pathname);
       let data;
       try {
@@ -1516,12 +2023,15 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // engine may still be starting. Waiting here rather than before
       // the listener is what lets the UI load meanwhile; a failure to
       // start is reported as this request's error.
-      if (!engine) await engineReady;
-      const body = req.method === 'POST' ? await readBody(req) : {};
+      // The settings and the editor need no engine: the page asks for
+      // them while it may still be starting.
+      if (!engine && !ENGINELESS_ROUTES.has(key)) await engineReady;
+      const body = req.method === 'POST' || req.method === 'PUT'
+        ? await readBody(req, key === 'PUT /api/prefs' ? PREFS_BODY_LIMIT : undefined) : {};
       const result = await handler(body, url);
       json(res, 200, result);
     } catch (err) {
-      json(res, 500, {
+      json(res, err.status === 413 ? 413 : 500, {
         error: err.message,
         kind: err.kind || 'failed',
         failures: err.failures || undefined,
@@ -1655,4 +2165,7 @@ if (require.main === module) {
 module.exports = { start, DOCS, READY_PREFIX, detectDoc, isDocumentFile,
                    listDataFiles, resolveInsideRoot, uiContentSecurityPolicy, SECURITY_HEADERS, dataFileInfo, renderEnv,
                    checkRequest, writeNew, looksHalfWritten, retryIfHalfWritten,
+                   unportableName, unreadableName, previewScale, previewPages, isWatchedInput,
+                   sanitizePrefs, readPrefs, writePrefs, pageWithPrefs, PREFS_FILE,
+                   openCommand, vscodeUrl, resolveOpenable,
                    WATCH_DEBOUNCE_MS, HALF_WRITTEN_WINDOW_MS, HALF_WRITTEN_RETRY_MS };

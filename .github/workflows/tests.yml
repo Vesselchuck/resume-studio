@@ -7,6 +7,14 @@
 # text slightly differently. Tests that need your private data files
 # (data/resume.yml, data/_profile.yml …) skip themselves here, since
 # those files are never on GitHub.
+#
+# A second job runs the same suite on Windows, the platform the app is
+# built for, and type-checks the Tauri shell there (src-tauri/), which
+# nothing else compiles before a release.
+#
+# Actions are pinned to a commit, not a tag: a tag can be moved to other
+# code after the fact, a commit cannot. The comment names the release;
+# Dependabot (.github/dependabot.yml) updates both together.
 
 name: Tests
 
@@ -27,17 +35,21 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # persist-credentials: false — nothing after this step pushes, so the
+      # job's token is not left in .git/config for later steps to read.
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -58,7 +70,7 @@ jobs:
 
       - name: Restore Chromium from the cache
         id: chromium-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
@@ -86,8 +98,90 @@ jobs:
 
       - name: Keep the built PDFs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pdfs
           path: dist/*.pdf
           if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Node packages
+        run: npm ci
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Windows needs no system libraries for Chromium, only the browser.
+      - name: Restore Chromium from the cache
+        id: chromium-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Chromium for Playwright
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
+
+      - name: Build the resume
+        run: node resume.js
+        env:
+          RESUME_TESTS: "off"
+
+      - name: Build the cover letter
+        run: node letter.js
+
+      - name: Run the tests
+        run: npm test
+
+      # The runner image ships a stable Rust toolchain. Only a check, not
+      # a build: it proves the shell compiles against Cargo.lock without
+      # linking or bundling an installer.
+      # The toolchain is in the key as well as Cargo.lock: when the image
+      # moves to a new Rust, everything in target/ is rebuilt, and a key
+      # that still matched would restore the stale copy and never save the
+      # new one, so every run after that would build from nothing.
+      - name: Read the Rust version
+        id: rust
+        run: echo "version=$(rustc -V | tr -c '[:alnum:].\n' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Cargo cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: cargo-check-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Type-check the Tauri shell
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked

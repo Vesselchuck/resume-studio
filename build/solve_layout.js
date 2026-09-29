@@ -110,8 +110,10 @@ class SolverError extends Error {
 // A bridged job must keep at least this many bullets on each page it
 // spans. With the value at 1: a job whose bullets don't all fit can
 // leave any non-empty suffix for the next page, but never a header
-// alone with zero bullets, and never a single trailing bullet stranded
-// from its header. Raising to 2 would refuse single-bullet tails.
+// alone with zero bullets. A single bullet on either side is allowed,
+// so a two-bullet job may split 1/1, and a lone last bullet may sit at
+// the top of the next page under no header. Raising to 2 would refuse
+// both the single-bullet head and the single-bullet tail.
 const MIN_JOB_BULLETS_ON_PAGE = 1;
 
 // A bridged sidebar 'list' block must keep at least this many items on
@@ -332,13 +334,21 @@ function solveSidebar(blocks, geometry, maxPages) {
 
     if (isSplittable && items_remaining > 0) {
       const availForBlock = available - overhead;
-      let bestK = maxFitting(
+      const fitting = maxFitting(
         sidebarBlockHeight,
         block, items_offset, items_remaining, isContinuation, availForBlock,
       );
-      // Never end a page on a `- group:` sub-heading: its items would
-      // start the next page with their label stranded above them.
+      // Don't end a page on a `- group:` sub-heading: its items would
+      // start the next page with their label stranded above them. Only
+      // when the shorter split is still a legal one, though: a stranded
+      // label is a blemish, but backing off below the minimums turns a
+      // list that splits into a push, and on a fresh page into a build
+      // that fails outright.
+      let bestK = fitting;
       while (bestK > 0 && block.items[items_offset + bestK - 1].isGroup) bestK--;
+      if (bestK < minOnOrigin || items_remaining - bestK < MIN_SIDEBAR_ITEMS_ON_RECEIVER) {
+        bestK = fitting;
+      }
       const tailRemaining = items_remaining - bestK;
       if (bestK >= minOnOrigin && tailRemaining >= MIN_SIDEBAR_ITEMS_ON_RECEIVER) {
         currentPage.entries.push({

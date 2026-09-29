@@ -1,7 +1,7 @@
 # ═════════════════════════════════════════════════════════════════
 # YOUR RESUME — this is where you edit everything.
 #
-# Change anything in this file, then run `node render.js` and a new
+# Change anything in this file, then run `node resume.js` and a new
 # PDF appears in the `dist/` folder. You never touch HTML or design
 # code; this file is the only thing you maintain.
 #

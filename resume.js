@@ -79,7 +79,8 @@ const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { detectPython } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
-const { pruneStale } = require('./build/_output_name');
+const { pruneStale, recordBuilt, seedRecord, readRecord } = require('./build/_output_name');
+const distLock = require('./build/_dist_lock');
 const {
   ENV_SKIP_SNAPSHOT,
   ENV_RESUME_SNAPSHOT,
@@ -376,7 +377,7 @@ function runSnapshot() {
   // A file named through RESUME_DATA_FILE that is neither the template
   // nor data/resume.yml has no fixture to compare against, so there is
   // nothing to check — say so rather than report it as a difference.
-  if (readDataSource() === 'explicit') {
+  if (builtDataSource() === 'explicit') {
     c.banner('Snapshot (skipped)');
     c.detail('Fixtures exist only for data/resume_default.yml and data/resume.yml;',
              { stream: process.stdout });
@@ -414,6 +415,18 @@ function runSnapshot() {
 }
 
 
+/**
+ * data_source of the PDF this build wrote, from the build record.
+ * Not pdf_meta.json: the snapshot runs after dist/'s lock is released,
+ * and by then a Studio preview may have rewritten that file for
+ * another data source.
+ */
+function builtDataSource() {
+  const entry = readRecord(path.join(ROOT, 'dist')).resume;
+  return entry && typeof entry.data_source === 'string' ? entry.data_source : null;
+}
+
+
 /** data_source from dist/pdf_meta.json, or null if it can't be read. */
 function readDataSource() {
   try {
@@ -438,7 +451,10 @@ function readDataSource() {
  * plausible-looking resumes under names that are no longer current, in
  * the exact directory you open when you need to attach one.
  *
- * Runs after printPdfs, so `keep` is what actually landed on disk.
+ * Runs after printPdfs and recordBuilt, so `keep` is what actually
+ * landed on disk and the build record lists it. Only names that record
+ * says a build wrote are removed (and the retired ones no build writes
+ * now), never a PDF of yours that merely looks like one.
  * _output_name.pruneStale does the deleting and is scoped there; this
  * only supplies the reporting.
  */
@@ -458,8 +474,19 @@ function pruneStaleOutputs(variant, keep) {
 (async () => {
   let browser;
   let exitCode = 0;
+  let releaseDist = () => {};
   try {
     runTests();
+
+    // From here to the prune this build owns dist/: a Studio preview
+    // running at the same time rewrites the same metadata, placement
+    // and HTML. See build/_dist_lock.js.
+    releaseDist = await distLock.acquire(path.join(ROOT, 'dist'), {
+      owner: 'node resume.js',
+      blocking: true,     // execFileSync steps: heartbeat from a thread
+      onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
+    });
+    seedRecord(pipeline.paths.dist, 'resume', pipeline.paths.pdfMeta);
 
     c.banner('Build (measurement)');
     pipeline.compileSass();
@@ -490,8 +517,13 @@ function pruneStaleOutputs(variant, keep) {
     await pipeline.verifyInvariants(page, placement.pages.length);
 
     c.banner('PDF');
-    await pipeline.printPdfs(page, { output: pipeline.paths.pdf });
-    pruneStaleOutputs('resume', [pipeline.paths.pdf]);
+    // Read once. `paths.pdf` re-reads pdf_meta.json on every access,
+    // and the print, the record and the prune must agree on one name.
+    const output = pipeline.paths.pdf;
+    await pipeline.printPdfs(page, { output });
+    recordBuilt(pipeline.paths.dist, 'resume', output, { dataSource: readDataSource() });
+    pruneStaleOutputs('resume', [output]);
+    releaseDist();
 
     runSnapshot();
   } catch (err) {
@@ -506,6 +538,7 @@ function pruneStaleOutputs(variant, keep) {
     }
     exitCode = 1;
   } finally {
+    releaseDist();
     if (browser) {
       try {
         await browser.close();

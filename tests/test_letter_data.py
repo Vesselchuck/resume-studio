@@ -229,6 +229,21 @@ class TestValidateData(unittest.TestCase):
             clb.validate_data(d)
         self.assertIn("recipient", str(ctx.exception))
 
+    def test_an_empty_recipient_list_is_no_recipient(self):
+        # Like leaving the key out, and like `items: []` elsewhere.
+        # letter.schema.json must say the same, or the editor flags a
+        # file the build accepts.
+        d = good_data()
+        d["letter"]["recipient"] = []
+        clb.validate_data(d)          # should not raise
+        self.assertEqual(clb.resolve_letter(d)["recipient"], [])
+        import json
+        schema = json.loads((ROOT / "schemas" / "letter.schema.json")
+                            .read_text(encoding="utf-8"))
+        forms = schema["properties"]["letter"]["properties"]["recipient"]["oneOf"]
+        as_list = next(f for f in forms if f["type"] == "array")
+        self.assertEqual(as_list.get("minItems", 0), 0)
+
     def test_recipient_line_blank(self):
         d = good_data()
         d["letter"]["recipient"] = ["Acme", ""]
@@ -307,6 +322,13 @@ class TestValidateData(unittest.TestCase):
         with self.assertRaises(SchemaError) as ctx:
             clb.validate_data(d)
         self.assertIn("no scheme", str(ctx.exception))
+
+    def test_a_contact_href_outside_the_allowlist_is_an_error(self):
+        d = good_data()
+        d["contact"]["rows"][0]["href"] = "ms-msdt:/id"
+        with self.assertRaises(SchemaError) as ctx:
+            clb.validate_data(d)
+        self.assertIn("not allowed", str(ctx.exception))
 
 
 class TestResolveLetter(unittest.TestCase):

@@ -70,6 +70,23 @@ const PYTHON = detectPython();
 const userArg = process.argv[2];
 
 /**
+ * Limits on a captured suite.
+ *
+ * spawnSync's default maxBuffer is 1 MB: a suite printing more (a
+ * failure dumping a long diff, a verbose -v run as the suite grows)
+ * was killed with ENOBUFS and reported as "could not run", its real
+ * output gone. The whole Python run prints ~60 KB today, so 256 MB is
+ * a ceiling that only a runaway loop reaches.
+ *
+ * There was no timeout, so a suite that hung (a Chromium that never
+ * answers, a worker waiting on a pipe) hung `npm test`, and with it
+ * every `node resume.js`, whose build waits behind the suites. Fifteen
+ * minutes is ~15× the slowest suite in a Linux sandbox.
+ */
+const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+const SUITE_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
  * Parse a boolean-ish env var: 1/true/on/yes (trimmed, any case) is on,
  * anything else — including "0", "false", "off" and the empty string —
  * is off. `Boolean(process.env.X)` is the trap this avoids: every
@@ -101,6 +118,9 @@ function pythonEnv() {
  * "failures (exit 2)" and no reason.
  */
 function describeNoStatus(r, cmd) {
+  if (r.error && r.error.code === 'ETIMEDOUT') {
+    return `${cmd} did not finish within ${SUITE_TIMEOUT_MS / 60000} minutes and was stopped`;
+  }
   if (r.error) return `could not run ${cmd}: ${r.error.message}`;
   if (r.signal) return `${cmd} was killed by ${r.signal}`;
   return `${cmd} exited without a status`;
@@ -151,7 +171,10 @@ function runNodeInherit(jsFile) {
  */
 function runPythonCaptured(args, label) {
   const start = Date.now();
-  const r = spawnSync(PYTHON, args, { cwd: ROOT, encoding: 'utf-8', env: pythonEnv() });
+  const r = spawnSync(PYTHON, args, {
+    cwd: ROOT, encoding: 'utf-8', env: pythonEnv(),
+    maxBuffer: MAX_OUTPUT_BYTES, timeout: SUITE_TIMEOUT_MS,
+  });
   const elapsed = ((Date.now() - start) / 1000).toFixed(3);
   const code = typeof r.status === 'number' ? r.status : 2;
 
@@ -239,7 +262,10 @@ function runPythonCaptured(args, label) {
  */
 function runNodeCaptured(jsFile, label) {
   const start = Date.now();
-  const r = spawnSync(process.execPath, [jsFile], { cwd: ROOT, encoding: 'utf-8' });
+  const r = spawnSync(process.execPath, [jsFile], {
+    cwd: ROOT, encoding: 'utf-8',
+    maxBuffer: MAX_OUTPUT_BYTES, timeout: SUITE_TIMEOUT_MS,
+  });
   const elapsed = ((Date.now() - start) / 1000).toFixed(3);
   const code = typeof r.status === 'number' ? r.status : 2;
 
@@ -254,27 +280,46 @@ function runNodeCaptured(jsFile, label) {
     return { exitCode: code, skipped: false };
   }
 
+  // Parse "N passed, M failed" out of stdout. The LAST such line: it is
+  // what report() prints at the very end.
+  const summaries = [...stdout.matchAll(/^(\d+)\s+passed,\s+(\d+)\s+failed\s*$/gm)];
+  const m = summaries.length ? summaries[summaries.length - 1] : null;
+
+  // A suite that says it failed has failed, whatever its exit code.
+  // report() sets process.exitCode, and anything that sets it again
+  // afterwards (a cleanup path's `process.exitCode = 0`, an explicit
+  // process.exit(0)) used to turn "3 passed, 2 failed" into a ✅.
+  if (m && Number(m[2]) > 0) {
+    c.err_pair(label, `${m[2]} failed (the suite exited 0 anyway)`);
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+    return { exitCode: 1, skipped: false };
+  }
+
   // Detect SKIP marker. Test files print "SKIP <name>: <reason>" on
   // stdout when they bail out (e.g. missing Playwright browser). The
   // suite exits 0, so we have to inspect the output to distinguish
   // a skip from a true pass. The reason can be long (e.g. a full
   // Playwright error), so we put it on an indented detail line.
+  //
+  // Some suites skip only a part and still run the rest
+  // (test_worker_restarts.js's end-to-end half): that is still a skip,
+  // so STRICT_TESTS still fails it, but the count of what did pass is
+  // shown rather than dropped.
   const skipMatch = stdout.match(/^SKIP\s+\S+:\s*(.+)$/m);
   if (skipMatch) {
-    c.warn_pair(label, 'skipped');
+    c.warn_pair(label, m && Number(m[1]) > 0
+      ? `${m[1]} passed, part skipped (in ${elapsed}s)` : 'skipped');
     c.detail(skipMatch[1].trim());
     return { exitCode: 0, skipped: true };
   }
 
-  // Parse "N passed, M failed" out of stdout.
-  //
   // A suite that exits 0 having passed nothing is not a pass: it bailed
   // out before its assertions (an early return, a swallowed error) or
   // never called report(). It gets a warning and counts as a skip —
   // STRICT_TESTS then fails it — rather than a green tick that would
   // hide it. test_engine_equivalence.js once did exactly this: every
   // engine startup failure printed "0 passed, 0 failed" and showed ✅.
-  const m = stdout.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
   if (!m || Number(m[1]) === 0) {
     c.warn_pair(label, m ? `ran 0 tests (in ${elapsed}s)`
                          : `ran 0 tests (no "N passed" summary, in ${elapsed}s)`);

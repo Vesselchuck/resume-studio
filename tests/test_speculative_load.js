@@ -211,8 +211,14 @@ async function runSequence(engine, dataFile, dist) {
       assertEq(a.html, b.html, `${label}: dist/index.html is the same file`);
       assertEq(a.placement, b.placement, `${label}: dist/placement.json is the same file`);
       assertEq(a.pages, b.pages, `${label}: the same page count`);
-      assertEq(a.invariants, { ok: true }, `${label}: the layout invariants passed`);
-      assertEq(b.invariants, { ok: true }, `${label}: ...with speculation off too`);
+      assertEq(a.invariants && a.invariants.ok, true, `${label}: the layout invariants passed`);
+      assertEq(b.invariants && b.invariants.ok, true, `${label}: ...with speculation off too`);
+      // Each page's fill (the Studio's last-page chip) is measured on the
+      // page that is printed, and agrees whichever way it was loaded.
+      assertTrue(Array.isArray(a.invariants.fill) && a.invariants.fill.length === a.pages
+        && a.invariants.fill.every(f => f > 0 && f <= 1),
+        `${label}: every page's fill is measured (${JSON.stringify(a.invariants.fill)})`);
+      assertEq(a.invariants.fill, b.invariants.fill, `${label}: ...and is the same with speculation off`);
       assertEq(a.cached, b.cached, `${label}: the early cutoff behaved the same way`);
     }
 
