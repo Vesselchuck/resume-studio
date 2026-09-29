@@ -28,16 +28,24 @@
  * filenames, and yesterday's PDFs would otherwise sit in dist/ next to
  * today's under a different name. pruneStale() clears them: see its
  * docstring for exactly how narrowly it is scoped, since it deletes.
+ *
+ * What it may delete is what the build RECORD says this project wrote
+ * (dist/outputs.json, see recordBuilt). The record is also the one
+ * statement of which PDF the last Build produced from which data: the
+ * metadata JSON cannot be, because every live preview rewrites it
+ * while the PDF stays what the last Build made.
  */
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const {
   DOC_SUFFIX,
   SEPARATOR,
   RETIRED_GRAYSCALE_SUFFIXES,
   LEGACY,
+  RECORD,
 } = JSON.parse(
   fs.readFileSync(path.join(__dirname, '_constants.json'), 'utf-8')
 ).output_name;
@@ -111,8 +119,14 @@ function outputPaths(dist, metaFile, variant) {
  * uses, so it matches the project's own output namespace and nothing
  * else: an optional name part, the document suffix, an optional
  * retired grayscale suffix, `.pdf`. `Resume.pdf` and
- * `Gaius_Caesar_Resume_Grayscale.pdf` match; `letter_meta.json`,
- * `styles.css` and a PDF you dropped in dist/ yourself do not.
+ * `Gaius_Caesar_Resume_Grayscale.pdf` match; `letter_meta.json` and
+ * `styles.css` do not.
+ *
+ * A PDF you saved in dist/ yourself can match it too —
+ * `Acme_tailored_Resume.pdf` is a perfectly good name for a tailored
+ * copy — so the pattern alone is never a licence to delete. pruneStale
+ * also requires the name to be in the build record, unless it is one
+ * of the retired or LEGACY spellings no build has written since.
  *
  * This pattern is WIDER than what a build writes, deliberately, and
  * RETIRED_GRAYSCALE_SUFFIXES is the whole of the difference. This
@@ -132,6 +146,111 @@ function outputPattern(variant) {
   return new RegExp(
     `^(?:.+${escapeRe(SEPARATOR)})?${escapeRe(DOC_SUFFIX[variant])}`
     + `(?:${retired})?\\.pdf$`);
+}
+
+
+/** The retired grayscale spellings alone: a name only an old build wrote. */
+function retiredPattern(variant) {
+  assertVariant(variant);
+  const retired = RETIRED_GRAYSCALE_SUFFIXES.map(escapeRe).join('|');
+  return new RegExp(
+    `^(?:.+${escapeRe(SEPARATOR)})?${escapeRe(DOC_SUFFIX[variant])}`
+    + `(?:${retired})\\.pdf$`);
+}
+
+
+/* ─── The build record ─────────────────────────────────────────
+ *
+ * dist/outputs.json, per document:
+ *
+ *   pdf          the PDF the last Build wrote (a name in dist/)
+ *   data_source  what that Build read: 'default', 'mine', 'explicit'
+ *   sha256       of that PDF's bytes as the Build left them
+ *   written      every name a Build has written that may still be in
+ *                dist/ — what pruneStale is allowed to delete
+ *
+ * Only resume.js and letter.js write it, under the dist/ lock
+ * (build/_dist_lock.js), right after the PDF lands. A preview never
+ * does. That is what makes it the record of the PDF, where
+ * pdf_meta.json is the record of the last RENDER: after a Build of your
+ * own data and a preview of the template, pdf_meta.json says
+ * 'default' while the PDF in dist/ is still yours. snapshot_pdf.py
+ * trusted pdf_meta.json, and --update then copied your PDF into the
+ * committed template fixture. */
+
+function recordPath(dist) {
+  return path.join(dist, RECORD);
+}
+
+/** The record, or {} when there is none or it cannot be read. */
+function readRecord(dist, fsImpl = fs) {
+  try {
+    const r = JSON.parse(fsImpl.readFileSync(recordPath(dist), 'utf-8'));
+    return r && typeof r === 'object' && !Array.isArray(r) ? r : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The names a record entry says were written: plain file names that
+ * match this document's output pattern. Anything else in the file
+ * (a path, another document's name, a hand edit) is ignored — the
+ * record widens nothing beyond the project's own namespace.
+ */
+function recordedNames(record, variant) {
+  const entry = record[variant];
+  const pattern = outputPattern(variant);
+  if (!entry || !Array.isArray(entry.written)) return new Set();
+  return new Set(entry.written.filter(n => typeof n === 'string'
+    && path.basename(n) === n && pattern.test(n)));
+}
+
+/** Replace the record in one rename, so no reader sees half of it. */
+function writeRecord(dist, record, fsImpl = fs) {
+  const file = recordPath(dist);
+  const tmp = `${file}.${process.pid}.tmp`;
+  fsImpl.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf-8');
+  fsImpl.renameSync(tmp, file);
+}
+
+/**
+ * Record that this build wrote `pdf`, from `dataSource`. Called right
+ * after the PDF is written and before anything is pruned, so a build
+ * that stops later still leaves its PDF on the list.
+ */
+function recordBuilt(dist, variant, pdf, { dataSource = null } = {}) {
+  assertVariant(variant);
+  const record = readRecord(dist);
+  const name = path.basename(pdf);
+  const written = recordedNames(record, variant);
+  written.add(name);
+  record[variant] = {
+    pdf: name,
+    data_source: typeof dataSource === 'string' ? dataSource : null,
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(pdf)).digest('hex'),
+    written: [...written].sort(),
+  };
+  writeRecord(dist, record);
+  return record[variant];
+}
+
+/**
+ * Upgrading from a dist/ with no record: before a build rewrites the
+ * metadata, take the name it gives as one this project wrote, if that
+ * PDF is there. It is the name of the last build (or preview) — the
+ * one most likely stranded if the name has since changed. Names older
+ * than that are left alone: nothing proves this project wrote them.
+ * The retired grayscale and LEGACY names need no record; see pruneStale.
+ */
+function seedRecord(dist, variant, metaFile) {
+  assertVariant(variant);
+  const record = readRecord(dist);
+  if (record[variant]) return;
+  const name = `${readStem(metaFile, variant)}.pdf`;
+  if (!fs.existsSync(path.join(dist, name))) return;
+  record[variant] = { written: [name] };
+  writeRecord(dist, record);
 }
 
 
@@ -156,9 +275,17 @@ function outputPattern(variant) {
  * THIS FUNCTION DELETES FILES, so its reach is drawn tightly:
  *
  *   • only inside dist/, which is build output and gitignored;
- *   • only names matching outputPattern(variant) or LEGACY[variant],
- *     both generated from the constants this project writes with;
+ *   • only names matching outputPattern(variant) that the build record
+ *     lists as written by this project, plus the names no build writes
+ *     any more: LEGACY[variant] and the retired grayscale spellings;
  *   • never a path in `keep`, which is what the current build produced.
+ *
+ * The record is the part that keeps your own files safe. The pattern
+ * alone used to be the whole test, and it admits any `…_Resume.pdf`:
+ * a tailored copy you saved as dist/Acme_tailored_Resume.pdf was
+ * deleted by the next build as "not this build's name". Afterwards
+ * the record lists what is still there of what it allowed — the kept
+ * file and anything that could not be removed, to try again next time.
  *
  * A file it cannot remove is reported and skipped, not thrown on: the
  * PDFs are already written by the time this runs, and a PDF viewer
@@ -190,6 +317,9 @@ function outputPattern(variant) {
 function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
                     { fs: fsImpl = fs, platform = process.platform } = {}) {
   const pattern = outputPattern(variant);
+  const retired = retiredPattern(variant);
+  const record = readRecord(dist, fsImpl);
+  const recorded = recordedNames(record, variant);
   const caseInsensitive = platform === 'win32' || platform === 'darwin';
   const fold = p => (caseInsensitive ? p.toLowerCase() : p);
   const identity = (p) => {
@@ -215,8 +345,9 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
     return removed;                      // No dist/ yet: nothing to prune.
   }
 
-  const candidates = new Set(
-    entries.filter(name => pattern.test(name) || LEGACY[variant].includes(name)));
+  const candidates = new Set(entries.filter(name => LEGACY[variant].includes(name)
+    || retired.test(name)
+    || (pattern.test(name) && recorded.has(name))));
 
   for (const name of candidates) {
     const full = path.join(dist, name);
@@ -232,6 +363,23 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
       if (onFailure) onFailure(name, err.message);
     }
   }
+
+  // What the record may still delete: its names minus what is gone.
+  if (record[variant] && Array.isArray(record[variant].written)) {
+    const gone = new Set(removed);
+    const still = [...recorded].filter(n => !gone.has(n)
+      && entries.includes(n));
+    for (const k of keep) {
+      const n = path.basename(k);
+      if (pattern.test(n) && entries.includes(n) && !still.includes(n)) still.push(n);
+    }
+    record[variant] = { ...record[variant], written: still.sort() };
+    try {
+      writeRecord(dist, record, fsImpl);
+    } catch (err) {
+      if (onFailure) onFailure(RECORD, err.message);
+    }
+  }
   return removed;
 }
 
@@ -241,8 +389,12 @@ module.exports = {
   SEPARATOR,
   RETIRED_GRAYSCALE_SUFFIXES,
   LEGACY,
+  RECORD,
   readStem,
   outputPaths,
   outputPattern,
+  readRecord,
+  recordBuilt,
+  seedRecord,
   pruneStale,
 };

@@ -242,3 +242,18 @@ def load(stream):
     deserve their own error messages rather than an AttributeError.
     """
     return yaml.load(stream, Loader=ResumeLoader)
+
+
+def compose(text):
+    """
+    The node tree of one YAML document, with a start mark on every node.
+
+    Only for LOCATING a value after validation has already refused it
+    (build.locate_schema_error). load() keeps no positions: recording a
+    line for every mapping, list and scalar on every render would tax
+    the warm loop for the benefit of the rare file that fails, so the
+    failing file's text is parsed a second time instead, here, on the
+    error path only. Same loader, so tags resolve exactly as load() saw
+    them (a `null` here is a null there).
+    """
+    return yaml.compose(text, Loader=ResumeLoader)

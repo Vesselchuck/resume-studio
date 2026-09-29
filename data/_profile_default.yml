@@ -2,9 +2,10 @@
 # SHARED PROFILE — SHIPPED PLACEHOLDER
 #
 # COPY THIS FILE TO data/_profile.yml AND EDIT THAT COPY.
-# Nothing reads this one. The build looks for _profile.yml exactly;
-# this file exists to show you the shape and to give you a starting
-# point that survives in version control.
+# Your files never read this one: they merge _profile.yml exactly.
+# Only the shipped templates (resume_default.yml, letter_default.yml)
+# merge this file. It exists to show you the shape and to give you a
+# starting point that survives in version control.
 #
 #   cp data/_profile_default.yml data/_profile.yml
 #
@@ -17,8 +18,9 @@
 #   Your document always wins. Anything a resume or cover letter
 #   sets for itself is used; this file only fills in what the
 #   document leaves out. Nothing references it by name — it applies
-#   to every .yml beside it in data/ simply by being there, and the
-#   build log says so on every run:
+#   to every .yml of yours beside it in data/ (not the *_default.yml
+#   templates) simply by being there, and the build log says so on
+#   every run:
 #
 #     Shared profile  data/_profile.yml -> name, contact, meta.lang
 #

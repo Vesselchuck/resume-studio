@@ -677,6 +677,22 @@ test('sidebar: never ends a page on a group sub-heading', () => {
   assertEq(result[1].entries[0].items_offset, 4, 'page 2 starts at the group');
 });
 
+test('sidebar: the group back-off never turns a legal split into a failure', () => {
+  // Room for 3 items below the header; the 3rd is a group heading.
+  // Backing off to 2 would break MIN_SIDEBAR_ITEMS_ON_ORIGIN and, on a
+  // fresh page, fail the build — the list splits at 3 instead.
+  const b = listBlock('a', 0, [20, 20, 20, 20, 20, 20]);
+  b.items[2].isGroup = true;
+  const result = solveSidebar([b], geometry({ page1: 65, pageN: 200 }), 10);
+  assertEq(result[0].entries[0].items_limit, 3, 'page 1 keeps its 3 items');
+  assertEq(result[1].entries[0].items_offset, 3, 'page 2 takes the rest');
+  // A continuation with room for one item, and that item a group.
+  const c = listBlock('c', 0, [20, 20, 20, 20, 20]);
+  c.items[3].isGroup = true;
+  const pages = solveSidebar([c], geometry({ page1: 65, pageN: 25 }), 10);
+  assertEq(pages.length, 3, 'the continuation still splits');
+});
+
 test('solveLayout: a header taller than page 1 is named, not a block', () => {
   assertThrows(() => solveLayout({
     pageGeometry: geometry({ page1: -50, pageN: 1100 }), maxPages: 3,

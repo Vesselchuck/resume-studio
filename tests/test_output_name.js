@@ -56,6 +56,17 @@ function touch(dir, ...names) {
 
 const listing = dir => fs.readdirSync(dir).sort();
 
+/** The build record, as resume.js leaves it: `names` were written by builds. */
+function record(dir, variant, ...names) {
+  const file = path.join(dir, on.RECORD);
+  let r = {};
+  try { r = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { /* new */ }
+  r[variant] = { written: names };
+  fs.writeFileSync(file, JSON.stringify(r), 'utf-8');
+}
+
+const pdfs = dir => listing(dir).filter(n => n.endsWith('.pdf'));
+
 
 /* ─── reading the stem back out of the metadata ───────────────── */
 
@@ -154,13 +165,16 @@ test('pruneStale removes the previous name and keeps the current one', () => {
     touch(dir,
       'Gaius_Caesar_Resume.pdf',     // this build
       'Gaius_Julius_Resume.pdf');    // yesterday's spelling
+    record(dir, 'resume', 'Gaius_Julius_Resume.pdf', 'Gaius_Caesar_Resume.pdf');
 
     const keep = [path.join(dir, 'Gaius_Caesar_Resume.pdf')];
     const removed = on.pruneStale(dir, 'resume', keep);
 
     assertEq(removed.join(','), 'Gaius_Julius_Resume.pdf', 'removed the stale one');
-    assertEq(listing(dir).join(','), 'Gaius_Caesar_Resume.pdf',
+    assertEq(pdfs(dir).join(','), 'Gaius_Caesar_Resume.pdf',
              'this build\'s file survives');
+    assertEq(on.readRecord(dir).resume.written, ['Gaius_Caesar_Resume.pdf'],
+             'the record forgets what is gone');
   });
 });
 
@@ -283,6 +297,9 @@ test('pruneStale keeps a file that IS a kept path under another spelling', () =>
 function caseInsensitiveFs(dist, onDiskName) {
   const onDisk = path.join(dist, onDiskName).toLowerCase();
   const deleted = [];
+  // A build recorded the on-disk name, so it is the prune's to judge.
+  const recordFile = path.join(dist, on.RECORD);
+  let recordText = JSON.stringify({ resume: { written: [onDiskName] } });
   const exists = p => path.resolve(p).toLowerCase() === onDisk && !deleted.length;
   const enoent = (p) => Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
   return {
@@ -296,6 +313,12 @@ function caseInsensitiveFs(dist, onDiskName) {
         return { dev: zero, ino: zero, isFile: () => true };
       },
       rmSync: (p) => { deleted.push(path.basename(p)); },
+      readFileSync: (p) => {
+        if (path.resolve(p) !== recordFile) throw enoent(p);
+        return recordText;
+      },
+      writeFileSync: (p, text) => { recordText = text; },
+      renameSync: () => {},
     },
   };
 }
@@ -327,8 +350,89 @@ test('with no inode on a case-sensitive platform, a differently-cased name is st
 test('identity never spares an unrelated stale file', () => {
   withTempDir((dir) => {
     touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Julius_Resume.pdf');
+    record(dir, 'resume', 'Gaius_Julius_Resume.pdf');
     const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
     assertEq(removed, ['Gaius_Julius_Resume.pdf'], 'a different file is still removed');
+  });
+});
+
+/* ─── the build record: only what a build wrote ───────────────── */
+
+test('a PDF of yours that fits the pattern is never deleted', () => {
+  // The pattern admits any `…_Resume.pdf`; a tailored copy saved in
+  // dist/ was deleted by the next build as "not this build's name".
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Acme_tailored_Resume.pdf', 'Resume.pdf');
+    record(dir, 'resume', 'Gaius_Caesar_Resume.pdf');
+    const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(removed, [], 'nothing removed');
+    assertEq(pdfs(dir), ['Acme_tailored_Resume.pdf', 'Gaius_Caesar_Resume.pdf', 'Resume.pdf'],
+             'all three still there');
+  });
+});
+
+test('with no record (a dist/ from before it), only retired names go', () => {
+  // The upgrade: the grayscale PDFs and the 0.5.x names are still
+  // cleaned out; an old `…_Resume.pdf` is not, since nothing says a
+  // build wrote it.
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf',
+      'Gaius_Caesar_Resume-grayscale.pdf', 'resume-color.pdf', 'resume-grayscale.pdf',
+      'Gaius_Julius_Resume.pdf');
+    const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(removed.sort(), ['Gaius_Caesar_Resume-grayscale.pdf',
+      'Gaius_Caesar_Resume_Grayscale.pdf', 'resume-color.pdf', 'resume-grayscale.pdf'],
+      'the retired names');
+    assertEq(pdfs(dir), ['Gaius_Caesar_Resume.pdf', 'Gaius_Julius_Resume.pdf'], 'the rest stay');
+  });
+});
+
+test('seedRecord takes the upgrade\'s last name from the metadata', () => {
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Julius_Resume.pdf', 'Mine_Resume.pdf');
+    const meta = writeMeta(dir, { output_stem: 'Gaius_Julius_Resume' });
+    on.seedRecord(dir, 'resume', meta);
+    assertEq(on.readRecord(dir).resume.written, ['Gaius_Julius_Resume.pdf'], 'seeded');
+    // The build then writes under the new name and prunes the old one.
+    touch(dir, 'Gaius_Caesar_Resume.pdf');
+    on.recordBuilt(dir, 'resume', path.join(dir, 'Gaius_Caesar_Resume.pdf'), { dataSource: 'mine' });
+    const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(removed, ['Gaius_Julius_Resume.pdf'], 'the seeded name');
+    assertEq(pdfs(dir), ['Gaius_Caesar_Resume.pdf', 'Mine_Resume.pdf'], 'never seeded, kept');
+    on.seedRecord(dir, 'resume', writeMeta(dir, { output_stem: 'Mine_Resume' }));
+    assertEq(on.readRecord(dir).resume.written, ['Gaius_Caesar_Resume.pdf'],
+             'an existing record is not reseeded');
+  });
+});
+
+test('recordBuilt records the PDF, its data source and its bytes', () => {
+  withTempDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'A_B_Resume.pdf'), '%PDF-1');
+    fs.writeFileSync(path.join(dir, 'A_B_Cover_Letter.pdf'), '%PDF-2');
+    on.recordBuilt(dir, 'resume', path.join(dir, 'A_B_Resume.pdf'), { dataSource: 'mine' });
+    on.recordBuilt(dir, 'letter', path.join(dir, 'A_B_Cover_Letter.pdf'), { dataSource: 'default' });
+    const r = on.readRecord(dir);
+    assertEq(r.resume.pdf, 'A_B_Resume.pdf', 'resume name');
+    assertEq(r.resume.data_source, 'mine', 'resume source');
+    assertEq(r.resume.sha256,
+      require('crypto').createHash('sha256').update('%PDF-1').digest('hex'), 'resume bytes');
+    assertEq(r.letter.written, ['A_B_Cover_Letter.pdf'], 'the letter has its own entry');
+    assertEq(listing(dir), ['A_B_Cover_Letter.pdf', 'A_B_Resume.pdf', on.RECORD],
+             'no temporary file left');
+  });
+});
+
+test('a removal that fails stays on the record, to be retried', () => {
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Old_Resume.pdf');
+    record(dir, 'resume', 'Old_Resume.pdf', 'Gaius_Caesar_Resume.pdf');
+    const failing = { ...fs, rmSync: () => { throw new Error('EBUSY: open in a viewer'); } };
+    const why = [];
+    on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')], null,
+      (name, msg) => why.push(`${name}: ${msg}`), { fs: failing });
+    assertEq(why, ['Old_Resume.pdf: EBUSY: open in a viewer'], 'reported');
+    assertEq(on.readRecord(dir).resume.written, ['Gaius_Caesar_Resume.pdf', 'Old_Resume.pdf'],
+             'still listed');
   });
 });
 
@@ -353,6 +457,7 @@ test('every removal is reported, so a build says what it deleted', () => {
   // acceptable even when it is the right call.
   withTempDir((dir) => {
     touch(dir, 'Old_Name_Resume.pdf', 'resume-color.pdf');
+    record(dir, 'resume', 'Old_Name_Resume.pdf');
     const seen = [];
     const removed = on.pruneStale(dir, 'resume', [], name => seen.push(name));
     assertEq(seen.sort().join(','), 'Old_Name_Resume.pdf,resume-color.pdf',

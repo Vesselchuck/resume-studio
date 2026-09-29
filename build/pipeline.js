@@ -489,7 +489,11 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * (useful when invariants fire and you want to compare against what
    * the solver thought would fit).
    */
+  // Set by each clean verifyInvariants; read through the `lastFill` getter.
+  let lastFill = null;
+
   async function verifyInvariants(page, expectedPageCount, navOptions = {}, { loaded: already = null } = {}) {
+    lastFill = null;
     // Reload the page so the invariant check runs against the FINAL
     // HTML (not the measurement HTML still loaded from phase 3).
     //
@@ -524,6 +528,8 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
 
     const pagesWord = expectedPageCount === 1 ? 'page' : 'pages';
     c.ok_pair('Layout invariants', `clean (${expectedPageCount} ${pagesWord})`);
+    // How full each page is, for the Studio (see check_layout.js).
+    lastFill = result.fill || [];
     return loaded;
   }
 
@@ -726,6 +732,8 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
     verifyLetterFits,
     printPdfs,
     printPreviewPdf,
+    /** Each page's fill (0–1) from the last clean invariant check, or null. */
+    get lastFill() { return lastFill; },
   };
 }
 

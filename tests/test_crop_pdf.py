@@ -506,6 +506,47 @@ class TestApplyXmp(unittest.TestCase):
             tmp.rmdir()
 
 
+class TestWriteIsAtomic(unittest.TestCase):
+    """A write that stops part-way leaves the previous PDF as it was.
+
+    crop_pdf used to open the output with 'wb', which empties the last
+    good PDF before the new bytes exist: a build interrupted there left
+    an unreadable résumé in dist/ under the name you attach.
+    """
+
+    def run_cli(self, src, out):
+        argv = sys.argv
+        sys.argv = ["crop_pdf.py", str(src), str(out), "--quiet"]
+        try:
+            return crop_pdf.main()
+        finally:
+            sys.argv = argv
+
+    def test_an_interrupted_write_keeps_the_previous_pdf(self):
+        from unittest import mock
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            src, out = tmp / "in.pdf", tmp / "out.pdf"
+            src.write_bytes(make_tagged_pdf().getvalue())
+            self.assertEqual(self.run_cli(src, out), 0)
+            good = out.read_bytes()
+
+            def half_then_stop(self_, stream):
+                stream.write(good[:len(good) // 2])
+                raise KeyboardInterrupt
+
+            with mock.patch.object(PdfWriter, "write", half_then_stop), \
+                    self.assertRaises(KeyboardInterrupt):
+                self.run_cli(src, out)
+            self.assertEqual(out.read_bytes(), good)
+            self.assertEqual(sorted(f.name for f in tmp.iterdir()),
+                             ["in.pdf", "out.pdf"], "no temporary file left")
+        finally:
+            for f in tmp.iterdir():
+                f.unlink()
+            tmp.rmdir()
+
+
 class TestPdfDate(unittest.TestCase):
     def test_forms(self):
         from datetime import datetime, timedelta, timezone
@@ -660,6 +701,69 @@ class TestLetterUpperRight(unittest.TestCase):
 
     def test_within_tolerance_counts_as_letter(self):
         self.assertIsNotNone(crop_pdf.letter_upper_right(0, 0, 611.9995, 792))
+
+
+class TestOvershootWarning(unittest.TestCase):
+    """A page far larger than Letter is cropped, but not in silence."""
+
+    def crop_and_capture(self, width, height):
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            crop_pdf.crop_pages(PdfReader(make_pdf_with_page(width, height)),
+                                PdfWriter())
+        return err.getvalue() + out.getvalue()
+
+    def test_chromium_rounding_is_shaved_quietly(self):
+        self.assertEqual(self.crop_and_capture(612.12, 792.12), "")
+
+    def test_a_legal_page_says_what_the_crop_cuts_off(self):
+        said = self.crop_and_capture(612, 1008)
+        self.assertIn("well over Letter", said)
+        self.assertIn("612.00 × 1008.00", said)
+
+
+def make_pdf_with_form_font(base_font: str) -> io.BytesIO:
+    """One page whose only font sits inside a Form XObject.
+
+    Skia puts text drawn in a group (opacity, a blend mode) in a form
+    with its own /Resources, so a system font can be in the PDF without
+    appearing in any page's /Font.
+    """
+    from pypdf.generic import (DictionaryObject, NameObject, StreamObject)
+    w = PdfWriter()
+    page = w.add_blank_page(width=612, height=792)
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/TrueType"),
+        NameObject("/BaseFont"): NameObject(f"/ABCDEF+{base_font}"),
+    })
+    form = StreamObject()
+    form.update({
+        NameObject("/Type"): NameObject("/XObject"),
+        NameObject("/Subtype"): NameObject("/Form"),
+        NameObject("/Resources"): DictionaryObject({
+            NameObject("/Font"): DictionaryObject(
+                {NameObject("/F1"): w._add_object(font)}),
+        }),
+    })
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/XObject"): DictionaryObject(
+            {NameObject("/X1"): w._add_object(form)}),
+    })
+    buf = io.BytesIO()
+    w.write(buf)
+    buf.seek(0)
+    return buf
+
+
+class TestForeignFonts(unittest.TestCase):
+    def test_a_system_font_inside_a_form_xobject_is_found(self):
+        reader = PdfReader(make_pdf_with_form_font("NotoSansCJKjp-Regular"))
+        self.assertEqual(crop_pdf.foreign_fonts(reader), ["NotoSansCJKjp-Regular"])
+
+    def test_the_vendored_fonts_inside_a_form_are_not_foreign(self):
+        reader = PdfReader(make_pdf_with_form_font("Manrope-Regular"))
+        self.assertEqual(crop_pdf.foreign_fonts(reader), [])
 
 
 class TestLinkDescription(unittest.TestCase):

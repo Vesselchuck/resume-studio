@@ -491,6 +491,17 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
             "maxPages true": lambda d: d["meta"].update(maxPages=True),
             "maxPages zero": lambda d: d["meta"].update(maxPages=0),
             "unknown name key": lambda d: d["name"].update(middle="J"),
+            "href without a scheme":
+                lambda d: block(d, 1)["rows"][0].update(href="x.example"),
+            "href host:port":
+                lambda d: block(d, 1)["rows"][0].update(href="localhost:3000"),
+            "href with nothing after the scheme":
+                lambda d: block(d, 1)["rows"][0].update(href="https:"),
+            "href of another scheme":
+                lambda d: block(d, 1)["rows"][0].update(href="ms-msdt:/id"),
+            "contact href of another scheme":
+                lambda d: d.update(contact={"rows": [{"value": "v",
+                                                      "href": "smb://h/s"}]}),
         }
         for label, mutate in cases.items():
             with self.subTest(case=label):
@@ -517,6 +528,11 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
                 lambda d: job(d, 2).update(bullets=[]),
             "contact with empty rows":
                 lambda d: d.update(contact={"address": "A", "rows": []}),
+            "empty href (no link)":
+                lambda d: d["sidebar"]["blocks"][1]["rows"][0].update(href=""),
+            "contact tel: href":
+                lambda d: d.update(contact={"rows": [{"value": "v",
+                                                      "href": "tel:+15550100"}]}),
         }
         for label, mutate in cases.items():
             with self.subTest(case=label):
@@ -524,6 +540,45 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
                 mutate(doc)
                 self.assertEqual(self._verdicts(doc), (True, True),
                                  "(schema accepts?, validator accepts?)")
+
+    def test_every_href_pattern_agrees_with_the_validator(self):
+        """Each schema's `href` pattern is the build's allowlist, found
+        wherever it appears, so a link an editor accepts builds."""
+        hrefs = ["", "https://x.example", "http://x.example/a", "HTTPS://X.EXAMPLE",
+                 " https://x.example ", "mailto:a@b.c", "tel:+15550100",
+                 "https:", "https://", "mailto:", "tel: ", "  ", "x.example",
+                 "//x.example", "a@b.c", "localhost:3000", "x.example:8080/a",
+                 "javascript:alert(1)", "file:///etc/passwd", "about:blank",
+                 "smb://h/s", "search-ms:query=x", "ms-msdt:/id", "ftp://x.example",
+                 "C:\\Users\\me"]
+
+        def href_schemas(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "href" and isinstance(value, dict):
+                        yield value
+                    else:
+                        yield from href_schemas(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from href_schemas(value)
+
+        for name in ("resume.schema.json", "letter.schema.json",
+                     "profile.schema.json"):
+            found = list(href_schemas(self.schema(name)["properties"]))
+            found += list(href_schemas(self.schema(name).get("definitions", {})))
+            self.assertTrue(found, f"{name} has an href")
+            for sub in found:
+                for href in hrefs:
+                    with self.subTest(schema=name, href=href):
+                        schema_ok = not list(self.Draft7Validator(sub).iter_errors(href))
+                        try:
+                            build._check_href(href, "row")
+                            validator_ok = True
+                        except build.SchemaError:
+                            validator_ok = False
+                        self.assertEqual(schema_ok, validator_ok,
+                                         "(schema accepts?, validator accepts?)")
 
     def test_document_contact_without_rows_is_schema_valid(self):
         """The schema judges the file as written: a document may set only
@@ -540,6 +595,82 @@ class TestSchemasAgreeWithValidators(unittest.TestCase):
         """markdown_filter only knows **bold**."""
         text = json.dumps(self.schema("resume.schema.json"))
         self.assertNotIn("*italic*", text)
+
+    # ── The letter, the same way ────────────────────────────────
+
+    @staticmethod
+    def _letter():
+        """A letter that both the schema and the validator accept."""
+        return {
+            "name": {"first": "Gaius", "last": "Caesar"},
+            "contact": {"address": "Roma", "rows": [
+                {"value": "x.example", "href": "https://x.example"},
+                {"value": "No link"}]},
+            "meta": {"description": "D", "lang": "en-GB"},
+            "letter": {"recipient": ["Senate", "Curia Julia"],
+                       "body": ["Dear Senate,", "Veni.", "Sincerely,"]},
+        }
+
+    def _letter_verdicts(self, doc):
+        schema = self.schema("letter.schema.json")
+        schema_ok = not list(self.Draft7Validator(schema).iter_errors(doc))
+        try:
+            build_letter.validate_data(doc)
+            validator_ok = True
+        except build.SchemaError:
+            validator_ok = False
+        return schema_ok, validator_ok
+
+    def test_synthetic_letter_is_accepted_by_both(self):
+        self.assertEqual(self._letter_verdicts(self._letter()), (True, True))
+
+    def test_synthetic_letter_rejections_agree(self):
+        """Blank text was accepted by the schema (minLength counts
+        spaces) and refused by the build; an unknown key in name,
+        contact or a row was refused by the schema and only warned
+        about by the build, while the résumé refused the same block."""
+        def letter(d):
+            return d["letter"]
+
+        def row(d):
+            return d["contact"]["rows"][0]
+
+        cases = {
+            "blank paragraph": lambda d: letter(d).update(body=["Dear", "  "]),
+            "blank body block": lambda d: letter(d).update(body=" \n\n "),
+            "blank recipient line":
+                lambda d: letter(d).update(recipient=["Senate", " "]),
+            "blank recipient block": lambda d: letter(d).update(recipient="  "),
+            "letter.date": lambda d: letter(d).update(date="Ides of March"),
+            "letter.salutation": lambda d: letter(d).update(salutation="Hi"),
+            "unknown name key": lambda d: d["name"].update(middle="J"),
+            "unknown contact key": lambda d: d["contact"].update(adress="x"),
+            "unknown row key": lambda d: row(d).update(hre="https://x.example"),
+            "empty row value": lambda d: row(d).update(value=""),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                doc = self._letter()
+                mutate(doc)
+                self.assertEqual(self._letter_verdicts(doc), (False, False),
+                                 "(schema accepts?, validator accepts?)")
+
+    def test_synthetic_letter_leniencies_agree(self):
+        """Keys the letter only warns about stay out of the schema's
+        way, as the résumé's top level, meta and sections do."""
+        cases = {
+            "unknown letter key": lambda d: d["letter"].update(recipent=["x"]),
+            "unknown top-level key": lambda d: d.update(extra=1),
+            "unknown meta key": lambda d: d["meta"].update(maxPages=1),
+            "block body": lambda d: d["letter"].update(body="Dear,\n\nVeni."),
+            "no recipient": lambda d: d["letter"].pop("recipient"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                doc = self._letter()
+                mutate(doc)
+                self.assertEqual(self._letter_verdicts(doc), (True, True),
+                                 "(schema accepts?, validator accepts?)")
 
     def test_letter_files_agree(self):
         schema = self.schema("letter.schema.json")

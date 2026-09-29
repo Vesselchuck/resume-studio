@@ -124,13 +124,28 @@ ROOT = Path(__file__).parent.parent
 # inside the frame as "log" / "diagnostics", which is how the GUI gets
 # its build log without a second channel.
 #
-# Known limit: this redirects at the Python level, not the file
-# descriptor level. A C extension writing straight to fd 1 would still
-# leak onto the frame stream. None of the pinned dependencies (PyYAML,
-# Jinja2, pypdf, pypdfium2, Pillow) do, and the FRAME_PREFIX sentinel
-# means such a leak degrades to log noise instead of breaking framing.
+# That redirect is Python-level. A C extension writing straight to fd 1
+# would bypass it, so main() also moves the frames off fd 1 altogether:
+# it keeps a private duplicate of the pipe for _FRAME_OUT and points
+# fd 1 at stderr, where the engine logs such output as [worker] lines.
+# None of the pinned dependencies (PyYAML, Jinja2, pypdf, pypdfium2,
+# Pillow) are known to write to fd 1; this is so that one that does
+# costs a log line, not a frame. (The engine also finds a frame after
+# junk on its line, for anything that still reaches the pipe.)
 # ---------------------------------------------------------------------------
 _FRAME_OUT = sys.stdout
+
+
+def _private_frame_stream():
+    """Take the frame pipe off fd 1 and return a stream on a private copy.
+
+    Called from main() only, never at import: tests import this module
+    in-process and their own stdout must stay where it is.
+    """
+    frame_fd = os.dup(1)
+    sys.stdout.flush()
+    os.dup2(2, 1)      # fd 1, and anything written to it in C, is stderr now
+    return os.fdopen(frame_fd, "w", encoding="utf-8", newline="\n")
 
 
 def _send(payload):
@@ -296,8 +311,7 @@ def op_crop(req):
     foreign = crop_mod.foreign_fonts(reader)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with open(dst, "wb") as f:
-        writer.write(f)
+    crop_mod.write_pdf(writer, dst)
 
     final = PdfReader(str(dst))
     box = final.pages[0].mediabox
@@ -311,24 +325,24 @@ def op_crop(req):
     }
 
 
-def _pixel_hash(img):
-    """A fingerprint of a rendered page: its size, mode and every pixel.
+def _encode_and_hash(img):
+    """(base64 PNG, hash) for a freshly rendered page.
 
-    SHA-256 from the standard library: of the hashes hashlib always has,
-    the fastest over a page's ~6 MB of pixels on current CPUs (it has
-    hardware support where blake2b has none). Cut to 128 bits, the
-    length the blake2b digest it replaces had; the UI treats the value
-    as an opaque string.
+    The hash is taken over the PNG's bytes rather than the pixels: the
+    PNG is lossless, so the same PNG always holds the same pixels, and
+    hashing ~0.4 MB of PNG instead of ~6 MB of pixels saves a full pass
+    over the page. The converse needs the same encoder: the same pixels
+    encoded with ISA-L and with zlib (see build/_png.py) give different
+    PNGs and so different hashes. Callers keep hashes across a worker
+    restart (the engine's `known`, the page's image cache), so a restart
+    that changes the encoder makes every page look changed once and its
+    PNG is sent again. That is the safe direction: a hash can never match
+    for pixels that differ.
     """
-    h = hashlib.sha256()
-    h.update(f"{img.mode}:{img.width}x{img.height}:".encode("ascii"))
-    h.update(img.tobytes())
-    return h.hexdigest()[:32]
-
-
-def _encode_png(img):
-    """Base64 PNG for the preview pane. See build/_png.py for the writer."""
-    return base64.b64encode(_png.encode(img)).decode("ascii")
+    raw = _png.encode(img)
+    h = hashlib.sha256(f"png:{img.width}x{img.height}:".encode("ascii"))
+    h.update(raw)
+    return base64.b64encode(raw).decode("ascii"), h.hexdigest()[:32]
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +387,7 @@ def _slot_keys(data, scale, crop):
     return [hashlib.sha256(signature + b"|" + k.encode("ascii")).hexdigest() for k in keys]
 
 
-def _rasterize(source, scale, crop, only):
+def _rasterize(source, scale, crop, only, doc=None):
     """snapshot_pdf.render_pdf_pages at `scale`, with the crop applied.
 
     `source` is a file's Path or the PDF's bytes (see op_raster).
@@ -396,7 +410,8 @@ def _rasterize(source, scale, crop, only):
     snapshot_pdf.SCALE = scale
     try:
         try:
-            return snapshot_pdf.render_pdf_pages(pdfium, source, prepare, only)
+            return snapshot_pdf.render_pdf_pages(pdfium, doc if doc is not None else source,
+                                                 prepare, only)
         except crop_mod.NoOwnMediaBox:
             return _rasterize_file_cropped(pdfium, snapshot_pdf, source, only)
     finally:
@@ -422,44 +437,53 @@ def _rasterize_file_cropped(pdfium, snapshot_pdf, source, only):
             pass
 
 
-def _item_for(idx, img, entry, keys, previous):
-    """The response item and the cache entry for one page.
-
-    `entry` is a reusable entry from this slot's previous render, in
-    which case `img` is None and nothing is rendered or hashed again.
-    Otherwise `img` is the freshly rendered page.
+def _item_for(idx, entry):
+    """The response item and the cache entry for a page reused from this
+    slot's previous render: nothing is rendered, encoded or hashed again.
 
     Shared by the one-reply and the streaming paths below so the two
-    cannot describe the same page differently.
+    cannot describe the same page differently (as are _fresh_item and
+    _fill_fresh, for a page rendered now).
     """
-    if entry is not None:
-        item = {"page": idx + 1, "width": entry["width"],
-                "height": entry["height"], "hash": entry["hash"]}
-        return item, dict(entry)
+    item = {"page": idx + 1, "width": entry["width"],
+            "height": entry["height"], "hash": entry["hash"]}
+    return item, dict(entry)
 
-    item = {"page": idx + 1, "width": img.width, "height": img.height,
-            "hash": _pixel_hash(img)}
-    cached = {"width": img.width, "height": img.height, "hash": item["hash"]}
-    prev = previous.get(keys[idx]) if keys is not None else None
-    if prev and prev["hash"] == item["hash"] and prev.get("png"):
-        cached["png"] = prev["png"]
-    return item, cached
+
+def _fresh_item(idx, img):
+    """The item and cache entry for a page rendered now, still without
+    the hash and PNG that _fill_fresh adds once it is encoded."""
+    return ({"page": idx + 1, "width": img.width, "height": img.height},
+            {"width": img.width, "height": img.height})
+
+
+def _fill_fresh(item, cached, known, idx, encoded):
+    """Add a freshly rendered page's (PNG, hash) from _encode_and_hash.
+
+    The cache always keeps the PNG; the caller gets it unless it already
+    holds a page with this hash, in which case the page is marked
+    unchanged and carries nothing.
+    """
+    png, digest = encoded
+    item["hash"] = cached["hash"] = digest
+    cached["png"] = png
+    if known.get(str(idx + 1)) == digest:
+        item["unchanged"] = True
+    else:
+        item["png"] = png
 
 
 def _fill_png(item, cached, known, idx):
-    """Attach what the caller needs, or say a PNG must still be encoded.
+    """Attach what the caller needs to a page reused from the slot.
 
     A page whose pixels the caller already holds is marked unchanged and
-    carries nothing; a page this slot has already encoded carries that
-    PNG. Otherwise the caller encodes it and puts it in both.
+    carries nothing; otherwise it carries the PNG this slot encoded
+    (an entry is only reused when one of the two holds).
     """
     if known.get(str(idx + 1)) == item["hash"]:
         item["unchanged"] = True
-        return False
-    if cached.get("png"):
+    elif cached.get("png"):
         item["png"] = cached["png"]
-        return False
-    return True
 
 
 def _priority_order(page_count, wanted, order):
@@ -504,14 +528,22 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
     """
     rid = req.get("id")
     page_count = len(keys)
+    import pypdfium2 as pdfium
 
-    # The keys come from the file's own bytes, but they are read by
-    # _pdf_page_keys rather than by pdfium, and the one-reply path below
-    # refuses to trust them when the two disagree about how many pages
-    # there are. This asks pdfium first — rendering nothing, which only
-    # opens the document — and hands the whole request back to that path
-    # if the count differs. Nothing is streamed before this is settled.
-    if len(_rasterize(source, scale, crop, set())) != page_count:
+    # One open document for the whole request: opening it is ~3 ms a
+    # time, and it used to be opened once to count the pages and again
+    # for every page. pdfium is still driven from this thread only.
+    doc = pdfium.PdfDocument(source if isinstance(source, (bytes, bytearray)) else str(source))
+    try:
+        return _raster_streamed_doc(req, rid, page_count, doc, source, scale, crop, keys,
+                                    previous, known, wanted, slot)
+    finally:
+        doc.close()
+
+
+def _raster_streamed_doc(req, rid, page_count, doc, source, scale, crop, keys, previous,
+                         known, wanted, slot):
+    if len(_rasterize(source, scale, crop, set(), doc)) != page_count:
         return None
 
     out = []
@@ -524,10 +556,10 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
     #
     # A page is rendered in this thread (pdfium is driven from one
     # thread, as it is everywhere else here) and then handed to the pool
-    # to be turned into a PNG. zlib releases the GIL, so that encode runs
-    # while the next page is being rendered — which is how sending the
-    # pages one at a time costs no more in total than sending them
-    # together used to. The bytes are the same either way.
+    # to be turned into a PNG and hashed. zlib releases the GIL, so that
+    # encode runs while the next page is being rendered — which is how
+    # sending the pages one at a time costs no more in total than sending
+    # them together used to. The bytes are the same either way.
     #
     # `waiting` holds the pages in the order they are to be sent. A page
     # is sent as soon as it and everything before it are done: by the
@@ -545,7 +577,7 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
             if future is not None:
                 if not future.done() or future.exception() is not None:
                     return  # a failed encode is raised below, in this thread
-                item["png"] = cached["png"] = future.result()
+                _fill_fresh(item, cached, known, idx, future.result())
             waiting.popleft()
             current[keys[idx]] = cached
             items[idx] = item
@@ -563,12 +595,15 @@ def _raster_streamed(req, source, scale, crop, keys, previous, known, wanted, sl
             if entry is not None and not (known.get(str(idx + 1)) == entry["hash"]
                                           or entry.get("png")):
                 entry = None  # the caller needs a PNG this slot never encoded
-            img = None
+            future = None
             if entry is None:
-                img = _rasterize(source, scale, crop, {idx})[idx]
+                img = _rasterize(source, scale, crop, {idx}, doc)[idx]
                 rendered += 1
-            item, cached = _item_for(idx, img, entry, keys, previous)
-            future = pool.submit(_encode_png, img) if _fill_png(item, cached, known, idx) else None
+                item, cached = _fresh_item(idx, img)
+                future = pool.submit(_encode_and_hash, img)
+            else:
+                item, cached = _item_for(idx, entry)
+                _fill_png(item, cached, known, idx)
             with lock:
                 waiting.append((idx, item, cached, future))
                 flush()
@@ -699,7 +734,7 @@ def op_raster(req):
         images = _rasterize(source, scale, crop, None)
 
     out = []
-    to_encode = []
+    fresh = []
     current = {}
     for idx, img in enumerate(images):
         if wanted and (idx + 1) not in wanted:
@@ -709,25 +744,27 @@ def op_raster(req):
             # Not rendered and nothing to stand in for it: cannot happen
             # unless the file changed under us. Render it now.
             img = _rasterize(source, scale, crop, {idx})[idx]
-        item, cached = _item_for(idx, img, entry, keys, previous)
-        if _fill_png(item, cached, known, idx):
-            to_encode.append((item, cached, img))
+        if img is None:
+            item, cached = _item_for(idx, entry)
+            _fill_png(item, cached, known, idx)
+        else:
+            item, cached = _fresh_item(idx, img)
+            fresh.append((idx, item, cached, img))
         if keys is not None:
             current[keys[idx]] = cached
         out.append(item)
 
-    # PNG encoding is most of the rasterize step, and zlib releases the
-    # GIL, so the pages are encoded side by side. The bytes are the same
-    # as encoding them one after another.
-    if len(to_encode) > 1:
-        workers = min(len(to_encode), os.cpu_count() or 1)
+    # Encoding (and the hash, which is taken over the PNG; see
+    # _encode_and_hash) is most of the step, and zlib releases the GIL,
+    # so the pages are encoded side by side.
+    if len(fresh) > 1:
+        workers = min(len(fresh), os.cpu_count() or 1)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            encoded = list(pool.map(_encode_png, (img for _, _, img in to_encode)))
+            encoded = list(pool.map(_encode_and_hash, (img for *_, img in fresh)))
     else:
-        encoded = [_encode_png(img) for _, _, img in to_encode]
-    for (item, cached, _), png in zip(to_encode, encoded):
-        item["png"] = png
-        cached["png"] = png
+        encoded = [_encode_and_hash(img) for *_, img in fresh]
+    for (idx, item, cached, _), result in zip(fresh, encoded):
+        _fill_fresh(item, cached, known, idx, result)
 
     if slot is not None and keys is not None:
         _RENDERED[slot] = current
@@ -970,14 +1007,15 @@ def _warm_imports():
 
 
 def main():
-    # Line-buffered utf-8 on both ends. Without the explicit encoding a
-    # Windows console code page would mangle the console symbols the
-    # frames carry back as log text.
+    global _FRAME_OUT
+    # utf-8 on both ends. Without the explicit encoding a Windows console
+    # code page would mangle the console symbols the frames carry back
+    # as log text. _send() flushes after every frame.
     try:
         sys.stdin.reconfigure(encoding="utf-8")
-        _FRAME_OUT.reconfigure(encoding="utf-8", newline="\n")
     except AttributeError:
-        pass  # Python < 3.7 reconfigure; the pinned floor is 3.10+.
+        pass  # stdin replaced by something that is not a text stream
+    _FRAME_OUT = _private_frame_stream()
 
     _send({"id": None, "op": "hello", "ok": True,
            "result": op_ping({}), "log": [], "diagnostics": [], "ms": 0.0})

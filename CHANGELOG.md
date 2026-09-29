@@ -43,37 +43,220 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
-*A link in the YAML now needs its scheme: `example.com/me` stops the
-build instead of putting a path on your computer into the PDF. Seven
-optional keys no longer crash the build, long words stay inside their
-column, and the Studio recovers from a crashed Chromium, keeps every
-open window in step, and no longer flashes the previous page on each
-save. Everything in the Studio works from the keyboard and meets the
-WCAG contrast minimum, and it no longer loads anything from Google.*
+*A link in the YAML must now be an `https:`, `http:`, `mailto:` or
+`tel:` address: `example.com/me` stops the build instead of putting a
+path on your computer into the PDF, and the letter refuses the same
+typos the résumé does. A data error names its file, line and column.
+Seven optional keys no longer crash the build, long words stay inside
+their column, and a build no longer deletes PDFs of yours or collides
+with a Studio preview. The Studio recovers from a crashed or stuck
+Chromium, keeps every open window in step, and no longer flashes the
+previous page on each save. A failed render is shown over the preview
+at its file and line, with a button to open it in your editor; each
+save's changes are outlined; the window, theme and zoom are as you
+left them at the next launch. The Studio works from the keyboard, with
+shortcuts (F1 lists them), meets the WCAG contrast minimum, and loads
+nothing from Google.*
 
 ### Upgrading from 0.9.1
 
 1. If a build stops with "href … has no scheme", write the whole
    address in that `href`: `https://example.com/me`, `mailto:…` or
    `tel:…`. Such a link used to build, and pointed at a file on your
-   computer instead of the page.
-2. Nothing to regenerate. Placement and pixels are unchanged on the
+   computer instead of the page. A link of any other kind (`ftp:`,
+   `smb:`, …) now stops the build too.
+2. If a letter build stops with "unknown key" in `name`, `contact` or
+   a contact row, fix the key it names: the résumé already refused the
+   same line.
+3. If a build stops with "is also a sidebar block's id", rename that
+   job's `id` or the block's. The two lists share one set of ids.
+4. The first build after upgrading starts `dist/outputs.json`, the
+   record of what builds wrote. From then on the stale-PDF cleanup
+   deletes only names in it. A PDF left under a name older than your
+   last build's is not in it and stays; delete it yourself if you
+   want it gone. The `_Grayscale` copies and `resume-color.pdf` are
+   still cleaned up.
+5. If a script of yours runs `python build/snapshot_pdf.py`, treat
+   exit code 2 as "nothing was compared", not as a difference: only 1
+   means the PDF differs from the fixture.
+6. Nothing to regenerate. Placement and pixels are unchanged on the
    template data and on real data, so the snapshot fixtures stay as
    they are.
 
 ### Changes
 
 - **Changed — Breaking.** An `href` must be a link a reader can
-  follow. One with no scheme (`linkedin.com/in/you`) or a Windows path
-  (`C:\Users\…`) is refused, as are `javascript:`, `vbscript:`,
-  `file:` and `data:` links. This applies to the résumé's contact rows
-  and details rows and to the letter's contact rows. An empty `href`
-  still means no link.
+  follow: `https:`, `http:`, `mailto:` or `tel:`, with something after
+  the scheme. One with no scheme (`linkedin.com/in/you`), a host and
+  port (`localhost:3000`, which reads as a scheme), a bare `https:` or
+  a Windows path (`C:\Users\…`) is refused, as is every other scheme
+  (`javascript:`, `file:`, `smb:`, `ms-msdt:`, …), which a PDF viewer
+  would hand to whatever program the reader's system has for it. The
+  error names the likely fix (`mailto:` for `you@example.com`,
+  `https:` for `//example.com`). This applies to the résumé's contact
+  rows and details rows and to the letter's contact rows, and the
+  editor schemas in `schemas/` underline the same links. An empty
+  `href` still means no link.
+- **Changed — Breaking.** In the letter, an unknown key in `name`,
+  `contact` or a contact row stops the build, as it always did in the
+  résumé. Those blocks usually come from `data/_profile.yml`, which
+  both documents merge, so the same `hre:` typo failed the résumé and
+  built a letter with the link silently missing. Elsewhere in the
+  letter an unknown key is still a warning.
+- **Changed — Breaking.** A job may not have the same `id` as a
+  sidebar block. Both become ids on the same page, so such a file
+  built a page with a duplicate id, where links and screen-reader
+  references reach only the first. The build now says which to
+  rename.
+- **Changed.** An error in the data starts with the file, line and
+  column of the value, `data/resume.yml:42:9: …`. A value that came
+  from `data/_profile.yml` is located there, and the error says so,
+  where it used to be blamed on the document. Loading is not slowed:
+  the location is worked out only after a file has failed (about
+  0.5 ms then).
+- **Added.** Studio: a failed render is shown over the preview, not in
+  a bar that called every failure "Invalid YAML" and left a YAML
+  error's line and column to the console. Where comes first
+  (`data/resume.yml:42:5`), then the message, with
+  the last good render dimmed underneath and its time. **Copy
+  location** copies `file:line:column` (and says so to a screen
+  reader); **Open in VS Code** opens the file at that line when Windows
+  has VS Code's `vscode://` handler registered, else **Open file**
+  opens it in its default program. New route `POST /api/open`: an
+  existing `.yml`, `.yaml` or `.scss` file in `data/` or `styles/` only
+  (after following links: a link to a program is refused), run as a
+  program and its arguments, never through a shell; on Windows a path
+  with a comma is refused, since `explorer.exe` splits at commas.
+- **Added.** Studio: what changed since the last render is outlined on
+  the page for four seconds (still, under reduced motion); **Highlight
+  changes** turns it off. Measured here at about 15–20 ms per changed
+  page, in idle time after the page is on screen.
+- **Added.** Studio: keyboard shortcuts — F5/Ctrl+R re-render (and no
+  longer reload the window), Ctrl+Shift+B build, Ctrl+1/Ctrl+2 the
+  Resume/the Cover Letter (Ctrl+Tab too, except in a Chrome tab, which
+  keeps it), Ctrl+Shift+P pause, Ctrl+O data files, Ctrl+Shift+D
+  diagnostics, Ctrl+Shift+L theme, Ctrl+8/Ctrl+9 fit width/page, F6
+  between panes, F1 or Ctrl+/ for the list. Buttons name their
+  shortcuts in their tooltips and to assistive technology.
+- **Added.** Studio: zoom presets — **Fit width** (the new default;
+  two pages side by side when both fit at 70% or more),
+  **Fit page** and **100%**, which is now the page's true size (8.5 in);
+  Ctrl+wheel or a pinch over the pages zooms the preview; the limit is
+  200% (was the equivalent of 124%), and zooming past the pane's width
+  scrolls instead of doing nothing. The fits stop at 150%, the preview
+  images' own size, so a wide screen does not show an enlarged, blurred
+  page unless you zoom in.
+- **Added.** Studio: the resume card shows how full the last page is
+  ("last page 72% full"), measured by the layout check that already
+  runs on every render; after a Build it keeps the last render's
+  figure until the next render.
+- **Changed.** Studio: settings (theme, zoom, the snapshot and tests
+  checkboxes, highlight, Diagnostics) are kept by the server in
+  `dist/.studio-prefs.json` (`GET`/`PUT /api/prefs`, known keys only)
+  and written into the page it serves, so the desktop app no longer
+  forgets them at every launch — its page comes from a new port each
+  time, and the browser's storage belongs to the port. The theme is a
+  System / Light / Dark choice (was a light/dark toggle that forgot
+  "System"), applied before the first paint.
+- **Changed.** Studio: render timings, the console and the engine's
+  details are one **Diagnostics** section, closed until a render or
+  build fails; the top bar keeps the project and whether Chromium is
+  warm. "Open dist/" is now "Show output folder".
+- **Changed.** Studio: the busy pulse no longer flashes for renders
+  under 400 ms, the build progress bar no longer stands at a made-up
+  60%, "Built · 5s ago" keeps counting, an empty preview says to edit
+  and save the YAML (with a button to open it) instead of "press
+  Build", and building the document not on screen switches to it.
+- **Added.** Warnings for a heading that prints over nothing: a list
+  `- group:` with no lines under it (including a list made only of
+  groups) and an education section with `items: []`. Such files
+  still build.
+- **Fixed.** `recipient: []` in a letter was accepted by the build but
+  flagged by the editor's schema. Both now read it as no address
+  block, as leaving the key out does.
+- **Fixed.** A first or last name starting with `&` or `<` wrote a
+  favicon that was not valid SVG, so the tab showed no icon.
+- **Fixed.** A name kept in its own script in the PDF's file name
+  could carry invisible text-direction controls (U+202A–202E,
+  U+2066–2069), which make a file name display in another order, and
+  a long CJK name could exceed the 255 bytes Linux and macOS allow, so
+  the PDF could not be written. Both are now removed or shortened;
+  every name that was already valid gives the same file name as before
+  (checked over 204 names with accents and CJK).
+- **Fixed.** Output written to the Python worker's stdout by C code,
+  without a newline, made the Studio drop the next reply and wait for
+  it forever. The worker now keeps its replies on a private copy of the
+  pipe and sends fd 1 to stderr, and the engine finds a reply after
+  such output on the same line and logs the output. No measurable
+  latency change (frame write 2.0–2.2 ms for 600 KB either way).
+- **Fixed.** A page far larger than Letter (a Legal or A4 `@page`, for
+  example) was cropped to Letter without a word, cutting off whatever
+  lay beyond the top and right edges. More than 1 pt of excess now
+  warns; Chromium's own rounding (0.12 pt) stays quiet.
+- **Fixed.** The system-font warning missed text drawn inside a Form
+  XObject, which is where Chromium puts text drawn with opacity or a
+  blend mode.
+- **Fixed.** On Windows, the power-throttling opt-out could reach
+  processes that are not the Studio's: an orphan whose parent's pid
+  had been reused by one of the Studio's processes looked like its
+  child. A process older than its supposed parent is now skipped.
+- **Security.** `python build/snapshot_pdf.py --update` could copy
+  your résumé into the committed template fixture. It took the data
+  source from `dist/pdf_meta.json`, which every Studio preview
+  rewrites: after a Build of your data and a preview of the template,
+  it named the template's fixture, and when both builds used the same
+  file name (a profile still carrying the template's name, as a new
+  copy does) it copied your PDF there. Reproduced in a Linux sandbox.
+  Builds now record which PDF they wrote, from which data source and
+  with which SHA-256, in `dist/outputs.json`; the snapshot tool goes by
+  that record and refuses a PDF whose bytes no longer match it.
+- **Fixed.** The stale-PDF cleanup deleted PDFs of yours. Any
+  `…_Resume.pdf` or `…_Cover_Letter.pdf` in `dist/` matched its
+  pattern, so a tailored copy saved as `dist/Acme_tailored_Resume.pdf`
+  went with the next build. It now deletes only names the build
+  record says a build wrote, and the names older versions wrote.
+- **Fixed.** Running `node resume.js` or `node letter.js` while the
+  Studio was previewing broke the build or its output: both write the
+  same files in `dist/`, and the build read the preview's layout (6 of
+  6 builds failed with previews running back to back, in a Linux
+  sandbox), stamped its metadata, or deleted the PDF it had just
+  written. They now take turns through `dist/.lock`. A lock whose
+  process has gone, or that has not been refreshed for 15 s, is taken
+  over, so a crash never leaves `dist/` locked; a build that has to
+  wait says for what. Taking the lock costs a preview about 0.04 ms
+  (no measurable change in a full preview, n=60).
+- **Fixed.** A build stopped while it wrote the PDF (Ctrl+C, the Studio
+  closing, a full disk) left a truncated PDF under the name you attach.
+  The PDF is written to a temporary file and moved into place.
+- **Fixed.** When the snapshot test crashed (a fixture that is not a
+  PDF, say), the build reported "Snapshot differs" and advised
+  `--update`, which would have replaced the fixture with an uncompared
+  PDF. `snapshot_pdf.py` now exits 2, "nothing was compared", for any
+  failure to compare, and 1 only for a real difference.
+- **Fixed.** The third panel of a snapshot diff image, the amplified
+  difference, came out black: it divided each difference by about 32
+  instead of multiplying it by 8.
+- **Fixed.** `PYTHON` written with quotes, as cmd.exe keeps them
+  (`set PYTHON="C:\Program Files\…\python.exe"`), was not found. The
+  quotes are removed. An interpreter older than the Python 3.10 the
+  README asks for is now refused before the build starts, by name,
+  instead of failing halfway through with a traceback; auto-detection
+  skips one and tries the next.
+- **Fixed.** The test runner showed a suite that printed "N failed"
+  but exited 0 as passed, reported a suite printing more than 1 MB as
+  "could not run", and had no time limit, so one hung suite hung
+  `node resume.js`. A partial skip now keeps its pass count.
+- **Fixed.** `schemas/letter.schema.json` disagreed with the build: it
+  accepted blank paragraphs and recipient lines the build refuses, and
+  flagged unknown keys in `letter` that the build only warns about.
+- **Fixed.** Comments in `data/resume_default.yml` and
+  `data/_profile_default.yml` named a `node render.js` that does not
+  exist and said nothing reads the template profile.
 - **Security.** A scheme-less `href` was resolved against the page
   Chromium printed, so the PDF's link, and the description a screen
   reader announces for it, held the full path of the project folder
   on your computer, which on many machines includes your Windows user
-  name. That is what the change above stops.
+  name. The first Breaking change above stops it.
 - **Fixed.** Leaving out an optional key crashed the build with
   `UndefinedError`: a contact row's `href`, `contact.address`, and in
   the letter `meta`, `meta.description` and `recipient`. They now
@@ -87,7 +270,9 @@ WCAG contrast minimum, and it no longer loads anything from Google.*
   real data.
 - **Fixed.** A sidebar list could end a page on a `- group:`
   sub-heading, with its items on the next page. It happened for 5 of
-  29 list lengths tried; the group heading now moves with its items.
+  29 list lengths tried; the group heading now moves with its items,
+  except where that would leave fewer than three items under the
+  block's heading — then the list splits as before rather than failing.
 - **Changed.** Layout errors say what to do. Over `meta.maxPages`, the
   message gives the number of pages the content needs. A header taller
   than the page is named as such, instead of being blamed on the first
@@ -115,15 +300,16 @@ WCAG contrast minimum, and it no longer loads anything from Google.*
   **Re-render** did not help. The next render now starts a new one.
 - **Fixed.** Chromium could be closed while the window was showing, when
   the window came back just as the five-minute hidden timer ran out.
+- **Fixed.** Closing the Studio during a render could start a new
+  Chromium after the old one was closed, left without an owner. A
+  Chromium killed while starting was reported with advice to reinstall
+  it; the message now says it closed, and the next render retries.
 - **Fixed.** A failed render left every other Studio window showing
   "Rendering" for good, and a save made while another window was
   rendering was never shown there.
 - **Fixed.** Each live edit briefly showed the previous page before
   the new one, and the page could go blank for a frame while the new
   image decoded (19 of 40 edits in a Linux sandbox, now 0).
-- **Fixed.** Every failure was labelled "Invalid YAML", and the line
-  and column of a YAML error reached only the console. The error bar
-  now shows where the error is, and other failures say "Render failed".
 - **Fixed.** With the engine unreachable, **Re-render** left the Studio
   on "Rendering"; after the engine came back, the window kept saying
   "disconnected". Saves made while **Pause** was on were not shown when
@@ -133,14 +319,60 @@ WCAG contrast minimum, and it no longer loads anything from Google.*
 - **Fixed.** The Studio's server now shuts down properly when its
   console window is closed (`SIGHUP`, and `SIGBREAK` on Windows). It
   used to leave its Python worker running.
+- **Fixed.** One stuck step stopped the Studio for good: a Python
+  worker that stopped answering, a page whose fonts never finished
+  loading, a Chromium page busy in a loop, or a Build that never
+  ended, held every later preview and Build behind it until the app
+  was restarted. Each now has a deadline (a minute for the worker,
+  30 seconds for a Chromium step, ten minutes for a Build); past it,
+  the stuck process is stopped, the request fails saying which one,
+  and the next render starts a fresh one.
+- **Fixed.** A crashed Chromium page (its renderer gone, Chromium
+  itself still running) made every later render fail with "Page
+  crashed" until the app was restarted. The next render now opens a
+  new page.
+- **Fixed.** Editors' own files in `data/` and `styles/` set off
+  renders, most of them while you were still typing: vim's swap files,
+  Emacs's lock and autosave files, backups ending in `~`, JetBrains'
+  and other atomic-save temp files, Word's `~$` lock. Only `.yml`,
+  `.yaml` and `.scss` files count now, and an atomic save still
+  renders once.
+- **Fixed.** A dropped file could be saved under a name Windows
+  reserves for a device (`CON.yml`, `nul.backup.yml`, `COM1.yaml`), or
+  with a `:` that writes a hidden stream of another file instead
+  (`x.yml:y.yml`). Such names, control characters and the other
+  characters Windows does not allow are refused.
+- **Fixed.** Chromium could be closed under a visible Studio window,
+  or kept open while it was minimized, by another Studio page: a
+  second browser tab, or one another website opened with a link. Each
+  page now counts for itself; Chromium is closed only when the desktop
+  window is minimized or every open page is hidden.
+- **Fixed.** A Studio window that stopped reading its event stream had
+  every page image queued for it in memory without limit (100 MB after
+  100 renders). It is now disconnected past 16 MB, and reconnects and
+  catches up by itself. A preview asked for at a scale that is not a
+  number, or a page list that is not a list, failed in the worker; a
+  huge scale asked it for a bitmap of gigabytes. Scale is now kept
+  between 0.25 and 4, and bad page numbers are ignored.
+- **Fixed.** `/api/status` said the Studio was idle while a Build was
+  still running, once a preview queued alongside it had finished.
 - **Changed.** The Studio works from the keyboard: the menu items,
   document cards and "Show" links are buttons, dialogs take focus and
   give it back, a render no longer moves focus away from the control
-  you were on, and status changes are announced to screen readers.
+  you were on (the Build button you pressed included), and status
+  changes are announced to screen readers.
   Secondary text is darker, so every text colour meets WCAG's 4.5:1
   minimum in both themes. The Pause button keeps its label and shows
   a pressed state instead of turning into "Resume". axe-core found
   46 problems in a Linux sandbox; it now finds none.
+  In Windows' high-contrast themes the page outline, the open
+  document, the status marks, the pressed Pause button and the
+  progress bar stay visible, and a state is told by the mark's shape
+  as well as its colour. A missing data file says "missing" instead
+  of only turning red. A screen reader hears "Resume, page 1 of 2"
+  instead of "Page 1", the number of pages when a preview is up to
+  date, and the zoom level as it changes. **Ctrl +** and **Ctrl −**
+  zoom the whole window (on Windows, Ctrl and the mouse wheel too).
 - **Changed.** The Studio's interface uses the vendored Manrope and
   Newsreader instead of Google Fonts, so opening it sends nothing to
   Google and works the same offline. A slow network used to hold up
@@ -148,7 +380,29 @@ WCAG contrast minimum, and it no longer loads anything from Google.*
 - **Changed.** Previews arrive sooner: the first changed page is sent
   as soon as it is drawn, and a needless image copy is gone. In a
   Linux sandbox, a save that changes page 1 reached the screen in
-  245 ms instead of 275 (median, n=30).
+  245 ms instead of 275 (median, n=30). Telling which pages changed
+  now hashes each page's PNG rather than its pixels, and the PDF is
+  opened once per preview instead of twice: 9 ms less in the Python
+  worker per preview (n=150).
+- **Changed.** The Studio window opens where it was closed: same size,
+  same place, maximized if it was. The first launch still opens
+  maximized, and a window last seen on a monitor that is no longer
+  connected is placed by the system.
+- **Fixed.** In the installed app the Studio's server ran in a console
+  window of its own, on screen for as long as the app ran.
+- **Fixed.** When the app was killed (Task Manager, a crash), or its
+  server was stopped before it had closed Chromium and the Python
+  worker, those kept running with nothing attached. On Windows
+  everything the server starts now ends with the app, and a slow but
+  working shutdown gets 6 s instead of being cut off at 2.
+- **Fixed.** Minimizing the window and restoring it quickly could
+  leave the server believing the window was hidden, so Chromium was
+  closed under a visible window five minutes later. A report of the
+  window's state that fails is now tried again.
+- **Security.** The app window goes only to the Studio's own pages: a
+  link, redirect or script that tried to take it elsewhere is refused,
+  and nothing can open a second window. The shell sets a
+  Content-Security-Policy on its loading page too.
 - **Security.** The Studio's server refuses cross-site requests that a
   browser marks as such (`Sec-Fetch-Site`) and sends a
   Content-Security-Policy, `X-Content-Type-Options`,
@@ -171,7 +425,15 @@ WCAG contrast minimum, and it no longer loads anything from Google.*
   that check also runs on GitHub.
 - **Added.** `tests/test_failure_recovery.js`: a killed Chromium, the
   window shown during a pending release, unreadable entries in
-  `data/`, and a failed render's end event.
+  `data/`, a failed render's end event, a stuck page, a stuck Build
+  and a crashed page.
+- **Added.** `tests/test_dist_lock.js` (builds and previews taking
+  turns in `dist/`) and `tests/test_run_tests.js` (how the test runner
+  reads a suite's result).
+- **Changed.** The GitHub workflows pin each action to a commit rather
+  than a tag, and do not leave the job's token in the checkout. A
+  second job runs the tests on Windows and type-checks the Tauri shell
+  (`cargo check`), which nothing compiled before a release.
 
 ---
 

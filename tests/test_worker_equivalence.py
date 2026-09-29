@@ -612,5 +612,41 @@ class OptionalKeysAndErrorsTest(unittest.TestCase):
         self.assertTrue(any("skills" in line for line in frame["diagnostics"]))
 
 
+class FrameStreamTest(unittest.TestCase):
+    """Nothing but frames reaches the worker's stdout pipe.
+
+    handle() captures Python-level prints; a C extension writing straight
+    to fd 1 bypassed that and glued its text to the front of the next
+    frame, which the engine then dropped, leaving the request waiting
+    forever. The worker now keeps the pipe on a private descriptor and
+    points fd 1 at stderr. os.write(1, …) stands in for the C library.
+    """
+
+    def test_a_write_to_fd_1_goes_to_stderr_not_into_a_frame(self):
+        script = (
+            "import os, sys\n"
+            "sys.path.insert(0, 'build')\n"
+            "import worker\n"
+            "worker.OPS['leak'] = lambda req: (os.write(1, b'written to fd 1'), {})[1]\n"
+            "sys.exit(worker.main())\n"
+        )
+        requests = "".join(json.dumps(r) + "\n" for r in (
+            {"id": 1, "op": "leak"}, {"id": 2, "op": "shutdown"}))
+        proc = subprocess.run(
+            [sys.executable, "-B", "-c", script], input=requests,
+            cwd=str(PROJECT.root), capture_output=True, text=True,
+            encoding="utf-8", timeout=TIMEOUT,
+        )
+        # split("\n"), not splitlines(): splitlines() also breaks at RS.
+        lines = [line for line in proc.stdout.split("\n") if line]
+        self.assertTrue(lines, proc.stderr)
+        self.assertTrue(all(line.startswith(FRAME_PREFIX) for line in lines),
+                        f"stdout carried something other than frames: {lines!r}")
+        replies = [json.loads(line[1:]) for line in lines]
+        self.assertEqual([r["id"] for r in replies], [None, 1, 2])
+        self.assertTrue(replies[1]["ok"])
+        self.assertIn("written to fd 1", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

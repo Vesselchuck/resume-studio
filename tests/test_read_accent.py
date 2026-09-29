@@ -35,6 +35,34 @@ def silenced():
         yield
 
 
+class TestWriteFavicon(unittest.TestCase):
+    """The favicon is XML built from the name's initials."""
+
+    def svg_for(self, first, last):
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "favicon.svg"
+            build.write_favicon({"name": {"first": first, "last": last}}, out, "#123456")
+            text = out.read_text(encoding="utf-8")
+        return ET.fromstring(text), text     # raises on ill-formed XML
+
+    def test_initials_that_are_markup_are_escaped(self):
+        for first, last, shown in (("&Co", "Lee", "&L"), ("<b>", "Ann", "<A"),
+                                   ("Zoe", '"Q"', 'Z"')):
+            with self.subTest(first=first):
+                root, _ = self.svg_for(first, last)
+                text = root.find("{http://www.w3.org/2000/svg}text").text
+                self.assertEqual(text, shown)
+
+    def test_a_control_character_is_left_out(self):
+        root, _ = self.svg_for("\x01Gaius", "Caesar")
+        self.assertEqual(root.find("{http://www.w3.org/2000/svg}text").text, "C")
+
+    def test_ordinary_initials_are_unchanged(self):
+        _, text = self.svg_for("Gaius", "Caesar")
+        self.assertIn('text-anchor="middle">GC</text>', text)
+
+
 class TestReadAccent(unittest.TestCase):
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())

@@ -47,15 +47,25 @@ PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1
 PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
 PROCESS_INFORMATION_CLASS_POWER_THROTTLING = 4   # ProcessPowerThrottling
 PROCESS_SET_INFORMATION = 0x0200
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 TH32CS_SNAPPROCESS = 0x00000002
 INVALID_HANDLE_VALUE = -1
 
 
-def descendants(parents, root):
+def descendants(parents, root, created=None):
     """`root` and every process below it, from {pid: parent_pid}.
 
     Breadth-first, each pid once, so a cycle in stale parent ids (a
     parent pid reused after its process exited) cannot loop.
+
+    `created(pid)` gives a process's creation time, or None when it is
+    not known. Windows records the parent's pid, not the parent, and
+    never updates it: when a parent exits and its pid is handed to a
+    new process, the old process's orphans look like the new one's
+    children. A real child cannot be older than its parent, so a
+    "child" created before the process it names is skipped. Without
+    `created` (or where a time is unknown) every recorded edge is
+    trusted, as before.
     """
     children = {}
     for pid, parent in parents.items():
@@ -65,10 +75,16 @@ def descendants(parents, root):
     while queue:
         pid = queue.pop(0)
         out.append(pid)
+        born = created(pid) if created else None
         for child in sorted(children.get(pid, ())):
-            if child not in seen:
-                seen.add(child)
-                queue.append(child)
+            if child in seen:
+                continue
+            if born is not None:
+                child_born = created(child)
+                if child_born is not None and child_born < born:
+                    continue            # an orphan of an earlier holder of `pid`
+            seen.add(child)
+            queue.append(child)
     return out
 
 
@@ -114,6 +130,46 @@ def _process_parents():
         return parents
     finally:
         kernel32.CloseHandle(snap)
+
+
+def _creation_times():
+    """A pid -> creation time (FILETIME ticks) lookup, None when unknown.
+
+    Queried per pid as descendants() walks, so only the tree's own
+    processes and their candidate children are opened, not the whole
+    process table. PROCESS_QUERY_LIMITED_INFORMATION is enough for
+    GetProcessTimes and is granted for most processes of other users,
+    and a pid that cannot be opened is simply not checked.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + \
+        [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    cache = {}
+
+    def created(pid):
+        if pid in cache:
+            return cache[pid]
+        value = None
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            try:
+                times = [wintypes.FILETIME() for _ in range(4)]
+                if kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                    value = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            finally:
+                kernel32.CloseHandle(handle)
+        cache[pid] = value
+        return value
+
+    return created
 
 
 def _opt_out(pids):
@@ -170,7 +226,7 @@ def opt_out_tree(root):
         return {"supported": False, "applied": [], "failed": [],
                 "reason": f"not Windows ({sys.platform})"}
     try:
-        pids = descendants(_process_parents(), int(root))
+        pids = descendants(_process_parents(), int(root), _creation_times())
         applied, failed = _opt_out(pids)
         return {"supported": True, "applied": applied, "failed": failed}
     except (OSError, AttributeError, ValueError) as err:

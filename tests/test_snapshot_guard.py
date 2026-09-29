@@ -17,12 +17,17 @@ What is pinned:
   • --update-all strips RESUME_DATA_FILE / LETTER_DATA_FILE from the
     child build's environment, and refuses to copy a pass whose
     manifest reports a different data source than the one it asked for.
+  • The data source is the one the BUILD recorded beside its PDF
+    (dist/outputs.json), not dist/pdf_meta.json, which a preview
+    rewrites; a PDF whose bytes changed since is refused.
+  • Exit 1 means a visible difference and nothing else.
 
 Every path the tool writes to is redirected into a temp dir; the real
 tests/fixtures/ is never touched.
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import shutil
@@ -56,10 +61,12 @@ class SandboxedSnapshot(unittest.TestCase):
         self.fixtures.mkdir(parents=True)
         (self.tmp / "data").mkdir()
         self.meta = self.dist / "pdf_meta.json"
+        self.record = self.dist / "outputs.json"
         patches = {
             "ROOT": self.tmp,
             "FIXTURE_DIR": self.fixtures,
-            "PDF_META_FILE": self.meta,
+            "DIST_DIR": self.dist,
+            "RECORD_FILE": self.record,
             "FIXTURE_DEFAULT": self.fixtures / "expected_resume.pdf",
             "FIXTURE_MINE": self.fixtures / "expected_resume.mine.pdf",
         }
@@ -74,12 +81,25 @@ class SandboxedSnapshot(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def write_build(self, data_source, content=b"%PDF-fake"):
-        """Leave dist/ as a build of `data_source` would."""
+        """Leave dist/ as a build of `data_source` would: the metadata,
+        the PDF, and the record resume.js writes beside it."""
         meta = {"output_stem": self.STEM}
         if data_source is not None:
             meta["data_source"] = data_source
         self.meta.write_text(json.dumps(meta), encoding="utf-8")
         (self.dist / f"{self.STEM}.pdf").write_bytes(content)
+        self.record.write_text(json.dumps({"resume": {
+            "pdf": f"{self.STEM}.pdf",
+            "data_source": data_source,
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "written": [f"{self.STEM}.pdf"],
+        }}), encoding="utf-8")
+
+    def preview(self, data_source):
+        """What a Studio preview does: rewrite the metadata, nothing else."""
+        self.meta.write_text(json.dumps(
+            {"output_stem": self.STEM, "data_source": data_source}),
+            encoding="utf-8")
 
     def run_main(self, *args):
         err = io.StringIO()
@@ -154,6 +174,92 @@ class TestMainRefusesExplicit(SandboxedSnapshot):
         code, _ = self.run_main("--update")
         self.assertEqual(code, 0)
         self.assertEqual(self.fixture_files(), ["expected_resume.mine.pdf"])
+
+
+class TestTheRecordNotThePreview(SandboxedSnapshot):
+    """A preview rewrites pdf_meta.json; only a Build writes the PDF.
+
+    Reproduced end to end before the fix: a profile still carrying the
+    template's name, a Build of data/resume.yml, then a preview of the
+    template in the Studio. pdf_meta.json then said 'default' and named
+    the same file, and --update copied the private résumé into the
+    committed tests/fixtures/expected_resume.pdf.
+    """
+
+    def test_update_follows_the_build_not_the_last_preview(self):
+        self.write_build("mine", content=b"%PDF-yours")
+        self.preview("default")
+        code, _ = self.run_main("--update")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.fixture_files(), ["expected_resume.mine.pdf"])
+        self.assertEqual(
+            (self.fixtures / "expected_resume.mine.pdf").read_bytes(),
+            b"%PDF-yours")
+
+    def test_a_pdf_changed_since_the_build_is_refused(self):
+        self.write_build("default")
+        (self.dist / f"{self.STEM}.pdf").write_bytes(b"%PDF-someone-else")
+        code, err = self.run_main("--update")
+        self.assertEqual(code, 2)
+        self.assertIn("not the PDF the last build recorded", err)
+        self.assertEqual(self.fixture_files(), [])
+
+    def test_no_record_means_nothing_to_compare_or_copy(self):
+        self.write_build("default")
+        self.record.unlink()
+        for args in (("--update",), ("--auto-bootstrap",), ()):
+            with self.subTest(args=args):
+                code, _ = self.run_main(*args)
+                self.assertEqual(code, 2)
+        self.assertEqual(self.fixture_files(), [])
+
+
+class TestExitCodes(SandboxedSnapshot):
+    """Exit 1 means "the PDF differs", and nothing else may use it.
+
+    resume.js answers 1 with "Snapshot differs" and advice to run
+    --update. A comparison that never ran must not get that advice:
+    following it overwrites the fixture with an uncompared PDF.
+    """
+
+    def test_an_unrecognized_data_source_is_not_a_difference(self):
+        self.write_build("local")
+        code, err = self.run_main()
+        self.assertEqual(code, 2)
+        self.assertIn("does not recognize", err)
+
+    def test_a_crash_is_not_a_difference(self):
+        self.write_build("default")
+        (self.fixtures / "expected_resume.pdf").write_bytes(b"x")
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["snapshot_pdf.py"]), \
+                mock.patch.object(snapshot_pdf, "main",
+                                  side_effect=RuntimeError("pdfium says no")), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            code = snapshot_pdf.cli()
+        self.assertEqual(code, 2)
+        self.assertIn("pdfium says no", err.getvalue())
+        self.assertIn("Nothing was compared", err.getvalue())
+
+
+class TestDiffImage(SandboxedSnapshot):
+    def test_the_amplified_panel_is_brighter_than_the_difference(self):
+        """The third panel used ImageChops.multiply, which divides by 255:
+        a difference of 60 came out as 1, a black panel."""
+        try:
+            from PIL import Image, ImageChops
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        a = Image.new("RGB", (100, 100), (255, 255, 255))
+        b = a.copy()
+        b.paste((195, 195, 195), (0, 0, 50, 50))
+        ok, _, _, path = snapshot_pdf.diff_images(Image, ImageChops, a, b, 1)
+        self.assertFalse(ok)
+        panel = Image.open(path).crop((200, 0, 300, 100))
+        self.assertEqual(panel.getpixel((10, 10)),
+                         (min(255, 60 * snapshot_pdf.DIFF_GAIN),) * 3)
+        self.assertEqual(panel.getpixel((80, 80)), (0, 0, 0))
 
 
 class TestUpdateAll(SandboxedSnapshot):

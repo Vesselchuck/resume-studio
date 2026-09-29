@@ -36,7 +36,8 @@ def good_data():
                  "bullets": ["x", "y"]},
                 {"id": "job-two", "title": "B", "date": "2019", "gap": True},
             ]},
-            {"type": "education", "heading": "Education", "items": []},
+            {"type": "education", "heading": "Education",
+             "items": [{"title": "BA"}]},
         ],
     }
 
@@ -594,14 +595,82 @@ class TestValidateDataGaps(unittest.TestCase):
                 self.rejects(d, "contact.rows[0]",
                              "path on this computer" if href.startswith("C:") else "not allowed")
 
+    # Only https:, http:, mailto: and tel: are links: a viewer hands any
+    # other scheme to whatever the reader's system registered for it.
+    def test_href_schemes_outside_the_allowlist_are_errors(self):
+        for href in ("about:blank", "blob:x", "smb://host/share",
+                     "search-ms:query=x", "ms-msdt:/id", "ftp://x.example"):
+            with self.subTest(href=href):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                self.rejects(d, "contact.rows[0]", "not allowed")
+
+    def test_href_with_nothing_after_the_scheme_is_an_error(self):
+        for href, example in (("https:", "https://example.com/me"),
+                              ("https://", "https://example.com/me"),
+                              ("mailto:", "mailto:you@example.com"),
+                              ("tel: ", "tel:+15550100")):
+            with self.subTest(href=href):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                self.rejects(d, "contact.rows[0]", "no address after", example)
+
+    def test_host_and_port_reads_as_a_scheme_and_is_an_error(self):
+        # `localhost:3000` parses as the scheme "localhost": a dead link.
+        for href in ("localhost:3000", "example.com:8080/x"):
+            with self.subTest(href=href):
+                d = good_data()
+                d["sidebar"]["blocks"][0]["rows"][0]["href"] = href
+                self.rejects(d, "no scheme", f'"https://{href}"')
+
+    def test_scheme_less_advice_is_the_address_it_most_likely_is(self):
+        for href, fixed in (("//example.com/me", '"https://example.com/me"'),
+                            ("you@example.com", '"mailto:you@example.com"'),
+                            ("www.example.com", '"https://www.example.com"')):
+            with self.subTest(href=href):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                self.rejects(d, "no scheme", fixed)
+
     def test_ordinary_links_and_an_empty_href_pass(self):
         for href in ("https://example.com", "mailto:a@b.c", "tel:+15551234567",
-                     "http://x.y/z", ""):
+                     "http://x.y/z", "HTTPS://Example.com", " https://x.y ", ""):
             with self.subTest(href=href):
                 d = good_data()
                 d["contact"] = {"rows": [{"value": "v", "href": href}]}
                 d["sidebar"]["blocks"][0]["rows"][0]["href"] = href
                 validate_data(d)  # should not raise
+
+
+class TestSharedIdsAndEmptyHeadings(unittest.TestCase):
+    def test_a_job_id_that_is_also_a_block_id_is_an_error(self):
+        # Both become an HTML id on the same page.
+        d = good_data()
+        d["mainColumn"][1]["jobs"][0]["id"] = "key-skills"
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        self.assertIn("mainColumn[experience].jobs[0]", str(ctx.exception))
+        self.assertIn("sidebar block's id", str(ctx.exception))
+
+    def test_a_list_of_only_groups_warns_for_each(self):
+        d = good_data()
+        d["sidebar"]["blocks"][1]["items"] = [{"group": "A"}, {"group": "B"}]
+        warnings = validate_data(d)
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("sidebar.blocks[1].items[0]: group 'A' has no entries", warnings[0])
+        self.assertIn("sidebar.blocks[1].items[1]: group 'B' has no entries", warnings[1])
+
+    def test_a_group_with_lines_under_it_is_quiet(self):
+        d = good_data()
+        d["sidebar"]["blocks"][1]["items"] = [{"group": "A"}, "x", {"group": "B"}, "y"]
+        self.assertEqual(validate_data(d), [])
+
+    def test_an_empty_education_list_warns_that_the_heading_prints_alone(self):
+        d = good_data()
+        d["mainColumn"][2]["items"] = []
+        self.assertEqual(validate_data(d), [
+            "mainColumn[education]: 'items' is empty, so the 'Education' "
+            "heading prints with nothing under it"])
 
 
 if __name__ == "__main__":

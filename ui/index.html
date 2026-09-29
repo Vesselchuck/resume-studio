@@ -31,6 +31,9 @@
   --err:#9d382a;
   --err-wash:#f6e3df;
   --paper:#ffffff;
+  /* Drawn on the paper, which is white in both themes: one colour, dark
+     enough on white (7.9:1), whatever the chrome around it is. */
+  --change:#1f6f4a;
   --paper-shadow:0 1px 2px rgba(20,30,20,.10), 0 8px 24px rgba(20,30,20,.10);
   --titlebar:#dfe3db;
   --radius:9px;
@@ -103,7 +106,7 @@ body{
 }
 button{font:inherit;color:inherit;cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
-@media (prefers-reduced-motion: reduce){*{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}
+@media (prefers-reduced-motion: reduce){*,::before,::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}
 /* Read by screen readers, not shown. */
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
@@ -141,6 +144,13 @@ button{font:inherit;color:inherit;cursor:pointer}
   font-family:var(--mono);font-size:10.5px;color:var(--muted-2);
   letter-spacing:.02em;padding-right:2px;
 }
+/* Theme: a radio group (System / Light / Dark), per the APG pattern. */
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:7px;overflow:hidden;margin-left:8px;background:var(--panel)}
+.seg button{background:none;border:0;border-right:1px solid var(--rule-soft);padding:3px 9px;font-size:11px;color:var(--muted)}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--ink);background:var(--panel-2)}
+.seg button[aria-checked="true"]{background:var(--accent-wash);color:var(--ink);font-weight:700}
+.seg button:focus-visible{outline-offset:-2px}
 
 /* ---------- 3-pane grid ---------- */
 .panes{
@@ -170,7 +180,7 @@ button{font:inherit;color:inherit;cursor:pointer}
   transition:border-color .15s, box-shadow .15s;
   position:relative;
 }
-.doc.is-active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.doc.is-active{border-color:var(--accent);outline:1px solid var(--accent)}
 .doc-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 /* The card's name is the button that selects it: the card is clickable
    anywhere, and this is the same action for the keyboard. */
@@ -188,6 +198,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .doc-src .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .doc-src.missing{color:var(--err)}
 .doc-src.missing svg{color:var(--err)}
+.doc-src .miss{flex:none;font-family:var(--ui);font-weight:700}
 
 .status{
   display:inline-flex;align-items:center;gap:6px;
@@ -195,7 +206,11 @@ button{font:inherit;color:inherit;cursor:pointer}
   padding:2.5px 8px 2.5px 6px;border-radius:999px;
   border:1px solid transparent;
 }
-.status i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.status i{width:6px;height:6px;border-radius:50%;border:3px solid currentColor;flex:none}
+/* Not colour alone (1.4.1): failed is a diamond, idle a ring. Borders, not
+   backgrounds, so the marks survive forced colors (backgrounds go to Canvas). */
+.status.err i{border-radius:1px;transform:rotate(45deg);width:7px;height:7px;border-width:3.5px}
+.status.idle i{border-width:1.5px}
 .status.ok{color:var(--accent);background:var(--accent-wash);border-color:color-mix(in srgb,var(--accent) 22%, transparent)}
 .status.warn{color:var(--warn);background:var(--warn-wash);border-color:color-mix(in srgb,var(--warn) 25%, transparent)}
 .status.err{color:var(--err);background:var(--err-wash);border-color:color-mix(in srgb,var(--err) 25%, transparent)}
@@ -219,18 +234,23 @@ button{font:inherit;color:inherit;cursor:pointer}
 .btn:hover{background:var(--panel-2)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.primary:hover{filter:brightness(1.08)}
-.btn.primary[disabled]{opacity:.45;cursor:not-allowed;filter:none}
+.btn.primary[disabled],.btn.primary[aria-disabled="true"]{opacity:.45;cursor:not-allowed;filter:none}
 .btn.wide{width:100%}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--muted);padding:5px 7px}
 .btn.ghost:hover{background:var(--panel-2);color:var(--ink)}
 .btn.tiny{padding:4px 8px;font-size:11px;font-weight:500}
 .btn.ghost[aria-pressed="true"]{background:var(--panel-2);border-color:var(--rule);color:var(--ink)}
+.btn.ghost[aria-disabled="true"]{opacity:.4;cursor:default}
 .doc-actions{display:flex;gap:7px}
 .doc-actions .btn.primary{flex:1}
 
-/* progress inside a card */
-.track{height:3px;border-radius:2px;background:var(--rule-soft);overflow:hidden}
-.track span{display:block;height:100%;background:var(--accent);width:0;transition:width .22s linear}
+/* progress inside a card: indeterminate. A build does not report how
+   far along it is, so a bar that stood at 60% was a guess dressed as a
+   measurement; this one says only "working". */
+.track{height:3px;border-radius:2px;background:var(--rule-soft);overflow:hidden;position:relative}
+.track span{position:absolute;top:0;bottom:0;left:0;width:35%;background:var(--accent);animation:indet 1.3s ease-in-out infinite}
+@keyframes indet{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+@media (prefers-reduced-motion: reduce){.track span{animation:none;width:100%;opacity:.55}}
 
 /* outputs tray */
 .tray{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--rule-soft);padding-top:9px}
@@ -270,7 +290,8 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 }
 .canvas-title{font-family:var(--display);font-size:13.5px;color:var(--muted)}
 .canvas-title b{color:var(--ink);font-weight:600}
-.canvas-tools{margin-left:auto;display:flex;align-items:center;gap:4px}
+.canvas-tools{margin-left:auto;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.canvas-tools .tsep{width:1px;height:16px;background:var(--rule);margin:0 4px}
 .zoom{font-family:var(--mono);font-size:11px;color:var(--muted);min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
 .stale{
   font-size:11px;color:var(--warn);background:var(--warn-wash);
@@ -283,20 +304,33 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
   background:var(--accent-wash);border:1px solid color-mix(in srgb,var(--accent) 22%, transparent);
   padding:2.5px 9px;border-radius:999px;
 }
-.liveflag i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.liveflag i{width:6px;height:6px;border-radius:50%;border:3px solid currentColor;flex:none}
+.liveflag.paused i{border-width:1.5px}
 .liveflag.busy i{animation:pulse .6s ease-in-out infinite}
 .liveflag.paused{color:var(--muted);background:var(--panel-2);border-color:var(--rule-soft)}
 .liveflag .ms{font-family:var(--mono);font-weight:500;font-variant-numeric:tabular-nums}
 
-/* held render (invalid yaml) */
-.holdbar{
-  flex:none;display:flex;align-items:center;gap:9px;
-  padding:7px 14px;font-size:11.5px;
-  color:var(--err);background:var(--err-wash);
-  border-bottom:1px solid color-mix(in srgb,var(--err) 25%, transparent);
+/* A render that failed, shown where you are looking: on top of the
+   preview, which stays underneath dimmed as the last good render. It
+   stays until the next render succeeds — it is state, not news, so
+   not a toast. Where the error is comes first, because that is where
+   you go next. */
+.erroverlay{
+  flex:none;margin:12px 16px 0;padding:10px 12px;
+  border:1px solid color-mix(in srgb,var(--err) 40%, transparent);border-left-width:4px;
+  background:var(--err-wash);border-radius:var(--radius);
+  box-shadow:0 6px 18px rgba(0,0,0,.10);
+  display:flex;flex-direction:column;gap:6px;
 }
-.holdbar b{font-family:var(--mono);font-weight:500;font-size:11px}
-.holdbar .spacer{flex:1}
+.erroverlay.notice{border-color:color-mix(in srgb,var(--warn) 45%, transparent);background:var(--warn-wash)}
+.eo-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.eo-kind{font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--err)}
+.erroverlay.notice .eo-kind{color:var(--warn)}
+.eo-loc{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink);word-break:break-all}
+.eo-msg{font-size:12.5px;color:var(--ink);line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:9em;overflow:auto}
+.eo-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.eo-held{font-size:11px;color:var(--muted)}
+.eo-foot .spacer{flex:1}
 
 /* re-render shimmer */
 .sheet{position:relative}
@@ -308,6 +342,11 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 }
 @keyframes sweep{from{background-position:180% 0}to{background-position:-80% 0}}
 .sheet.held{opacity:.55;filter:saturate(.55)}
+/* Changed since the last render: outlined, then faded over 4 s. */
+.chg{position:absolute;pointer-events:none;outline:2px solid var(--change);outline-offset:1px;border-radius:2px;
+  background:color-mix(in srgb,var(--change) 7%, transparent);animation:chgfade 4s ease-in forwards}
+@keyframes chgfade{0%,35%{opacity:1}to{opacity:0}}
+@media (prefers-reduced-motion: reduce){.chg{animation:none !important}}
 /* Pages flow left to right and wrap, so a wide window shows a spread
    rather than one page with empty gutters either side. align-content
    keeps wrapped rows packed at the top instead of spread down the
@@ -315,7 +354,10 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 .scroller{
   flex:1;min-height:0;overflow:auto;padding:22px 20px 40px;
   display:flex;flex-flow:row wrap;
-  justify-content:center;align-items:flex-start;align-content:flex-start;
+  /* `safe`: a page zoomed wider than the pane starts at its left edge
+     and scrolls, instead of overflowing both ways with its left half
+     out of reach. */
+  justify-content:safe center;align-items:flex-start;align-content:flex-start;
   gap:24px 22px;
 }
 
@@ -360,6 +402,7 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
   border:1px solid var(--rule);border-radius:6px;padding:6px 8px;width:100%;
 }
 .srcbox select:focus{border-color:var(--accent);outline:none}
+.srcbox select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 .checks{display:flex;flex-direction:column;gap:7px}
 .check{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;background:var(--panel);cursor:pointer}
@@ -388,8 +431,8 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 .log b{color:var(--ink);font-weight:500}
 details>summary{cursor:pointer;font-size:11px;color:var(--muted);list-style:none;display:flex;align-items:center;gap:6px;padding:4px 0}
 details>summary::-webkit-details-marker{display:none}
-details>summary::before{content:"▸";font-size:9px;color:var(--muted-2)}
-details[open]>summary::before{content:"▾"}
+details>summary::before{content:"▸" / "";font-size:9px;color:var(--muted-2)}
+details[open]>summary::before{content:"▾" / ""}
 
 /* error card */
 .errcard{
@@ -466,6 +509,20 @@ details[open]>summary::before{content:"▾"}
   background:var(--ink);color:var(--ground);border-radius:5px;padding:3px 7px;opacity:.85;
 }
 
+/* keyboard shortcuts */
+.keys{width:100%;border-collapse:collapse;font-size:12px}
+.keys th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);padding:10px 8px 4px}
+.keys td{padding:5px 8px;border-top:1px solid var(--rule-soft);vertical-align:top}
+.keys td:first-child{white-space:nowrap;width:1%}
+kbd{font-family:var(--mono);font-size:10.5px;padding:1px 5px;border:1px solid var(--rule);border-bottom-width:2px;border-radius:4px;background:var(--panel-2);color:var(--ink)}
+.modal.wide{max-width:600px}
+.modal.wide .modal-b{max-height:72vh}
+.empty-act{margin-top:12px}
+.diag-env{font-family:var(--mono);font-size:10.5px;color:var(--muted);overflow-wrap:anywhere;margin:6px 0 10px}
+details.diag>summary{font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--muted-2)}
+details.diag[open]>summary{margin-bottom:6px}
+.diag .eyebrow{margin-top:10px}
+
 /* ---------- narrow ---------- */
 @media (max-width: 980px){
   html,body{height:auto}
@@ -475,6 +532,22 @@ details[open]>summary::before{content:"▾"}
   .canvas{min-height:70vh}
   .scroller{padding:18px 16px 30px}
   .targets{grid-template-columns:1fr}
+}
+
+/* Windows High Contrast / forced colors. Backgrounds and box-shadows are
+   dropped there, so anything drawn only with them needs a border or outline. */
+@media (forced-colors: active){
+  .sheet{outline:1px solid CanvasText}
+  .btn.ghost[aria-pressed="true"]{forced-color-adjust:none;background:Highlight;color:HighlightText;border-color:Highlight}
+  .track{border:1px solid CanvasText}
+  .track span{forced-color-adjust:none;background:Highlight}
+  .chg{forced-color-adjust:none;outline-color:Highlight;background:transparent}
+  .seg button[aria-checked="true"]{forced-color-adjust:none;background:Highlight;color:HighlightText}
+  .erroverlay{border-color:CanvasText}
+  /* The primary buttons in system colours, inverted so they still stand
+     out. Left to the browser, their text kept the dark accent ink on a
+     forced black background in a dark high-contrast theme (1.27:1). */
+  .btn.primary{forced-color-adjust:none;background:ButtonText;color:ButtonFace;border-color:ButtonText}
 }
 
 /* rasterized PDF pages */
@@ -494,24 +567,29 @@ details[open]>summary::before{content:"▾"}
 
   <header class="menubar">
     <h1 class="sr-only">Resume Studio</h1>
-    <button class="menu" id="menuRefresh">Re-render</button>
-    <button class="menu" id="menuOpenDist">Open dist/</button>
+    <button class="menu" id="menuRefresh" title="Render the preview again (F5 or Ctrl+R)" aria-keyshortcuts="F5 Control+R">Re-render</button>
+    <button class="menu" id="menuOpenDist" title="Show dist/, where Build writes the PDFs, in your file manager">Show output folder</button>
     <div class="spacer"></div>
-    <div class="env" id="envLine">starting…</div>
-    <button class="iconbtn" id="themeBtn" title="Toggle light / dark" aria-label="Dark theme" aria-pressed="false">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <div class="env" id="envLine" title="The engine: open Diagnostics in the Inspector (Ctrl+Shift+D) for details">starting…</div>
+    <div class="seg" id="themeGroup" role="radiogroup" aria-label="Theme" title="Theme (Ctrl+Shift+L to cycle)">
+      <button type="button" role="radio" data-theme-choice="system" aria-checked="true">System</button>
+      <button type="button" role="radio" data-theme-choice="light" aria-checked="false" tabindex="-1">Light</button>
+      <button type="button" role="radio" data-theme-choice="dark" aria-checked="false" tabindex="-1">Dark</button>
+    </div>
+    <button class="iconbtn" id="helpBtn" title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts" aria-keyshortcuts="F1 Control+/">
+      <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
     </button>
   </header>
 
   <div class="panes">
 
-    <aside class="rail" aria-label="Documents">
+    <aside class="rail" id="rail" aria-label="Documents" tabindex="-1">
       <p class="eyebrow">Documents</p>
       <div class="doclist" id="docList"></div>
 
       <div class="rail-foot">
-        <button class="btn wide" id="openDlg">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/></svg>
+        <button class="btn wide" id="openDlg" title="Choose which file in data/ to read (Ctrl+O)" aria-keyshortcuts="Control+O">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/></svg>
           Data files…
         </button>
         <p class="hint">Edit your YAML in your own editor — Studio watches <b>data/</b> and <b>styles/</b> and re-renders the PDF when you save. Drop a <b>.yml</b> on the window to load a different one.</p>
@@ -523,27 +601,42 @@ details[open]>summary::before{content:"▾"}
         <div class="canvas-title"><b id="canvasDoc">Resume</b> <span style="color:var(--muted-2)" id="canvasMode">· printed PDF</span></div>
         <span class="liveflag" id="liveFlag" role="status"><i></i><span id="liveText" aria-hidden="true">Live</span><span class="ms" id="liveMs" aria-hidden="true">—</span><span class="sr-only" id="liveSay"></span></span>
         <div class="canvas-tools">
-          <button class="btn ghost tiny" id="pauseBtn" aria-pressed="false" title="Pause auto-render">Pause</button>
-          <button class="btn ghost tiny" id="zoomOut" aria-label="Zoom out">−</button>
-          <span class="zoom" id="zoomVal">160%</span>
-          <button class="btn ghost tiny" id="zoomIn" aria-label="Zoom in">+</button>
+          <button class="btn ghost tiny" id="hlBtn" aria-pressed="true" title="Outline what changed after each render">Highlight changes</button>
+          <button class="btn ghost tiny" id="pauseBtn" aria-pressed="false" title="Pause auto-render (Ctrl+Shift+P)" aria-keyshortcuts="Control+Shift+P">Pause</button>
+          <span class="tsep" aria-hidden="true"></span>
+          <button class="btn ghost tiny" id="zoomOut" aria-label="Zoom out" title="Zoom out (− with the preview focused, or Ctrl+wheel over the pages)">−</button>
+          <span class="zoom" id="zoomVal" role="status">100%</span>
+          <button class="btn ghost tiny" id="zoomIn" aria-label="Zoom in" title="Zoom in (+ with the preview focused, or Ctrl+wheel over the pages)">+</button>
+          <button class="btn ghost tiny" id="zoom100" aria-pressed="false" title="Actual size: 8.5 inches wide (0 with the preview focused)">100%</button>
+          <button class="btn ghost tiny" id="fitWidth" aria-pressed="false" title="Fit the page to the width of the pane (Ctrl+8)" aria-keyshortcuts="Control+8">Fit width</button>
+          <button class="btn ghost tiny" id="fitPage" aria-pressed="false" title="Fit a whole page in the pane (Ctrl+9)" aria-keyshortcuts="Control+9">Fit page</button>
         </div>
       </div>
-      <div class="holdbar" id="holdBar" role="alert" hidden>
-        <span id="holdMsg">Holding last valid render</span>
-        <span class="spacer"></span>
-        <span style="color:var(--muted)">the pane never shows a document that wouldn’t print</span>
+      <div class="erroverlay" id="errOverlay" role="group" aria-labelledby="eoKind" hidden>
+        <div class="eo-head"><span class="eo-kind" id="eoKind">Render failed</span><code class="eo-loc" id="eoLoc"></code></div>
+        <div class="eo-msg" id="eoMsg"></div>
+        <div class="eo-foot">
+          <span class="eo-held" id="eoHeld"></span>
+          <span class="spacer"></span>
+          <button class="btn tiny" id="eoCopy" type="button">Copy location</button>
+          <button class="btn tiny primary" id="eoOpen" type="button">Open in editor</button>
+        </div>
       </div>
-      <div class="scroller" id="scroller" tabindex="0" aria-label="Preview pages">
+      <div class="scroller" id="scroller" tabindex="0" role="region" aria-label="Preview pages">
         <div class="placeholder" id="placeholder">Starting the engine…</div>
       </div>
     </main>
 
-    <aside class="inspector" id="inspector" aria-label="Inspector"></aside>
+    <aside class="inspector" id="inspector" aria-label="Inspector" tabindex="-1"></aside>
   </div>
 </div>
 
 <div class="toasts" id="toasts" role="status"></div>
+<!-- Read by screen readers only. `say` is for news that has no visible
+     text of its own (a theme change, a copied location); `alertSay`
+     carries a render failure, set only when the failure changes. -->
+<div class="sr-only" id="say" role="status" aria-live="polite"></div>
+<div class="sr-only" id="alertSay" role="alert"></div>
 
 <script>
 (function () {
@@ -581,6 +674,17 @@ details[open]>summary::before{content:"▾"}
     if (s < 86400) return Math.round(s / 3600) + 'h ago';
     return new Date(ms).toLocaleDateString();
   }
+  // A wall-clock time, "14:02", for "Showing last good render · 14:02".
+  function clock(ms) {
+    return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  // Tell a screen reader something that has no visible announcement of
+  // its own. Cleared first so the same words twice are read twice.
+  function say(text) {
+    var n = $('say');
+    n.textContent = '';
+    setTimeout(function () { n.textContent = text; }, 30);
+  }
   function toast(main, sub) {
     var t = el('div', 'toast', '<span>' + esc(main) + '</span>' +
       (sub ? '<span class="sub">' + esc(sub) + '</span>' : ''));
@@ -595,7 +699,7 @@ details[open]>summary::before{content:"▾"}
     // Every POST is JSON, body or not: the server refuses any other
     // content type, which is what keeps a form on some other web page
     // from posting to it.
-    if (method === 'POST' && !body) body = {};
+    if ((method === 'POST' || method === 'PUT') && !body) body = {};
     var res = await fetch(route, {
       method: method,
       headers: body ? { 'content-type': 'application/json' } : undefined,
@@ -618,12 +722,63 @@ details[open]>summary::before{content:"▾"}
 
   /* ─── state ────────────────────────────────────────────────── */
 
+  /* ─── preferences ──────────────────────────────────────────────
+   *
+   * Kept by the server (GET/PUT /api/prefs, in dist/.studio-prefs.json),
+   * not in localStorage alone: the desktop app's page is served from a
+   * new port — a new origin, with empty storage — on every launch, so
+   * anything kept only in localStorage was forgotten each time the app
+   * started. The server writes the saved values into the page it serves
+   * (<meta name="studio-prefs">, and the theme on <html>), so they are
+   * in force before the first paint. localStorage is the fallback for
+   * a page that cannot reach the route, and keeps a copy.
+   */
+  var PREF_DEFAULTS = {
+    theme: 'system', zoom: 100, fit: 'width',
+    // Off by default. The fixtures describe one version of one
+    // document; a resume changes because the person changed jobs, so
+    // checking every build against a frozen copy is noise most days.
+    snapshot: false,
+    // Off by default: the suites test the pipeline, which does not
+    // change between two saves of your resume, and they cost ~9s.
+    tests: false,
+    highlight: true, diagnostics: false,
+  };
+  var prefsFromServer = false;
+  var prefs = (function () {
+    var p = Object.assign({}, PREF_DEFAULTS);
+    var meta = document.querySelector('meta[name="studio-prefs"]');
+    if (meta) {
+      try { Object.assign(p, JSON.parse(meta.getAttribute('content') || '{}')); prefsFromServer = true; } catch { /* keep defaults */ }
+    }
+    if (!prefsFromServer) {
+      try {
+        var stored = JSON.parse(localStorage.getItem('studio.prefs') || 'null');
+        if (stored && typeof stored === 'object') Object.assign(p, stored);
+        else {
+          // The two flags this page kept before there were prefs.
+          var snap = localStorage.getItem('studio.snapshot');
+          var tst = localStorage.getItem('studio.tests');
+          if (snap !== null) p.snapshot = snap === '1';
+          if (tst !== null) p.tests = tst === '1';
+        }
+      } catch { /* storage unavailable: defaults */ }
+    }
+    return p;
+  })();
+
+  function savePrefs(patch) {
+    Object.assign(prefs, patch);
+    try { localStorage.setItem('studio.prefs', JSON.stringify(prefs)); } catch { /* ignore */ }
+    api('PUT', '/api/prefs', patch).catch(function () { /* the local copy stands */ });
+  }
+
   var state = {
     active: 'resume',
-    // 160% by default: readable without leaning in. At this size two
-    // pages need ~1815px of pane, so they stack on most windows — zoom
-    // out to about 100% to get them side by side.
-    zoom: 160,
+    // Percent of the page's true size, 8.5in = 816 CSS px, used when
+    // `fit` is 'none'; 'width' and 'page' size the page to the pane.
+    zoom: Math.min(200, Math.max(25, Math.round(Number(prefs.zoom)) || 100)),
+    fit: ['none', 'width', 'page'].indexOf(prefs.fit) === -1 ? 'width' : prefs.fit,
     paused: false,
     status: null,
     files: [],
@@ -633,39 +788,52 @@ details[open]>summary::before{content:"▾"}
     busy: {},     // per doc: 'render' | 'build' | null
     error: {},      // per doc: the render failed — YAML is not valid
     buildError: {}, // per doc: the render is fine, the CLI build failed
-    // Off by default. The fixtures describe one version of one
-    // document; a resume changes because the person changed jobs, so
-    // checking every build against a frozen copy is noise most days.
-    snapshot: loadFlag('studio.snapshot', false),
-    // Off by default: the suites test the pipeline, which does not
-    // change between two saves of your resume, and they cost ~9s.
-    tests: loadFlag('studio.tests', false),
+    renderedAt: {}, // per doc: when the render in state.render arrived
+    busySince: {},  // per doc: when state.busy was set
+    snapshot: prefs.snapshot,
+    tests: prefs.tests,
+    // Diagnostics opened by a failure (not by the user): open for the
+    // rest of the session, but not saved as the user's choice.
+    diagAuto: false,
+    editor: 'default',  // what Open in editor uses: 'vscode' | 'default'
   };
 
-  function loadFlag(key, fallback) {
-    try {
-      var v = localStorage.getItem(key);
-      return v === null ? fallback : v === '1';
-    } catch { return fallback; }
+  /* ─── theme: System / Light / Dark ─────────────────────────────
+   *
+   * A radio group (WAI-ARIA APG "Radio Group"): Tab reaches the checked
+   * option, the arrow keys move and choose, and Ctrl+Shift+L cycles from
+   * anywhere. "System" follows the OS and sets no attribute; the server
+   * renders the saved choice onto <html>, so there is no flash.
+   */
+  var THEMES = ['system', 'light', 'dark'];
+  var THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
+  function themeRadios() { return Array.prototype.slice.call($('themeGroup').querySelectorAll('[role="radio"]')); }
+  function applyTheme(choice) {
+    if (choice === 'light' || choice === 'dark') root.setAttribute('data-theme', choice);
+    else root.removeAttribute('data-theme');
+    themeRadios().forEach(function (b) {
+      var on = b.dataset.themeChoice === choice;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
   }
-
-  function saveFlag(key, value) {
-    try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* ignore */ }
+  function setTheme(choice, announce) {
+    applyTheme(choice);
+    savePrefs({ theme: choice });
+    if (announce) say('Theme: ' + THEME_LABEL[choice]);
   }
-
-  var systemDark = window.matchMedia('(prefers-color-scheme: dark)');
-  function isDark() {
-    return root.getAttribute('data-theme') === 'dark' ||
-      (!root.getAttribute('data-theme') && systemDark.matches);
-  }
-  // The button is "Dark theme", pressed or not, for a screen reader.
-  function syncThemeBtn() { $('themeBtn').setAttribute('aria-pressed', String(isDark())); }
-  $('themeBtn').addEventListener('click', function () {
-    root.setAttribute('data-theme', isDark() ? 'light' : 'dark');
-    syncThemeBtn();
+  themeRadios().forEach(function (b) {
+    b.addEventListener('click', function () { setTheme(b.dataset.themeChoice, false); });
+    b.addEventListener('keydown', function (e) {
+      var step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      var i = (THEMES.indexOf(b.dataset.themeChoice) + step + THEMES.length) % THEMES.length;
+      setTheme(THEMES[i], false);
+      themeRadios()[i].focus();
+    });
   });
-  systemDark.addEventListener('change', syncThemeBtn);
-  syncThemeBtn();
+  applyTheme(prefs.theme);
 
   /* ─── document rail ────────────────────────────────────────── */
 
@@ -673,15 +841,66 @@ details[open]>summary::before{content:"▾"}
     return (state.status && state.status.documents && state.status.documents[id]) || null;
   }
 
+  /*
+   * Busy, as shown. Most renders take 100–300 ms, and a "Rendering"
+   * pulse that flashes on and off for each of them is noise that says
+   * nothing: the pages changing says it. So a render only shows as busy
+   * once it has run for BUSY_SHOW_MS; a build always does (it takes
+   * seconds, and was asked for).
+   */
+  var BUSY_SHOW_MS = 400;
+  function busyShown(id) {
+    var b = state.busy[id];
+    if (!b) return null;
+    if (b === 'build') return b;
+    return Date.now() - (state.busySince[id] || 0) >= BUSY_SHOW_MS ? b : null;
+  }
+  function setBusy(id, what) {
+    state.busy[id] = what;
+    state.busySince[id] = what ? Date.now() : 0;
+    if (what === 'render') {
+      var since = state.busySince[id];
+      setTimeout(function () {
+        if (state.busy[id] === 'render' && state.busySince[id] === since) renderAll();
+      }, BUSY_SHOW_MS + 10);
+    }
+  }
+
   function statusFor(id) {
-    if (state.busy[id] === 'build') return { c: 'ok run', t: 'Building' };
-    if (state.busy[id] === 'render') return { c: 'ok run', t: 'Rendering' };
+    var busy = busyShown(id);
+    if (busy === 'build') return { c: 'ok run', t: 'Building' };
+    if (busy === 'render') return { c: 'ok run', t: 'Rendering' };
     if (state.error[id]) return { c: 'err', t: 'Render failed' };
     if (state.buildError[id]) return { c: 'err', t: 'Build failed' };
     var m = docMeta(id);
     if (!m) return { c: 'idle', t: 'Unknown' };
     if (!m.pdf.exists) return { c: 'idle', t: 'Not built' };
-    return { c: 'ok', t: 'Built · ' + ago(m.pdf.mtimeMs) };
+    return { c: 'ok', t: 'Built · ' + ago(m.pdf.mtimeMs), prefix: 'Built · ', at: m.pdf.mtimeMs };
+  }
+
+  /** A relative time that keeps itself current; see tickTimes. */
+  function agoSpan(prefix, at) {
+    return '<span data-ago="' + esc(at) + '" data-prefix="' + esc(prefix) + '">'
+      + esc(prefix + ago(at)) + '</span>';
+  }
+
+  // "Built · 5s ago" read "5s ago" for as long as the window stayed
+  // open. Every 15 s the times are brought up to date in place: no
+  // redraw, and nothing announced (none of them is in a live region).
+  function tickTimes() {
+    var nodes = document.querySelectorAll('[data-ago]');
+    for (var i = 0; i < nodes.length; i++) {
+      var t = (nodes[i].dataset.prefix || '') + ago(Number(nodes[i].dataset.ago));
+      if (nodes[i].textContent !== t) nodes[i].textContent = t;
+    }
+  }
+  setInterval(tickTimes, 15000);
+
+  /** How full the last page is, as a whole percent, or null. */
+  function lastPageFill(r) {
+    var f = r && r.invariants && r.invariants.fill;
+    if (!f || !f.length || typeof f[f.length - 1] !== 'number') return null;
+    return Math.round(f[f.length - 1] * 100);
   }
 
   function renderRail() {
@@ -701,6 +920,8 @@ details[open]>summary::before{content:"▾"}
       var name = el('h2', 'doc-name');
       var pick = el('button', 'doc-pick', esc(m.label));
       if (state.active === id) pick.setAttribute('aria-current', 'true');
+      pick.setAttribute('aria-keyshortcuts', (id === 'resume' ? 'Control+1' : 'Control+2') + ' Control+Tab');
+      pick.title = 'Show the ' + m.label + (id === 'resume' ? ' (Ctrl+1)' : ' (Ctrl+2)');
       name.appendChild(pick);
       head.appendChild(name);
       head.appendChild(el('span', 'doc-kind',
@@ -732,27 +953,56 @@ details[open]>summary::before{content:"▾"}
       }
 
       var src = el('div', 'doc-src',
-        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>'
-        + '<span class="n">' + esc(label) + '</span>');
+        '<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>'
+        + '<span class="n">' + esc(label) + '</span>'
+        // Red alone is not a message (1.4.1, and lost in forced colors).
+        + (df && df.missing ? '<span class="miss"><span class="sr-only">, </span>missing</span>' : ''));
       src.title = title;
       if (df && df.missing) src.classList.add('missing');
       card.appendChild(src);
 
       var meta = el('div', 'doc-meta');
-      meta.appendChild(el('span', 'status ' + st.c, '<i></i>' + esc(st.t)));
+      meta.appendChild(el('span', 'status ' + st.c, '<i></i>'
+        + (st.at ? agoSpan(st.prefix, st.at) : esc(st.t))));
       if (r && r.pages) meta.appendChild(el('span', 'chip', r.pages + (r.pages === 1 ? ' page' : ' pages')));
+      var fill = lastPageFill(r);
+      if (fill !== null && r.pages) {
+        var fc = el('span', 'chip', esc('last page ' + fill + '% full'));
+        fc.title = 'How far down its body the last page reaches (the lower of the two columns). '
+          + 'Room left for another line or two, or a page about to spill.';
+        meta.appendChild(fc);
+      }
       if (r && r.totalMs) meta.appendChild(el('span', 'chip', r.totalMs + ' ms'));
       card.appendChild(meta);
 
-      if (state.busy[id]) card.appendChild(el('div', 'track', '<span style="width:60%"></span>'));
+      if (busyShown(id)) {
+        var track = el('div', 'track', '<span></span>');
+        track.setAttribute('role', 'progressbar');
+        track.setAttribute('aria-label', busyShown(id) === 'build' ? 'Building' : 'Rendering');
+        card.appendChild(track);
+      }
 
       var acts = el('div', 'doc-actions');
       var load = el('button', 'btn', 'Load…');
       load.title = 'Choose a .yml file for ' + m.label;
       load.addEventListener('click', function (e) { e.stopPropagation(); pickFile(id); });
       var build = el('button', 'btn primary', 'Build ' + m.label + ' PDF');
-      build.disabled = Boolean(state.busy.resume || state.busy.letter);
-      build.addEventListener('click', function (e) { e.stopPropagation(); doBuild(id); });
+      // aria-disabled, not disabled: a disabled button cannot hold focus,
+      // so the render that follows a press would drop a keyboard user's
+      // focus to <body>, and it would stay there after the build. This
+      // one keeps focus and says it is unavailable; the click is ignored.
+      var buildBusy = Boolean(state.busy.resume || state.busy.letter);
+      build.setAttribute('aria-disabled', String(buildBusy));
+      if (state.active === id) {
+        build.title = 'Build the PDF into dist/ (Ctrl+Shift+B)';
+        build.setAttribute('aria-keyshortcuts', 'Control+Shift+B');
+      } else {
+        build.title = 'Build the PDF into dist/';
+      }
+      build.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!buildBusy) doBuild(id);
+      });
       acts.appendChild(build);
       acts.appendChild(load);
       card.appendChild(acts);
@@ -766,7 +1016,7 @@ details[open]>summary::before{content:"▾"}
         snapCb.addEventListener('click', function (e) { e.stopPropagation(); });
         snapCb.addEventListener('change', function () {
           state.snapshot = snapCb.checked;
-          saveFlag('studio.snapshot', state.snapshot);
+          savePrefs({ snapshot: state.snapshot });
         });
         optLabel.appendChild(snapCb);
         optLabel.appendChild(el('span', null, 'Compare against snapshot'));
@@ -781,7 +1031,7 @@ details[open]>summary::before{content:"▾"}
         testCb.addEventListener('click', function (e) { e.stopPropagation(); });
         testCb.addEventListener('change', function () {
           state.tests = testCb.checked;
-          saveFlag('studio.tests', state.tests);
+          savePrefs({ tests: state.tests });
         });
         testLabel.appendChild(testCb);
         testLabel.appendChild(el('span', null, 'Run unit tests first'));
@@ -855,6 +1105,263 @@ details[open]>summary::before{content:"▾"}
 
   /* ─── canvas ───────────────────────────────────────────────── */
 
+  /* ─── where an error is ────────────────────────────────────────
+   *
+   * The build reports a schema error as `data/resume.yml:42:5: message`
+   * (after a prefix such as "invalid resume data — "), and a YAML syntax
+   * error as "data/resume.yml could not be read as YAML." followed by
+   * PyYAML's own text, whose last "line N, column M" is where it gave
+   * up. Either way the location comes first in the overlay, because
+   * that is where you go next. The path is project-relative, with
+   * backslashes on Windows; only data/ and styles/ files are matched,
+   * which are the only ones /api/open will open.
+   */
+  var LOC_RE = /((?:data|styles)[\\/][^\n:]*?\.(?:ya?ml|scss)):(\d+):(\d+):\s*/;
+  var YAML_RE = /((?:data|styles)[\\/][^\n]*?\.ya?ml) could not be read as YAML\.?\s*/;
+  function errorLocation(message) {
+    var text = String(message || '');
+    var m = LOC_RE.exec(text);
+    if (m) {
+      return { file: m[1], line: Number(m[2]), col: Number(m[3]),
+               rest: text.slice(m.index + m[0].length) || text };
+    }
+    m = YAML_RE.exec(text);
+    if (m) {
+      var tail = text.slice(m.index + m[0].length);
+      var at = null, re = /line (\d+), column (\d+)/g, x;
+      while ((x = re.exec(tail)) !== null) at = x;
+      return { file: m[1], line: at ? Number(at[1]) : 1, col: at ? Number(at[2]) : 1,
+               rest: 'Not valid YAML.\n' + tail.trim() };
+    }
+    return null;
+  }
+  function locText(loc) { return loc.file + ':' + loc.line + ':' + loc.col; }
+
+  /* The overlay's current error, for its two buttons. */
+  var overlayLoc = null;
+
+  function renderOverlay(id, r) {
+    var box = $('errOverlay');
+    var err = state.error[id];
+    var kind = null, loc = null, msg = '', held = '', notice = false;
+    if (err) {
+      kind = 'Render failed';
+      loc = errorLocation(err);
+      msg = loc ? loc.rest : err;
+      held = r && r.images && r.images.length
+        ? 'Showing last good render' + (state.renderedAt[id] ? ' · ' + clock(state.renderedAt[id]) : '')
+        : 'Nothing rendered yet';
+    } else if (r && r.invariants && r.invariants.ok === false) {
+      kind = 'Layout check failed';
+      notice = true;
+      msg = r.invariants.message || 'content overflows its page';
+      held = 'The preview is what would print. A Build will refuse this.';
+    } else if (r && r.mode === 'built' && r.note) {
+      kind = 'Not built';
+      notice = true;
+      msg = r.note;
+    }
+    box.hidden = kind === null;
+    // What a screen reader hears: once per failure, not on every redraw
+    // (the canvas is redrawn on every busy flag and zoom step).
+    var alertText = err ? 'Render failed' + (loc ? ' at ' + loc.file + ', line ' + loc.line
+      + ', column ' + loc.col : '') + ': ' + msg : '';
+    if ($('alertSay').textContent !== alertText) $('alertSay').textContent = alertText;
+    if (kind === null) { overlayLoc = null; return; }
+    box.className = 'erroverlay' + (notice ? ' notice' : '');
+    $('eoKind').textContent = kind;
+    $('eoLoc').textContent = loc ? locText(loc) : '';
+    $('eoLoc').hidden = !loc;
+    $('eoMsg').textContent = msg;
+    $('eoHeld').textContent = held;
+    overlayLoc = loc;
+    $('eoCopy').hidden = !loc;
+    $('eoOpen').hidden = !loc;
+    if (loc) {
+      $('eoOpen').textContent = state.editor === 'vscode' ? 'Open in VS Code' : 'Open file';
+      $('eoOpen').title = state.editor === 'vscode'
+        ? 'Open ' + loc.file + ' in VS Code at line ' + loc.line + ', column ' + loc.col
+        : 'Open ' + loc.file + ' in its default program (it cannot be sent to line ' + loc.line + ')';
+    }
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // No async clipboard (an older webview, a denied permission).
+      var ta = el('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+      return ok;
+    }
+  }
+
+  $('eoCopy').addEventListener('click', async function () {
+    if (!overlayLoc) return;
+    var text = locText(overlayLoc);
+    var ok = await copyText(text);
+    say(ok ? 'Copied ' + text : 'Could not copy ' + text);
+    toast(ok ? 'Copied' : 'Could not copy', text);
+  });
+  $('eoOpen').addEventListener('click', function () {
+    if (overlayLoc) openSource(overlayLoc.file, overlayLoc.line, overlayLoc.col);
+  });
+
+  async function openSource(file, line, col) {
+    try {
+      var r = await api('POST', '/api/open', { path: file, line: line || 1, col: col || 1 });
+      toast(r.editor === 'vscode' ? 'Opened in VS Code' : 'Opened', r.opened
+        + (line && r.editor === 'vscode' ? ':' + line : ''));
+    } catch (err) {
+      toast('Could not open it', err.message.slice(0, 90));
+    }
+  }
+
+  /* ─── zoom ─────────────────────────────────────────────────────
+   *
+   * 100% is the page's true size: 8.5in, 816 CSS px, as a PDF viewer
+   * means it. `fit` sizes the page to the pane instead — 'width' (the
+   * default) or 'page' (a whole page top to bottom) — and is kept up to
+   * date as the window is resized. 'width' puts two pages side by side
+   * when the pane is wide enough for both at TWO_UP_MIN (70%) or more,
+   * so a two-page résumé is seen whole, spread and balance included, as
+   * it will be judged; a narrower pane gets one page across.
+   *
+   * The cap is 200%. The pages are rasterized at 144 dpi (scale 2,
+   * 1224 px across), so past 150% the image is being enlarged; 200% is
+   * as far as that stays useful for checking a detail. That is a
+   * choice the user makes with the zoom buttons: the fits stop at the
+   * raster's own width (FIT_MAX_PX, 150%), so a wide window does not
+   * default to a blurry, upscaled page.
+   *
+   * WHICH KEYS
+   * ----------
+   * Ctrl+plus / Ctrl+minus / Ctrl+0 are left to the browser (and to
+   * WebView2, which the desktop shell lets zoom — main.rs,
+   * zoom_hotkeys_enabled): they enlarge the whole interface, text
+   * included, which is what WCAG 1.4.4 needs and what every browser
+   * user expects of them. The preview has its own: Ctrl+wheel (or a
+   * pinch) over the pages, the toolbar, + − 0 while the preview has
+   * focus, and Ctrl+8 / Ctrl+9 for the two fits.
+   */
+  var ZOOM_STEPS = [25, 33, 50, 67, 75, 90, 100, 110, 125, 150, 175, 200];
+  var PAGE_W = 816, PAGE_H = 1056;
+  // The raster's width in px: PAGE_W at scale 2 (144 dpi) over 96 dpi.
+  var RASTER_SCALE = 2;
+  var FIT_MAX_PX = Math.round(PAGE_W * RASTER_SCALE * 72 / 96);   // 1224
+  // Below this a page is too small to read, and one page across wins.
+  var TWO_UP_MIN = Math.round(PAGE_W * 0.70);                        // 571
+
+  function fitWidthPx(mode) {
+    var s = $('scroller');
+    var cs = getComputedStyle(s);
+    var w = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    if (mode === 'page') {
+      // The page and its label line beneath it.
+      var h = s.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 24;
+      w = Math.min(w, h * PAGE_W / PAGE_H);
+    } else {
+      // Two across, less the gap between them, when both stay readable.
+      // The letter is sized the same, so switching documents keeps the
+      // page the size it was.
+      var two = Math.floor((w - (parseFloat(cs.columnGap) || 0)) / 2);
+      if (two >= TWO_UP_MIN) w = two;
+    }
+    return Math.max(120, Math.min(FIT_MAX_PX, Math.floor(w)));
+  }
+  function sheetWidthPx() {
+    return state.fit === 'width' || state.fit === 'page'
+      ? fitWidthPx(state.fit)
+      : Math.round(PAGE_W * state.zoom / 100);
+  }
+  function effectiveZoom() { return Math.round(sheetWidthPx() / PAGE_W * 100); }
+
+  /** Size the sheets on screen in place, and the zoom readout. */
+  function sizeSheets() {
+    var w = sheetWidthPx();
+    var wraps = $('scroller').querySelectorAll('.sheet-wrap');
+    // Exactly that wide: a zoom past the pane's width scrolls, as it
+    // should, rather than being capped at the pane (min(…, 100%) made
+    // every step past it do nothing).
+    for (var i = 0; i < wraps.length; i++) wraps[i].style.width = w + 'px';
+    var label = (state.fit === 'width' ? 'Fit width · ' : state.fit === 'page' ? 'Fit page · ' : '')
+      + effectiveZoom() + '%';
+    if ($('zoomVal').textContent !== label) $('zoomVal').textContent = label;
+    $('fitWidth').setAttribute('aria-pressed', String(state.fit === 'width'));
+    $('fitPage').setAttribute('aria-pressed', String(state.fit === 'page'));
+    $('zoom100').setAttribute('aria-pressed', String(state.fit === 'none' && state.zoom === 100));
+    // aria-disabled, not disabled: see the Build button.
+    $('zoomIn').setAttribute('aria-disabled', String(effectiveZoom() >= ZOOM_STEPS[ZOOM_STEPS.length - 1]));
+    $('zoomOut').setAttribute('aria-disabled', String(effectiveZoom() <= ZOOM_STEPS[0]));
+  }
+
+  function setZoom(fit, zoom, anchor) {
+    var s = $('scroller');
+    // Keep the point under the pointer (or the middle of the pane) where
+    // it is, as far as the reflow allows.
+    var ax = anchor ? anchor.x : s.clientWidth / 2, ay = anchor ? anchor.y : s.clientHeight / 2;
+    var fx = (s.scrollLeft + ax) / Math.max(1, s.scrollWidth);
+    var fy = (s.scrollTop + ay) / Math.max(1, s.scrollHeight);
+    var before = sheetWidthPx();
+    state.fit = fit;
+    if (zoom != null) state.zoom = Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], Math.max(ZOOM_STEPS[0], zoom));
+    if (sheetWidthPx() !== before) clearHighlights();
+    sizeSheets();
+    s.scrollLeft = fx * s.scrollWidth - ax;
+    s.scrollTop = fy * s.scrollHeight - ay;
+    savePrefs({ fit: state.fit, zoom: state.zoom });
+  }
+  function zoomStep(dir, anchor) {
+    var cur = effectiveZoom();
+    var next = dir > 0
+      ? ZOOM_STEPS.filter(function (z) { return z > cur; })[0]
+      : ZOOM_STEPS.filter(function (z) { return z < cur; }).pop();
+    if (next == null) next = dir > 0 ? ZOOM_STEPS[ZOOM_STEPS.length - 1] : ZOOM_STEPS[0];
+    setZoom('none', next, anchor);
+  }
+
+  $('zoomIn').addEventListener('click', function () { zoomStep(1); });
+  $('zoomOut').addEventListener('click', function () { zoomStep(-1); });
+  $('zoom100').addEventListener('click', function () { setZoom('none', 100); });
+  $('fitWidth').addEventListener('click', function () { setZoom('width'); });
+  $('fitPage').addEventListener('click', function () { setZoom('page'); });
+
+  // Ctrl+wheel and trackpad pinch (which arrives as Ctrl+wheel) over the
+  // pages zoom the pages, not the interface. Not passive, so that
+  // preventDefault can stop the browser's own page zoom; elsewhere in
+  // the window Ctrl+wheel still zooms everything, as in any browser.
+  var wheelAcc = 0;
+  $('scroller').addEventListener('wheel', function (e) {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    wheelAcc += e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(wheelAcc) < 60) return;
+    var rect = $('scroller').getBoundingClientRect();
+    zoomStep(wheelAcc < 0 ? 1 : -1, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+    wheelAcc = 0;
+  }, { passive: false });
+
+  // Fit modes follow the pane's size.
+  if (typeof ResizeObserver === 'function') {
+    var lastFitW = 0;
+    new ResizeObserver(function () {
+      if (state.fit === 'none') return;
+      var w = sheetWidthPx();
+      if (w === lastFitW) return;
+      lastFitW = w;
+      clearHighlights();
+      sizeSheets();
+    }).observe($('scroller'));
+  }
+
   function renderCanvas() {
     var id = state.active;
     var m = docMeta(id);
@@ -865,7 +1372,7 @@ details[open]>summary::before{content:"▾"}
       ? '· last built PDF' : '· printed PDF';
 
     var flag = $('liveFlag');
-    var busy = state.busy[id];
+    var busy = busyShown(id);
     flag.className = 'liveflag' +
       (state.paused ? ' paused' : (busy ? ' busy' : (m && m.live ? '' : ' paused')));
     $('liveText').textContent = busy
@@ -876,39 +1383,51 @@ details[open]>summary::before{content:"▾"}
     $('liveMs').textContent = r && r.totalMs ? r.totalMs + ' ms' : '—';
     // What a screen reader hears from the flag (the visible text is
     // hidden from it): nothing while a render runs and nothing on each
-    // save, only a change of outcome. A failure is the hold bar's to
+    // save, only a change of outcome. A failure is the overlay's to
     // announce, so it just clears this; the recovery is then news.
     // Pausing is announced by its toast and the button's pressed state.
-    if (!busy) {
-      var say = state.error[id] || !r ? '' : 'Preview up to date';
-      if ($('liveSay').textContent !== say) $('liveSay').textContent = say;
+    if (!state.busy[id]) {
+      var n = r && r.images ? r.images.length : 0;
+      var sayText = state.error[id] || !r ? ''
+        : 'Preview up to date' + (n ? ', ' + n + (n === 1 ? ' page' : ' pages') : '');
+      if ($('liveSay').textContent !== sayText) $('liveSay').textContent = sayText;
     }
 
-    var hold = $('holdBar');
-    var holdHtml = null;
-    if (state.error[id]) {
-      holdHtml = 'Holding last valid render — <b>' + esc(state.error[id]) + '</b>';
-    } else if (r && r.mode === 'built' && r.note) {
-      holdHtml = esc(r.note);
-    }
-    hold.hidden = holdHtml === null;
-    // An alert is read again whenever its text is set, and the canvas is
-    // redrawn on every busy flag and zoom step: set it only when it changes.
-    if (holdHtml !== null && $('holdMsg').innerHTML !== holdHtml) $('holdMsg').innerHTML = holdHtml;
+    renderOverlay(id, r);
 
     var s = $('scroller');
     s.innerHTML = '';
+    sizeSheets();
 
     if (!r || !r.images || !r.images.length) {
-      s.appendChild(el('div', 'placeholder',
-        busy ? 'Rendering…' : 'Nothing to show yet — press Build.'));
+      if (state.busy[id]) {
+        s.appendChild(el('div', 'placeholder', 'Rendering…'));
+        return;
+      }
+      // Not "press Build": a Build writes the PDF, it is not how the
+      // preview starts. What starts it is saving the YAML.
+      var df = m && m.dataFile;
+      var ph = el('div', 'placeholder');
+      ph.appendChild(el('div', null, state.error[id]
+        ? 'Nothing to show until the file renders. Fix it in your editor and save — the preview follows each save.'
+        : 'Nothing to show yet. Edit ' + esc(df ? df.path : 'your YAML in data/')
+          + ' in your editor and save — the preview follows each save.'));
+      if (df && df.path && !df.missing) {
+        var open = el('button', 'btn tiny empty-act', 'Open ' + esc(df.name));
+        open.title = 'Open ' + df.path + (state.editor === 'vscode' ? ' in VS Code' : ' in its default program');
+        open.addEventListener('click', function () { openSource(df.path, 1, 1); });
+        ph.appendChild(open);
+      }
+      s.appendChild(ph);
       return;
     }
 
     var keep = new Map();
+    var width = sheetWidthPx();
+    var marks = activeHighlights(id);
     r.images.forEach(function (im, i) {
       var wrap = el('div', 'sheet-wrap');
-      wrap.style.width = 'min(' + Math.round(560 * state.zoom / 100) + 'px, 100%)';
+      wrap.style.width = width + 'px';
       // Which page this sheet shows, for the IntersectionObserver that
       // decides render order and for a streamed page arriving into it.
       wrap.dataset.page = String(im.page);
@@ -919,6 +1438,7 @@ details[open]>summary::before{content:"▾"}
       var img = keep.has(key) ? pageImage(im, true) : pageImage(im);
       keep.set(key, img);
       sheet.appendChild(img);
+      if (marks) drawMarks(sheet, marks.byPage[im.page], marks);
       wrap.appendChild(sheet);
 
       var label = 'Page ' + im.page + ' of ' + r.images.length + ' · US Letter';
@@ -935,6 +1455,228 @@ details[open]>summary::before{content:"▾"}
     // previous render's until the reply lands.
     repaintStreamed(id);
   }
+
+  /* ─── what changed ─────────────────────────────────────────────
+   *
+   * After a render, the regions of each page that differ from the
+   * previous render are outlined for a moment, so an edit's effect —
+   * and any knock-on reflow elsewhere on the page — is visible without
+   * comparing two pages by eye.
+   *
+   * HOW
+   * Only pages whose hash changed are compared. Each PNG is decoded and
+   * shrunk to a quarter of its size in one step by createImageBitmap
+   * (off the main thread), drawn into a canvas, and compared pixel by
+   * pixel; differences are collected into 8 px cells (32 px of the
+   * full raster), neighbouring cells are joined, and each group's
+   * bounding box becomes one outline. The work runs when the page is
+   * idle (requestIdleCallback), and the quarter-size pixels of the
+   * current pages are kept, so each render decodes only its new pages.
+   *
+   * WHY NOT A WORKER: the page's CSP has no worker-src, so it falls
+   * back to script-src, which admits only the inline script's hash — a
+   * Blob-URL worker is refused. The main thread at quarter scale is a
+   * few milliseconds a page (measured; shown under Diagnostics).
+   *
+   * Not drawn after the first render (nothing to compare with), and
+   * dropped when the pages are resized (a zoom step, a new display
+   * scale): the outlines are placed in percentages and would still
+   * line up, but a highlight that appears on a zoom is news about
+   * nothing.
+   */
+  var DIFF_SCALE = 4, DIFF_CELL = 8, DIFF_THRESHOLD = 48, MARK_MS = 4000;
+  var quarterCache = new Map();   // page hash -> {w, h, data}
+  var highlight = null;           // {doc, byPage: {page: [[x0,y0,x1,y1] fractions]}, at, dpr, width}
+
+  function activeHighlights(id) {
+    if (!highlight || highlight.doc !== id || !prefs.highlight) return null;
+    if (Date.now() - highlight.at > MARK_MS) return null;
+    if (highlight.dpr !== window.devicePixelRatio || highlight.width !== sheetWidthPx()) return null;
+    return highlight;
+  }
+  function drawMarks(sheet, boxes, h) {
+    if (!boxes) return;
+    var elapsed = Date.now() - h.at;
+    boxes.forEach(function (b) {
+      var d = el('div', 'chg');
+      d.setAttribute('aria-hidden', 'true');
+      d.style.left = (b[0] * 100).toFixed(2) + '%';
+      d.style.top = (b[1] * 100).toFixed(2) + '%';
+      d.style.width = ((b[2] - b[0]) * 100).toFixed(2) + '%';
+      d.style.height = ((b[3] - b[1]) * 100).toFixed(2) + '%';
+      // A redraw mid-fade continues the fade rather than restarting it.
+      d.style.animationDelay = (-elapsed) + 'ms';
+      sheet.appendChild(d);
+    });
+  }
+  function clearHighlights() {
+    highlight = null;
+    var marks = document.querySelectorAll('.chg');
+    for (var i = 0; i < marks.length; i++) marks[i].remove();
+  }
+
+  /*
+   * A page at a quarter of its size, as pixels, always the same way:
+   * decoded from its PNG by createImageBitmap, which shrinks it in the
+   * same step. Never from the <img> on screen, although that one is
+   * already decoded: drawImage's downscale and createImageBitmap's are
+   * different filters, and the same PNG read both ways differs in about
+   * 18,000 of a page's 121,000 quarter-size pixels (measured) — a page
+   * whose "before" came one way and "after" the other was outlined
+   * from top to bottom for a one-word edit.
+   */
+  var diffCanvas = null;
+  var diffCpu = 0;   // ms of main-thread work in the current comparison
+  async function quarterPixels(im) {
+    var hit = quarterCache.get(im.hash);
+    if (hit) return hit;
+    if (!im.png) throw new Error('no pixels for page ' + im.page);
+    var w = Math.max(1, Math.round(im.width / DIFF_SCALE));
+    var h = Math.max(1, Math.round(im.height / DIFF_SCALE));
+    var t = performance.now();
+    var bin = atob(im.png);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    diffCpu += performance.now() - t;
+    var bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }),
+      { resizeWidth: w, resizeHeight: h, resizeQuality: 'low' });
+    t = performance.now();
+    // Sized and read with no await in between: another comparison may
+    // use the canvas while this one waits for its bitmap.
+    if (!diffCanvas) diffCanvas = document.createElement('canvas');
+    diffCanvas.width = w; diffCanvas.height = h;
+    var ctx = diffCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    if (bmp.close) bmp.close();
+    var out = { w: w, h: h, data: ctx.getImageData(0, 0, w, h).data };
+    diffCpu += performance.now() - t;
+    quarterCache.set(im.hash, out);
+    return out;
+  }
+
+  /**
+   * Shrink the pages on screen now, while nothing else is happening, so
+   * that when the next render changes one of them its "before" is
+   * already to hand and only the new page is read.
+   */
+  function warmQuarterCache(r) {
+    if (!prefs.highlight || !r || !r.images) return;
+    var todo = r.images.filter(function (im) { return im.hash && im.png && !quarterCache.has(im.hash); });
+    if (!todo.length) return;
+    var idle = window.requestIdleCallback || function (fn) { return setTimeout(fn, 50); };
+    idle(async function () {
+      for (var i = 0; i < todo.length; i++) {
+        if (state.render[state.active] !== r) return;   // superseded; its pages are no use
+        try { await quarterPixels(todo[i]); } catch { return; }
+      }
+    }, { timeout: 2000 });
+  }
+
+  /** Boxes, as fractions of the page, around the cells that differ. */
+  function diffBoxes(a, b) {
+    if (a.w !== b.w || a.h !== b.h) return [[0, 0, 1, 1]];
+    var cw = Math.ceil(a.w / DIFF_CELL), ch = Math.ceil(a.h / DIFF_CELL);
+    var dirty = new Uint8Array(cw * ch);
+    var da = a.data, db = b.data, w = a.w;
+    for (var y = 0; y < a.h; y++) {
+      var row = (y / DIFF_CELL | 0) * cw;
+      for (var x = 0; x < w; x++) {
+        var k = (y * w + x) * 4;
+        if (Math.abs(da[k] - db[k]) + Math.abs(da[k + 1] - db[k + 1]) + Math.abs(da[k + 2] - db[k + 2]) > DIFF_THRESHOLD) {
+          dirty[row + (x / DIFF_CELL | 0)] = 1;
+          x = (((x / DIFF_CELL) | 0) + 1) * DIFF_CELL - 1;   // the rest of this cell's row adds nothing
+        }
+      }
+    }
+    // Groups of dirty cells, joining any within one cell of each other
+    // (a changed line and the one below it are one change, not two).
+    var seen = new Uint8Array(cw * ch), boxes = [];
+    for (var i = 0; i < dirty.length; i++) {
+      if (!dirty[i] || seen[i]) continue;
+      var stack = [i], x0 = cw, y0 = ch, x1 = 0, y1 = 0;
+      seen[i] = 1;
+      while (stack.length) {
+        var c = stack.pop(), cx = c % cw, cy = (c / cw) | 0;
+        if (cx < x0) x0 = cx; if (cx > x1) x1 = cx;
+        if (cy < y0) y0 = cy; if (cy > y1) y1 = cy;
+        for (var dy = -2; dy <= 2; dy++) {
+          for (var dx = -2; dx <= 2; dx++) {
+            var nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue;
+            var n = ny * cw + nx;
+            if (dirty[n] && !seen[n]) { seen[n] = 1; stack.push(n); }
+          }
+        }
+      }
+      boxes.push([x0 * DIFF_CELL / a.w, y0 * DIFF_CELL / a.h,
+                  Math.min(1, (x1 + 1) * DIFF_CELL / a.w), Math.min(1, (y1 + 1) * DIFF_CELL / a.h)]);
+    }
+    // A reflow can touch most of a page; past a dozen outlines the
+    // picture is "everything below here moved", so say that instead.
+    if (boxes.length > 12) {
+      boxes = [boxes.reduce(function (u, bx) {
+        return [Math.min(u[0], bx[0]), Math.min(u[1], bx[1]), Math.max(u[2], bx[2]), Math.max(u[3], bx[3])];
+      })];
+    }
+    return boxes;
+  }
+
+  /** Compare a render's pages with the render before it, when idle. */
+  function highlightChanges(id, prev, next) {
+    var prevByPage = {};
+    ((prev && prev.images) || []).forEach(function (im) { prevByPage[im.page] = im; });
+    // Keep the quarter-size pixels of these two renders, nothing older.
+    var live = new Set();
+    (next.images || []).concat((prev && prev.images) || []).forEach(function (im) { live.add(im.hash); });
+    quarterCache.forEach(function (_v, k) { if (!live.has(k)) quarterCache.delete(k); });
+    if (!prefs.highlight) return;
+    if (!prev || !prev.images || !prev.images.length) { warmQuarterCache(next); return; }
+    var pairs = (next.images || []).filter(function (im) {
+      var old = prevByPage[im.page];
+      return old && old.png && im.png && old.hash !== im.hash;
+    }).map(function (im) { return [prevByPage[im.page], im]; });
+    if (!pairs.length) { warmQuarterCache(next); return; }
+    var width = sheetWidthPx(), dpr = window.devicePixelRatio;
+    var idle = window.requestIdleCallback || function (fn) { return setTimeout(fn, 1); };
+    idle(async function () {
+      var t0 = performance.now();
+      var byPage = {};
+      diffCpu = 0;
+      try {
+        for (var i = 0; i < pairs.length; i++) {
+          var qa = await quarterPixels(pairs[i][0]), qb = await quarterPixels(pairs[i][1]);
+          var t1 = performance.now();
+          var boxes = diffBoxes(qa, qb);
+          diffCpu += performance.now() - t1;
+          if (boxes.length) byPage[pairs[i][1].page] = boxes;
+        }
+      } catch (err) {
+        return;   // a highlight is a nicety; a failure to draw one is not news
+      }
+      state.diffMs = Math.round(performance.now() - t0);
+      state.diffCpuMs = Math.round(diffCpu);
+      state.diffPages = pairs.length;
+      warmQuarterCache(next);
+      // Stale by now: a newer render, another document, a zoom.
+      if (state.render[id] !== next || state.active !== id || sheetWidthPx() !== width
+          || window.devicePixelRatio !== dpr) return;
+      highlight = { doc: id, byPage: byPage, at: Date.now(), dpr: dpr, width: width };
+      Object.keys(byPage).forEach(function (page) {
+        var sheet = $('scroller').querySelector('.sheet-wrap[data-page="' + page + '"] .sheet');
+        if (sheet) drawMarks(sheet, byPage[page], highlight);
+      });
+      setTimeout(function () {
+        if (highlight && Date.now() - highlight.at >= MARK_MS) clearHighlights();
+      }, MARK_MS + 50);
+    }, { timeout: 500 });
+  }
+
+  $('hlBtn').setAttribute('aria-pressed', String(prefs.highlight));
+  $('hlBtn').addEventListener('click', function () {
+    savePrefs({ highlight: !prefs.highlight });
+    this.setAttribute('aria-pressed', String(prefs.highlight));
+    if (!prefs.highlight) clearHighlights();
+  });
 
   /* ─── which pages are on screen ────────────────────────────────
    *
@@ -1001,7 +1743,10 @@ details[open]>summary::before{content:"▾"}
       img.src = 'data:image/png;base64,' + im.png;
       img.decoding = 'async';
     }
-    img.alt = 'Page ' + im.page;
+    // Which document and where in it, not just "Page 2".
+    var m = docMeta(state.active), r = state.render[state.active];
+    var total = r && r.images ? r.images.length : 0;
+    img.alt = (m ? m.label + ', page ' : 'Page ') + im.page + (total >= im.page ? ' of ' + total : '');
     return img;
   }
 
@@ -1099,38 +1844,6 @@ details[open]>summary::before{content:"▾"}
     g0.appendChild(out);
     ins.appendChild(g0);
 
-    // render timings
-    if (r && r.timings) {
-      var g1 = el('div', 'ins-group');
-      g1.appendChild(el('p', 'eyebrow', 'Last render'));
-      var ph = el('div', 'phases');
-      var order = [['readBuilt', 'Read built PDF'],
-                   ['sass', 'Sass'], ['browserLaunch', 'Chromium launch'],
-                   ['measurementHtml', 'Measurement HTML'],
-                   ['letterHtml', 'Letter HTML'], ['load', 'Load page'],
-                   ['measure', 'Measure DOM'], ['solve', 'Solve placement'],
-                   ['finalHtml', 'Final HTML'], ['invariants', 'Invariants'],
-                   ['print', 'Print PDF'], ['raster', 'Rasterize']];
-      order.forEach(function (p) {
-        if (r.timings[p[0]] == null) return;
-        var line = el('div', 'phase done');
-        line.appendChild(el('div', 'm', '✓'));
-        line.appendChild(el('div', null, '<b style="font-weight:600">' + esc(p[1]) + '</b>'));
-        line.appendChild(el('div', 'ms', r.timings[p[0]] + ' ms'));
-        ph.appendChild(line);
-      });
-      g1.appendChild(ph);
-      if (r.invariants && !r.invariants.ok) {
-        var warn = el('div', 'errcard');
-        warn.appendChild(el('div', 'loc', 'Layout invariant violated'));
-        warn.appendChild(el('div', 'msg', esc(r.invariants.message || 'content overflows its page')));
-        warn.appendChild(el('div', 'fix',
-          'The preview above is what would print. A Build will refuse this.'));
-        g1.appendChild(warn);
-      }
-      ins.appendChild(g1);
-    }
-
     // metadata
     if (r && r.meta) {
       var g2 = el('div', 'ins-group');
@@ -1151,18 +1864,77 @@ details[open]>summary::before{content:"▾"}
       ins.appendChild(g2);
     }
 
-    // log
-    var g3 = el('div', 'ins-group');
-    var det = el('details'); det.open = true;
-    det.appendChild(el('summary', null, 'Console output'));
+    /*
+     * Diagnostics: the engine, the last render's phases and the console,
+     * in one disclosure, closed by default. They are for finding out why
+     * something is slow or broken, not for writing a resume, and they
+     * were most of the Inspector. A failure opens it (the console is
+     * where the rest of the story is); whether you leave it open is
+     * remembered (prefs.diagnostics).
+     */
+    var det = el('details', 'diag');
+    det.id = 'diagDet';
+    det.open = Boolean(prefs.diagnostics || state.diagAuto);
+    var initialOpen = det.open;
+    var sum = el('summary', null, 'Diagnostics');
+    sum.title = 'Engine, render timings and console output (Ctrl+Shift+D)';
+    sum.setAttribute('aria-keyshortcuts', 'Control+Shift+D');
+    det.appendChild(sum);
+    det.addEventListener('toggle', function () {
+      // The first toggle event is the one setting `open` above queued.
+      if (!det.isConnected || det.open === initialOpen) { initialOpen = null; return; }
+      initialOpen = null;
+      state.diagAuto = false;
+      savePrefs({ diagnostics: det.open });
+    });
+
+    var st = state.status;
+    if (st && st.worker) {
+      det.appendChild(el('div', 'diag-env', esc(
+        (st.root || '').split(/[\\/]/).pop()
+        + ' · python ' + st.worker.python
+        + ' · worker pid ' + st.worker.pid
+        + ' · chromium ' + (st.browserOpen ? 'warm' : 'cold'))));
+    }
+
+    if (r && r.timings) {
+      det.appendChild(el('p', 'eyebrow', 'Last render'));
+      var ph = el('div', 'phases');
+      var order = [['readBuilt', 'Read built PDF'],
+                   ['sass', 'Sass'], ['browserLaunch', 'Chromium launch'],
+                   ['measurementHtml', 'Measurement HTML'],
+                   ['letterHtml', 'Letter HTML'], ['load', 'Load page'],
+                   ['measure', 'Measure DOM'], ['solve', 'Solve placement'],
+                   ['finalHtml', 'Final HTML'], ['invariants', 'Invariants'],
+                   ['print', 'Print PDF'], ['raster', 'Rasterize']];
+      order.forEach(function (p) {
+        if (r.timings[p[0]] == null) return;
+        var line = el('div', 'phase done');
+        line.appendChild(el('div', 'm', '✓'));
+        line.appendChild(el('div', null, '<b style="font-weight:600">' + esc(p[1]) + '</b>'));
+        line.appendChild(el('div', 'ms', esc(r.timings[p[0]]) + ' ms'));
+        ph.appendChild(line);
+      });
+      if (state.diffMs != null) {
+        var hl = el('div', 'phase done');
+        hl.appendChild(el('div', 'm', '✓'));
+        hl.appendChild(el('div', null, '<b style="font-weight:600">Last change highlight</b> '
+          + esc('(' + state.diffPages + (state.diffPages === 1 ? ' page' : ' pages') + ', '
+            + state.diffCpuMs + ' ms of it on the main thread)')));
+        hl.appendChild(el('div', 'ms', esc(state.diffMs) + ' ms'));
+        ph.appendChild(hl);
+      }
+      det.appendChild(ph);
+    }
+
+    det.appendChild(el('p', 'eyebrow', 'Console output'));
     var logEl = el('div', 'log', esc(state.log.slice(-160).join('\n')));
     logEl.id = 'logBox';
     // It scrolls, so the keyboard must be able to reach it.
     logEl.tabIndex = 0;
     logEl.setAttribute('aria-label', 'Console output');
     det.appendChild(logEl);
-    g3.appendChild(det);
-    ins.appendChild(g3);
+    ins.appendChild(det);
   }
 
   // The panes are rebuilt with innerHTML, which drops keyboard focus to
@@ -1315,15 +2087,16 @@ details[open]>summary::before{content:"▾"}
     // the busy state — the answer is about what the user is looking at
     // now, not about the elements that are about to replace it.
     var order = visiblePages(id);
-    state.busy[id] = 'render';
+    setBusy(id, 'render');
     renderAll();
+    var before = state.render[id];
     try {
       // Unchanged pages come back as {hash, unchanged: true} with no PNG;
       // the image this page already has is put back in by hash.
       var held = heldImages(state.render[id]);
       var rid = newRenderId(id);
       var r = await api('POST', '/api/preview', {
-        doc: id, scale: 2, known: held.known,
+        doc: id, scale: RASTER_SCALE, known: held.known,
         stream: true, renderId: rid, order: order,
         // Only a render the user asked for: it may restart a Python
         // worker that stopped restarting after repeated crashes.
@@ -1351,17 +2124,21 @@ details[open]>summary::before{content:"▾"}
       // Cannot happen unless the held images changed under the request,
       // or an event was lost; if it does, ask again for every page — and
       // without streaming, so the answer is complete in itself.
-      if (missing) r = await api('POST', '/api/preview', { doc: id, scale: 2 });
+      if (missing) r = await api('POST', '/api/preview', { doc: id, scale: RASTER_SCALE });
       state.render[id] = r;
+      state.renderedAt[id] = Date.now();
       delete state.error[id];
+      highlightChanges(id, before, r);
     } catch (err) {
+      // A new failure opens Diagnostics, where the console has the rest.
+      if (state.error[id] !== err.message) state.diagAuto = true;
       state.error[id] = err.message;
     } finally {
       // This render is over: its streamed pages are either in
       // state.render now or belong to a render that failed, and either
       // way nothing should paint them again.
       if (streamRender[id] && streamRender[id].id === rid) streamRender[id] = null;
-      state.busy[id] = null;
+      setBusy(id, null);
       await refreshStatusQuietly();
       renderAll();
     }
@@ -1384,14 +2161,15 @@ details[open]>summary::before{content:"▾"}
   }
 
   async function doBuild(id) {
-    state.busy[id] = 'build';
+    var shownAtStart = state.active;
+    setBusy(id, 'build');
     delete state.buildError[id];
     var mark = state.log.length;   // where this build's output starts
     renderAll();
     try {
       var r = await api('POST', '/api/build',
         { doc: id, snapshot: state.snapshot,
-          tests: state.tests, scale: 2 });
+          tests: state.tests, scale: RASTER_SCALE });
 
       var drift = state.log.slice(mark)
         .filter(function (l) { return /% difference \(limit/.test(l); })
@@ -1405,10 +2183,18 @@ details[open]>summary::before{content:"▾"}
         };
       }
 
-      toast('Built ' + docMeta(id).label,
+      // Building the document that is not on screen shows it, when the
+      // build hands back its pages: the pane then shows the file just
+      // written, which is the confirmation the build was asking for.
+      // Not if you moved to another document while it ran — that was a
+      // choice, and a build finishing should not undo it.
+      var switchTo = id !== state.active && state.active === shownAtStart
+        && r.render && r.render.images && r.render.images.length;
+      toast('Built ' + docMeta(id).label + (switchTo ? ' — now showing it' : ''),
         drift.length ? 'snapshot differs — PDFs written anyway'
                      : (id === 'resume' ? 'Cover Letter' : 'Resume') + ' untouched');
-      state.busy[id] = null;
+      setBusy(id, null);
+      if (switchTo) state.active = id;
       await refreshStatus();
 
       // Show the file the build just wrote, not a re-render of it.
@@ -1424,7 +2210,18 @@ details[open]>summary::before{content:"▾"}
       // rasterize (no PDF, a wedged worker), fall through to it rather
       // than leaving the pane stale.
       if (r.render && r.render.images && r.render.images.length) {
+        // A built PDF read back carries no fill (that comes from the
+        // solver, which a read-back does not run), so the chip would
+        // vanish on every Build. Keep the last render's figure until
+        // the next render replaces it.
+        var prevFill = state.render[id] && state.render[id].invariants
+          && state.render[id].invariants.fill;
+        var inv = r.render.invariants;
+        if (prevFill && inv && inv.ok && !inv.fill) {
+          r.render.invariants = Object.assign({}, inv, { fill: prevFill });
+        }
         state.render[id] = r.render;
+        state.renderedAt[id] = Date.now();
         delete state.error[id];
         renderAll();
       } else {
@@ -1450,7 +2247,8 @@ details[open]>summary::before{content:"▾"}
         hint: hint || null,
       };
       toast('Build failed', reasons[0] ? reasons[0].slice(0, 70) : err.message.slice(0, 70));
-      state.busy[id] = null;
+      state.diagAuto = true;
+      setBusy(id, null);
       await refreshStatusQuietly();
       renderAll();
     }
@@ -1507,22 +2305,14 @@ details[open]>summary::before{content:"▾"}
   async function refreshStatus() {
     state.status = await api('GET', '/api/status');
     state.dataSource = state.status.dataSource;
+    // Compact: which project, and whether a render will start warm. The
+    // Python version and worker pid are under Diagnostics.
     $('envLine').textContent =
       state.status.root.split(/[\\/]/).pop() +
-      ' · python ' + state.status.worker.python +
-      ' · worker pid ' + state.status.worker.pid +
       ' · chromium ' + (state.status.browserOpen ? 'warm' : 'cold');
   }
 
   /* ─── zoom, pause, menu ────────────────────────────────────── */
-
-  $('zoomIn').addEventListener('click', function () {
-    state.zoom = Math.min(180, state.zoom + 10); applyZoom();
-  });
-  $('zoomOut').addEventListener('click', function () {
-    state.zoom = Math.max(50, state.zoom - 10); applyZoom();
-  });
-  function applyZoom() { $('zoomVal').textContent = state.zoom + '%'; renderCanvas(); }
 
   $('pauseBtn').addEventListener('click', function () {
     state.paused = !state.paused;
@@ -1540,7 +2330,8 @@ details[open]>summary::before{content:"▾"}
     }
   });
 
-  $('menuRefresh').addEventListener('click', function () { preview(null, { retry: true }); });
+  function rerender() { preview(null, { retry: true }); }
+  $('menuRefresh').addEventListener('click', rerender);
   async function reveal(target) {
     try {
       var r = await api('POST', '/api/reveal', { path: target });
@@ -1557,11 +2348,19 @@ details[open]>summary::before{content:"▾"}
   // relaunches it as soon as the page is visible. Best effort — a lost
   // report only means Chromium stays open. In a browser (`npm run ui`)
   // this is the report. In the desktop app WebView2 never fires it on
-  // minimize, so the Tauri shell sends the same report itself (main.rs,
-  // note_minimized); a report twice over is harmless.
-  document.addEventListener('visibilitychange', function () {
-    api('POST', '/api/visibility', { hidden: document.hidden }).catch(function () {});
-  });
+  // minimize, so the Tauri shell sends its own report (main.rs,
+  // note_minimized). The report names this page (the id the event
+  // stream's `hello` gave it), so the server can wait for every open
+  // page to be hidden rather than obey whichever reported last; it is
+  // sent again on each hello, so a page that opens in the background, or
+  // reconnects, is counted as it is.
+  var clientId = null;
+  function reportVisibility() {
+    if (!clientId) return;
+    api('POST', '/api/visibility', { hidden: document.hidden, client: clientId })
+      .catch(function () {});
+  }
+  document.addEventListener('visibilitychange', reportVisibility);
 
   /* ─── dialogs ──────────────────────────────────────────────── */
 
@@ -1650,7 +2449,7 @@ details[open]>summary::before{content:"▾"}
         }
       });
       r.appendChild(el('div', null,
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted-2)"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>'));
+        '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted-2)"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>'));
       var mid = el('div');
       mid.appendChild(el('div', 'n', esc(f.name)));
       mid.appendChild(el('div', 'd', esc(kb(f.bytes) + ' · ' + ago(f.mtimeMs))));
@@ -1879,10 +2678,199 @@ details[open]>summary::before{content:"▾"}
     else if (dialogs.length) dialogs[dialogs.length - 1]();
   });
 
+  /* ─── keyboard shortcuts ───────────────────────────────────────
+   *
+   * One table, used both to act and to draw the help dialog (F1), so the
+   * two cannot disagree. Letters and digits are matched on e.code — the
+   * key's position — so Ctrl+8 is the same key on every layout, and
+   * Ctrl+Shift+B is not undone by Shift changing e.key.
+   *
+   * Left alone on purpose: Ctrl+plus / minus / 0 (zoom the whole
+   * interface; see "zoom"), Ctrl+F, Ctrl+P, Tab, and every key while an
+   * IME is composing. Keys with no modifier act only where they cannot
+   * be typing: never in an input, select or textarea.
+   *
+   * F5 and Ctrl+R are taken over everywhere, dialogs included: in the
+   * desktop window they would otherwise reload the page — WebView2's
+   * browser accelerator keys are on, and turning them off from the shell
+   * needs the webview2-com crate as a direct dependency (see main.rs) —
+   * and a reload throws away the preview and every render in memory.
+   * Here they re-render, which is what a user pressing them wants.
+   *
+   * Documents are Ctrl+1 / Ctrl+2 first and Ctrl+Tab second: Chrome
+   * keeps Ctrl+Tab for its own tab strip and never passes it to a page,
+   * so in a browser tab (npm run ui) only the digits could work. The
+   * browser may keep the digits too (Ctrl+1–8 pick its tabs, as it does
+   * with Ctrl+8 and Ctrl+9); the document cards and the toolbar do the
+   * same things.
+   */
+  var SHORTCUTS = [
+    { keys: ['F5', 'Ctrl+R'], what: 'Re-render the preview',
+      match: function (e, mod) { return e.key === 'F5' || (mod && e.code === 'KeyR'); },
+      run: rerender },
+    { keys: ['Ctrl+Shift+B'], what: 'Build the PDF of the document on screen',
+      match: function (e, mod) { return mod && e.shiftKey && e.code === 'KeyB'; },
+      run: function () { if (!(state.busy.resume || state.busy.letter)) doBuild(state.active); else say('A build or render is already running'); } },
+    { keys: ['Ctrl+1', 'Ctrl+2'], what: 'Show the Resume, the Cover Letter',
+      match: function (e, mod) {
+        return mod && !e.shiftKey && (e.code === 'Digit1' || e.code === 'Digit2');
+      },
+      run: function (e) { showDoc(e.code === 'Digit1' ? 'resume' : 'letter'); } },
+    { keys: ['Ctrl+Tab', 'Ctrl+Shift+Tab'], what: 'Switch between Resume and Cover Letter',
+      match: function (e) { return e.ctrlKey && !e.altKey && e.key === 'Tab'; },
+      run: function () { showDoc(state.active === 'resume' ? 'letter' : 'resume'); } },
+    { keys: ['Ctrl+Shift+P'], what: 'Pause or resume auto-render',
+      match: function (e, mod) { return mod && e.shiftKey && e.code === 'KeyP'; },
+      run: function () { $('pauseBtn').click(); } },
+    { keys: ['Ctrl+O'], what: 'Data files: choose which file to read',
+      match: function (e, mod) { return mod && !e.shiftKey && e.code === 'KeyO'; },
+      run: function () { openFiles(); } },
+    { keys: ['Ctrl+Shift+D'], what: 'Show or hide Diagnostics',
+      match: function (e, mod) { return mod && e.shiftKey && e.code === 'KeyD'; },
+      run: toggleDiagnostics },
+    { keys: ['Ctrl+Shift+L'], what: 'Theme: System, Light, Dark in turn',
+      match: function (e, mod) { return mod && e.shiftKey && e.code === 'KeyL'; },
+      run: function () { setTheme(THEMES[(THEMES.indexOf(prefs.theme) + 1) % THEMES.length], true); } },
+    { keys: ['Ctrl+8'], what: 'Preview: fit width',
+      match: function (e, mod) { return mod && !e.shiftKey && e.code === 'Digit8'; },
+      run: function () { setZoom('width'); } },
+    { keys: ['Ctrl+9'], what: 'Preview: fit page',
+      match: function (e, mod) { return mod && !e.shiftKey && e.code === 'Digit9'; },
+      run: function () { setZoom('page'); } },
+    { keys: ['+', '−', '0'], what: 'Preview: zoom in, out, actual size (with the preview focused)',
+      match: function (e, mod, typing) {
+        return !mod && !e.altKey && !typing && inCanvas()
+          && (e.key === '+' || e.key === '=' || e.key === '-' || e.code === 'Digit0' || e.code === 'Numpad0');
+      },
+      run: function (e) {
+        if (e.key === '+' || e.key === '=') zoomStep(1);
+        else if (e.key === '-') zoomStep(-1);
+        else setZoom('none', 100);
+      } },
+    { keys: ['Ctrl+wheel'], what: 'Preview: zoom, over the pages (a pinch too)', match: null },
+    { keys: ['F6', 'Shift+F6'], what: 'Move between Documents, Preview and Inspector',
+      match: function (e) { return e.key === 'F6'; },
+      run: function (e) { cyclePanes(e.shiftKey ? -1 : 1); } },
+    { keys: ['F1', 'Ctrl+/'], what: 'This list',
+      match: function (e, mod) { return e.key === 'F1' || (mod && e.code === 'Slash'); },
+      run: function () { showHelp(); } },
+    { keys: ['Ctrl+plus', 'Ctrl+minus', 'Ctrl+0'], what: 'Zoom the whole interface, text included', match: null },
+    { keys: ['Esc'], what: 'Close a dialog', match: null },
+  ];
+
+  function showDoc(id) {
+    if (!docMeta(id)) return;
+    if (state.active !== id) select(id);
+    say('Showing ' + docMeta(id).label);
+  }
+
+  function inCanvas() {
+    var a = document.activeElement;
+    return Boolean(a && a.closest && a.closest('.canvas'));
+  }
+
+  var PANES = ['rail', 'scroller', 'inspector'];
+  function cyclePanes(dir) {
+    var a = document.activeElement;
+    var at = -1;
+    PANES.forEach(function (p, i) { if (a && a.closest && a.closest('#' + p + (p === 'scroller' ? ', .canvas' : ''))) at = i; });
+    var next = at === -1 ? (dir > 0 ? 0 : PANES.length - 1) : (at + dir + PANES.length) % PANES.length;
+    $(PANES[next]).focus();
+  }
+
+  function toggleDiagnostics() {
+    var det = $('diagDet');
+    var open = !(det && det.open);
+    state.diagAuto = false;
+    savePrefs({ diagnostics: open });
+    renderInspector();
+    var again = $('diagDet');
+    if (again && open) {
+      again.scrollIntoView({ block: 'nearest' });
+      again.querySelector('summary').focus();
+    }
+    say(open ? 'Diagnostics shown' : 'Diagnostics hidden');
+  }
+
+  function showHelp() {
+    if ($('helpDlg')) return;
+    var scrim = el('div', 'scrim');
+    var modal = el('div', 'modal wide');
+    modal.id = 'helpDlg';
+    var h = el('div', 'modal-h');
+    var title = el('h3', null, 'Keyboard shortcuts');
+    h.appendChild(title);
+    modal.appendChild(h);
+    var body = el('div', 'modal-b');
+    var table = el('table', 'keys');
+    var cap = el('caption', 'sr-only', 'Keyboard shortcuts');
+    table.appendChild(cap);
+    var thead = el('thead', null, '<tr><th scope="col">Keys</th><th scope="col">Does</th></tr>');
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    SHORTCUTS.forEach(function (sc) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, sc.keys.map(function (k) {
+        // A combination is written with its keys joined by "+"; the key
+        // "+" itself (and "Ctrl+plus") is spelled so it cannot be split.
+        var parts = k === '+' ? ['+'] : k.split('+');
+        return parts.map(function (part) { return '<kbd>' + esc(part) + '</kbd>'; }).join('+');
+      }).join(' or ')));
+      tr.appendChild(el('td', null, esc(sc.what)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    body.appendChild(table);
+    // It may scroll on a short window, so the keyboard must reach it.
+    body.tabIndex = 0;
+    body.setAttribute('role', 'region');
+    body.setAttribute('aria-label', 'Shortcut list');
+    body.appendChild(el('p', 'hint',
+      'In a browser tab the browser keeps Ctrl+Tab for itself, and may keep Ctrl+1, Ctrl+2, Ctrl+8 and Ctrl+9; '
+      + 'the document cards and the toolbar do the same things.'));
+    modal.appendChild(body);
+    var f = el('div', 'modal-f');
+    var closeBtn = el('button', 'btn tiny', 'Close');
+    f.appendChild(closeBtn);
+    modal.appendChild(f);
+    scrim.appendChild(modal);
+    var close = openDialog(scrim, modal, title);
+    closeBtn.addEventListener('click', function () { close(); });
+    scrim.addEventListener('click', function (e) { if (e.target === scrim) close(); });
+  }
+  $('helpBtn').addEventListener('click', showHelp);
+
+  window.addEventListener('keydown', function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    // Not with Alt: on Windows, AltGr arrives as Ctrl+Alt, so AltGr+O
+    // (ó on a Polish keyboard), AltGr+8 ([ on a German one) or AltGr+R
+    // (® on US-International) would otherwise be Ctrl+O, Ctrl+8, Ctrl+R.
+    var mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+    var t = e.target;
+    var typing = Boolean(t && (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable));
+    // Never a reload: see above.
+    var reload = e.key === 'F5' || (mod && e.code === 'KeyR');
+    if (reload) e.preventDefault();
+    // A dialog is open: it has the keyboard (Tab, Escape, its buttons).
+    if (dialogs.length || dropEl) return;
+    for (var i = 0; i < SHORTCUTS.length; i++) {
+      var sc = SHORTCUTS[i];
+      if (!sc.match || !sc.match(e, mod, typing)) continue;
+      e.preventDefault();
+      if (!e.repeat || sc.keys[0] === '+') sc.run(e);
+      return;
+    }
+  });
+
   /* ─── server events ────────────────────────────────────────── */
 
   function connectEvents() {
     var es = new EventSource('/api/events');
+
+    es.addEventListener('hello', function (ev) {
+      clientId = JSON.parse(ev.data).client;
+      reportVisibility();
+    });
 
     es.addEventListener('log', function (ev) {
       var line = JSON.parse(ev.data).line;
@@ -1918,7 +2906,7 @@ details[open]>summary::before{content:"▾"}
       // the event (which precedes the reply) redrew the previous render
       // over the streamed pages until the reply landed.
       if (streamRender[d.doc]) return;
-      state.busy[d.doc] = d.state === 'start' ? 'render' : null;
+      setBusy(d.doc, d.state === 'start' ? 'render' : null);
       renderCanvas();
       // A save seen while another window's render ran was deferred.
       if (d.state !== 'start') runPendingPreview();
@@ -1945,10 +2933,29 @@ details[open]>summary::before{content:"▾"}
   /* ─── boot ─────────────────────────────────────────────────── */
 
   (async function boot() {
+    // Which editor "Open" will use, for its label. Not waited for.
+    api('GET', '/api/open').then(function (r) {
+      state.editor = r.editor === 'vscode' ? 'vscode' : 'default';
+      renderCanvas();
+    }).catch(function () { /* 'default' stands */ });
+    // A page served without its settings (a server from before them, or
+    // no server at all) asks once; failing that, localStorage stands.
+    if (!prefsFromServer) {
+      api('GET', '/api/prefs').then(function (r) {
+        if (!r || !r.prefs) return;
+        Object.assign(prefs, r.prefs);
+        prefsFromServer = true;
+        applyTheme(prefs.theme);
+        state.snapshot = prefs.snapshot; state.tests = prefs.tests;
+        state.zoom = prefs.zoom; state.fit = prefs.fit;
+        $('hlBtn').setAttribute('aria-pressed', String(prefs.highlight));
+        renderAll();
+      }).catch(function () { /* localStorage stands */ });
+    }
     try {
       await refreshStatus();
       connectEvents();
-      $('zoomVal').textContent = state.zoom + '%';
+      sizeSheets();
       renderAll();
       await preview('resume');
     } catch (err) {

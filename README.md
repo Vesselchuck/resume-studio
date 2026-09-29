@@ -148,6 +148,76 @@ own name if not, and a name collision offers you a choice rather than
 replacing anything. A file whose name starts with `_` is refused:
 those names are reserved for the shared profile.
 
+**When a render fails** — a typo in the YAML, a value the schema
+refuses — the preview keeps the last good render, dimmed, with its time
+("Showing last good render · 14:02"), and a panel over the top of it
+says where the problem is first: `data/resume.yml:42:5`, then the
+message. **Copy location** puts `file:line:column` on the clipboard;
+**Open in VS Code** opens the file at that line when VS Code is
+installed (Windows: the `vscode://` link handler in the registry), and
+otherwise the button reads **Open file** and opens it in its default
+program, which cannot be sent to a line. Only files in `data/` and
+`styles/` can be opened this way. The panel goes when the next save
+renders.
+
+**What changed** after each render is outlined on the page for four
+seconds (a still outline, then gone, if your system asks for reduced
+motion), so an edit's knock-on reflow is visible without comparing by
+eye. **Highlight changes** in the preview's toolbar turns it off.
+
+**Zoom.** 100% is the page's true size, 8.5 inches across. **Fit
+width** (the default) and **Fit page** size the page to the pane and
+follow the window as it is resized. Fit width puts both pages of the
+résumé side by side when the pane can show them at 70% or more, and
+one page across when it cannot. Either fit stops at 150%: the preview's images
+are 1224 px across, and a fit does not enlarge them past that on a
+wide screen. The zoom buttons go on to 200%. Ctrl+wheel (or a pinch) over the
+pages zooms the preview; elsewhere it zooms the whole window, like
+Ctrl+plus and Ctrl+minus, which are left to the browser on purpose so
+the interface's text can always be enlarged.
+
+**Diagnostics** — the engine (Python version, worker pid, whether
+Chromium is warm), each phase of the last render in milliseconds, and
+the console output — sit in one disclosure at the foot of the
+Inspector, closed until a render or build fails.
+
+The last page's fill ("last page 72% full" on the resume card) is how
+far down its body the lowest content on the last page reaches: room
+for another line, or a page about to spill.
+
+### Keyboard shortcuts
+
+| Keys | Does |
+|------|------|
+| F5 or Ctrl+R | Re-render the preview (never reloads the window) |
+| Ctrl+Shift+B | Build the PDF of the document on screen |
+| Ctrl+1, Ctrl+2 | Show the Resume, the Cover Letter |
+| Ctrl+Tab, Ctrl+Shift+Tab | Switch between Resume and Cover Letter (not in a Chrome tab) |
+| Ctrl+Shift+P | Pause or resume auto-render |
+| Ctrl+O | Data files: choose which file to read |
+| Ctrl+Shift+D | Show or hide Diagnostics |
+| Ctrl+Shift+L | Theme: System, Light, Dark in turn |
+| Ctrl+8, Ctrl+9 | Preview: fit width, fit page |
+| + − 0 (preview focused) | Preview: zoom in, zoom out, actual size |
+| Ctrl+wheel over the pages | Preview: zoom |
+| F6, Shift+F6 | Move between Documents, Preview and Inspector |
+| F1 or Ctrl+/ | List the shortcuts |
+| Ctrl+plus, Ctrl+minus, Ctrl+0 | Zoom the whole interface |
+
+In a browser tab (`npm run ui`) Chrome keeps Ctrl+Tab for its own tab
+strip, and a browser may keep Ctrl+1, Ctrl+2, Ctrl+8 and Ctrl+9 too;
+the document cards and the toolbar do the same things.
+
+### Settings
+
+The theme (System, Light or Dark, top right), the zoom, the two
+checkboxes, the highlight and whether Diagnostics is open are kept in
+`dist/.studio-prefs.json`, not in the browser's storage: the desktop
+app's page comes from a new port every launch, and a browser forgets
+storage between origins, so settings kept there were lost on every
+restart. `dist/` is the one folder the Studio already writes, and it
+is never committed; delete the file to go back to the defaults.
+
 ## Editing your resume
 
 **`data/resume.yml` is yours.** It is gitignored, and the Studio prefers
@@ -281,7 +351,8 @@ places to edit one letter and two of them easy to forget.
 job posting. It splits on **every** line, not on blank ones the way
 `body` does: an address line is not a paragraph, and "Acme Corp" and
 "100 Main St" must not be glued together. Blank lines in what you
-pasted are dropped. The list form still works.
+pasted are dropped. The list form still works. `recipient: []`, like
+leaving the key out, means no address block.
 
 **Your name** under the sign-off is not in this file at all. It comes
 from `name` in `data/_profile.yml`, the same place the resume gets it,
@@ -289,9 +360,12 @@ so it is right on every letter without being written on any of them.
 
 A `salutation:`, `closing:` or `signature:` left in an old file is
 rejected with the line to write instead — silently ignoring one would
-drop the greeting off the letter without a word. Any other key the
-letter does not read, a misspelled `recipent:` say, is printed as a
-warning, with a suggestion when it looks like a typo of a real key.
+drop the greeting off the letter without a word. An unknown key in
+`name`, `contact` or a contact row stops the build, as it does the
+résumé's: those usually come from the profile both documents share.
+Any other key the letter does not read, a misspelled `recipent:` say,
+is printed as a warning, with a suggestion when it looks like a typo
+of a real key.
 
 Quote a list-form paragraph that contains a colon followed by a
 space — `- "Dear Team: thank you for your time."` — or YAML reads it
@@ -394,17 +468,20 @@ letter dated differently to the file that made it.
 
 - **Personal info** — `name.first`, `name.last`, contact details.
 - **Sidebar blocks** — add, remove, reorder under `sidebar.blocks`.
-  Each block has a kebab-case `id` (must be unique), a `type`
+  Each block has a kebab-case `id` (must be unique, and not the `id`
+  of a job either: both become ids on the same page), a `type`
   (`details` or `list`), a `heading`, and content. The first block
   with `id: key-skills` (or heading "Key Skills") drives the PDF's
   /Keywords metadata. A block needs at least one entry: a heading
-  with nothing under it is refused.
+  with nothing under it is refused. A `- group:` sub-heading with no
+  lines under it prints over nothing, and the build warns about it.
 - **Main column sections** — exactly one each of `summary`,
   `experience`, `education`. Add/remove jobs under
   `mainColumn[experience].jobs`. A job's `datetime` and an education
   entry's `subtitle` and `institution` are optional; leave one out and
   that line is simply not printed. A gap entry (`gap: true`) has no
-  bullets.
+  bullets. `items: []` under education leaves the section empty; its
+  heading still prints, and the build warns about it.
 - **Bullets** — add or remove freely under each job's `bullets:` list.
   Bullets support `**bold**` markdown; everything else is treated as
   plain text. The layout solver decides where page breaks land.
@@ -420,11 +497,16 @@ letter dated differently to the file that made it.
   catalog entry.
 - **Links** — an `href` in a contact row or a details row is written
   in full: `https://example.com/me`, `mailto:you@example.com`,
-  `tel:+15550100`. One without a scheme (`example.com/me`) is refused:
-  Chromium would read it as a file next to the page, and the PDF would
-  link to a path on your computer. `javascript:`, `file:` and `data:`
-  links and Windows paths are refused too. Leave `href` out, or empty,
-  for text without a link.
+  `tel:+15550100`. Those three and `http:` are the only kinds allowed.
+  One without a scheme (`example.com/me`, `//example.com/me`,
+  `you@example.com`) is refused: Chromium would read it as a file next
+  to the page, and the PDF would link to a path on your computer. So is
+  a host and port (`localhost:3000`, which reads as a scheme — write
+  `https://localhost:3000`), a bare `https:` or `mailto:`, a Windows
+  path, and every other scheme (`javascript:`, `file:`, `smb:`, …),
+  since a PDF viewer hands those to whatever program the reader's
+  system has for them. Leave `href` out, or empty, for text without a
+  link.
 - **Long words** — a word wider than its column, such as a long URL,
   breaks at the column edge rather than running over the divider.
 
@@ -436,6 +518,11 @@ every allowed key — a job, `name`, `contact` and its rows, `sidebar`,
 an education entry, a details row, a list group — an unknown key stops
 the build. Anywhere else it is printed as a warning, with a suggestion
 when it looks like a typo of a real key.
+
+An error the build stops on starts with where it is, as
+`data/resume.yml:42:9:`, the form terminals and editors turn into a
+link. When the value came from `data/_profile.yml` rather than the
+document, the error points into the profile and says so.
 
 ## Editing in VS Code
 
@@ -474,6 +561,16 @@ A resume build writes everything to `dist/`:
 - `dist/pdf_meta.json` — derived PDF metadata + data source identifier
 - `dist/placement.json` — the solver's per-page placement decisions
 - `dist/Gaius_Caesar_Resume.pdf` — the final PDF (US Letter)
+- `dist/outputs.json` — the build record: which PDF each Build wrote,
+  from which data source, with its SHA-256. The live preview never
+  writes it, so it is what the snapshot tool and the stale-PDF cleanup
+  go by.
+
+While a build or a live preview is writing to `dist/`, it holds
+`dist/.lock`, so `node resume.js` in a terminal and the Studio take
+turns instead of overwriting each other's files. A lock whose process
+has gone is taken over, and a build that waits says what it is
+waiting for.
 
 A cover letter build similarly writes `dist/letter.html`,
 `dist/letter_meta.json` and `dist/Gaius_Caesar_Cover_Letter.pdf`.
@@ -550,6 +647,10 @@ A part of the name with letters that have no ASCII form (山田,
 Смирнов) is kept in its own characters instead, with only the
 characters a filename can't hold replaced: `Ivan Petrov-Смирнов` gives
 `Ivan_Petrov-Смирнов_Resume.pdf`, not `Ivan_Petrov_Resume.pdf`.
+Invisible text-direction controls are left out, since they can make a
+file name display in a different order from the one it has. A name too
+long for the file system (255 bytes on Linux and macOS; a CJK
+character takes three) is shortened from the end of its longest part.
 
 Only Python derives the name. Node reads it back from
 `dist/pdf_meta.json` (`output_stem`) through `build/_output_name.js`,
@@ -558,8 +659,10 @@ because nothing on the Node side of this project parses YAML.
 Rename yourself and the filenames move with you; the previous build's
 PDFs are deleted from `dist/` at the end of the next build, so there is
 never a second, plausible-looking resume sitting next to the current
-one under an old name. Only files matching this project's own output
-pattern are touched.
+one under an old name. Only names the build record says a build wrote
+are touched, plus the ones older versions wrote (`resume-color.pdf`,
+the `_Grayscale` copies): a PDF you save in `dist/` yourself stays,
+even one called `Acme_Resume.pdf`. Every removal is printed.
 
 The snapshot **fixture** keeps its fixed name
 (`expected_resume.pdf`). It is a committed reference image;
@@ -732,7 +835,14 @@ does not confine previews to the CPU's efficiency cores on battery.
 
 Closing the desktop window asks the server
 to shut down — it closes Chromium, the worker and any running build —
-and only kills it if it hasn't stopped within two seconds.
+and only kills it if it hasn't stopped within six seconds. On Windows
+the server runs in a job object that ends with the app, so nothing it
+started outlives the app, even when the app itself is killed.
+
+The desktop window opens where it was last closed, at the same size
+and maximized if it was; the first launch opens maximized. It goes
+only to the Studio's own pages. **Ctrl +** and **Ctrl −** zoom the
+whole interface.
 
 The server answers only requests addressed to it: the `Host` must be
 `127.0.0.1` or `localhost` on its own port, an `Origin`, if sent, must
@@ -882,7 +992,7 @@ slow visual-regression snapshot test for the rendered PDFs.
 ### Unit tests
 
 Python and JavaScript test files live in `tests/`. Most are fast
-pure-logic tests; thirteen launch Chromium, three of them Python suites
+pure-logic tests; eighteen launch Chromium, five of them Python suites
 that build a throwaway copy of the project through the CLI.
 
 | Test                          | What it covers                              |
@@ -898,7 +1008,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_letter_data.py`         | The cover letter's data layer               |
 | `test_yaml_typing.py`         | YAML 1.2 typing; schemas agree with the build |
 | `test_profile_merge.py`       | The shared profile's merge and precedence   |
-| `test_snapshot_guard.py`      | The snapshot tool never writes a fixture from the wrong data |
+| `test_snapshot_guard.py`      | The snapshot tool never writes a fixture from the wrong data, even after a preview; exit codes |
 | `test_console_encoding.py`    | Log output on a Windows code page; color settings |
 | `test_output_name.py`         | How your name becomes the PDF file names    |
 | `test_anonymized.py`          | No personal details in committable files, screenshots included |
@@ -909,9 +1019,10 @@ that build a throwaway copy of the project through the CLI.
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`) |
 | `test_check_layout.js`        | Layout invariants in a real browser         |
 | `test_detect_doc.js`          | Which document a dropped file is; path containment |
-| `test_output_name.js`         | PDF names read from `pdf_meta.json`; stale-PDF cleanup |
+| `test_output_name.js`         | PDF names read from `pdf_meta.json`; the build record; stale-PDF cleanup never touches a PDF of yours |
 | `test_engine_equivalence.js`  | Warm engine == cold CLI, pixel for pixel    |
-| `test_studio_server.js`       | The Studio server: data choice per card, worker restart, request checks, drops, saves caught mid-write |
+| `test_studio_server.js`       | The Studio server: data choice per card, worker restart, request checks, drops, saves caught mid-write, settings, Open in editor |
+| `test_studio_ui.js`           | The Studio page in a browser: keyboard shortcuts, the error panel, the change highlight, settings that outlive a new origin |
 | `test_cli_navigation.js`      | The build scripts don't wait for `networkidle` |
 | `test_preview_stream.js`      | Pages stream in the order the window asks for |
 | `test_speculative_load.js`    | The speculative final page is used, or correctly discarded |
@@ -922,7 +1033,9 @@ that build a throwaway copy of the project through the CLI.
 | `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium |
 | `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
-| `test_env_parsing.js`         | `PYTHON`, `NO_COLOR` / `FORCE_COLOR` parsing |
+| `test_env_parsing.js`         | `PYTHON` (quotes, the 3.10 floor), `NO_COLOR` / `FORCE_COLOR` parsing |
+| `test_dist_lock.js`           | `dist/`'s lock: a stale one is taken over, a live one waited for; a CLI build beside back-to-back previews |
+| `test_run_tests.js`           | The test runner: a reported failure fails, large output, partial skips |
 
 Suites that need Chromium skip automatically if it isn't available, so
 a fresh checkout without `npx playwright install` still gets coverage
@@ -987,7 +1100,7 @@ doesn't try to import its heavy dependencies (`pypdfium2`, `Pillow`).
 It is **off by default**; tick "Compare against snapshot" in the
 Studio, or set `RESUME_SNAPSHOT=on` on the command line. It rasterizes
 the freshly built resume PDF (`dist/<First>_<Last>_Resume.pdf`,
-found through `dist/pdf_meta.json`), compares it page by page to a
+found through the build record, `dist/outputs.json`), compares it page by page to a
 committed fixture, and reports whether its visible pixels changed
 beyond the configured tolerance.
 
@@ -1000,8 +1113,11 @@ build instead, which is what you want in CI.
 
 Render produces one PDF per build. The build can use either of two data
 files (`resume.yml` or `resume_default.yml`). The snapshot tool reads
-`dist/pdf_meta.json` (written by `build.py`) to learn which file backed
-the most recent build, and picks the matching fixture:
+the build record, `dist/outputs.json` (written by `resume.js` beside
+the PDF), to learn which file backed the most recent build, and picks
+the matching fixture. Not `dist/pdf_meta.json`: the Studio's live
+preview rewrites that for whatever it last showed, and a PDF whose
+bytes no longer match the record is refused rather than copied.
 
 | Data source | Fixture                                      | In git? |
 |-------------|----------------------------------------------|---------|
@@ -1070,7 +1186,9 @@ py build/snapshot_pdf.py
 
 Useful when iterating on tolerances or inspecting a regression without
 rebuilding. Requires the built resume PDF to already exist; it finds it
-through `dist/pdf_meta.json` rather than by name.
+through the build record, `dist/outputs.json`, rather than by name.
+Exit 0 means it matches, 1 that it differs (diff images written), 2
+that nothing was compared, with the reason printed.
 
 ## Debugging from the command line
 
@@ -1104,6 +1222,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 | Variable                   | Purpose                                                |
 |----------------------------|--------------------------------------------------------|
 | `PYTHON`                   | Explicit Python interpreter (overrides auto-detect).   |
+|                            | One program, no arguments; must be Python 3.10+.       |
 | `RESUME_DATA_SOURCE`       | `default` or `mine` — force which data file to use,    |
 |                            | ignoring the yours-preferred-over-template logic. Used |
 |                            | internally by `--update-all`.                          |
@@ -1134,6 +1253,10 @@ ones it needs itself, from its checkboxes and data-source menu.
 |                            | `--update-all`).                                       |
 | `RESUME_PIPELINE_SUFFIX`   | Label appended to phase headings during `--update-all` |
 |                            | so you can see which data source is being processed.   |
+| `STUDIO_PORT`              | The Studio server's port (`npm run ui`); default: a    |
+|                            | random free one. `--port N` on the command line wins.  |
+| `STUDIO_NODE`              | The `node` the desktop app starts the server with      |
+|                            | (default: `node` on `PATH`).                           |
 | `NO_COLOR` / `FORCE_COLOR` | Control ANSI output (default: auto-detect from TTY).   |
 |                            | A non-empty `NO_COLOR` turns color off. `FORCE_COLOR`  |
 |                            | `0`/`false` turns it off; empty, `1`–`3` or `true`     |
@@ -1235,6 +1358,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── check_layout.js       Post-build layout invariant checks.
 │   ├── run_tests.js          Test runner (Python + Node).
 │   ├── detect_python.js      Cross-platform Python interpreter detect.
+│   ├── _dist_lock.js         dist/.lock: builds and previews take turns.
 │   ├── _constants.json       Single source for cross-language constants.
 │   ├── _console.{py,js}      Shared console-output helpers (read _constants.json).
 │   ├── _env_contract.{py,js} Shared environment-variable names (read _constants.json).
@@ -1270,6 +1394,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_pdf_accessibility.py        What a screen reader and PDF/UA need from the tags.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.
     ├── test_studio_server.js            The Studio server over HTTP.
+    ├── test_studio_ui.js                The Studio page: shortcuts, errors, highlight, settings.
     ├── test_cli_navigation.js           Build scripts don't wait for networkidle.
     ├── test_preview_stream.js           Streamed, prioritized preview pages.
     ├── test_speculative_load.js         The speculative final page.
@@ -1281,6 +1406,8 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_font_faces.js               A font file for every weight and size in use.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.
+    ├── test_dist_lock.js                One writer in dist/ at a time.
+    ├── test_run_tests.js                How the runner reads a suite's output.
     └── fixtures/                        Snapshot fixtures. The template one is
                                          committed; yours is created by the
                                          first build that compares against it.
@@ -1310,6 +1437,12 @@ python.org and run `py` (the launcher), or set `PYTHON=py` before
 starting the Studio: `set "PYTHON=py" && npm run studio` in cmd, or
 `$env:PYTHON="py"; npm run studio` in PowerShell.
 
+`PYTHON` names one program: a name on `PATH` or a full path, quoted or
+not (`set PYTHON="C:\Program Files\Python312\python.exe"` works). It
+cannot carry arguments, so `py -3.12` does not work; give that
+version's path instead. The build checks the interpreter before it
+starts and stops with a message if it is older than 3.10.
+
 **The snapshot reports a difference after a CSS edit and the diff image looks correct.**
 That's it doing its job — any visible change, intentional or not, fires
 it. Note that it *reports*; your PDF was written before it ran. If the
@@ -1318,9 +1451,9 @@ change is intentional, refresh the fixtures with
 data sources).
 
 **`--update` only updates one fixture, not both.**
-By design. The snapshot tool reads `dist/pdf_meta.json` to learn which
-data file (`resume.yml` or `resume_default.yml`) drove the most recent
-build, and updates the fixture for that data source. If you want both
+By design. The snapshot tool reads the build record, `dist/outputs.json`,
+to learn which data file (`resume.yml` or `resume_default.yml`) drove
+the most recent build, and updates the fixture for that data source. If you want both
 refreshed in one go, use `--update-all` — it runs the full pipeline
 twice with each data source forced.
 

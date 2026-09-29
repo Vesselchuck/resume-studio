@@ -302,6 +302,143 @@ class TestMigratedDocumentValidates(unittest.TestCase):
         self.assertEqual(merged["meta"]["maxPages"], 2)
 
 
+class TestErrorLocation(unittest.TestCase):
+    """A validation error names the file and line the bad value is on.
+
+    The validators see the merged data; build.explain_schema_error walks
+    the message's path back through the document and the profile the way
+    deep_merge combined them, so a value the profile supplied is blamed
+    on the profile, not on a document that never mentions it.
+    """
+
+    DOC = (
+        "meta:\n"
+        "  description: A resume\n"
+        "sidebar:\n"
+        "  blocks:\n"
+        "    - id: skills\n"
+        "      type: list\n"
+        "      heading: Skills\n"
+        "      items: [Filing]\n"
+        "mainColumn:\n"
+        "  - type: summary\n"
+        "    heading: Summary\n"
+        "    text: Hello.\n"
+        "  - type: experience\n"
+        "    heading: Work\n"
+        "    jobs:\n"
+        "      - id: a-job\n"
+        "        title: Clerk\n"
+        "        date: \"2020\"\n"
+        "        bullets: [Did the thing.]\n"
+        "  - type: education\n"
+        "    heading: Education\n"
+        "    items: [{title: BA}]\n"
+    )
+    PROFILE = (
+        "name:\n"
+        "  first: Gaius\n"
+        "  last: Caesar\n"
+        "meta:\n"
+        "  lang: en-US\n"
+        "  maxPages: 2\n"
+    )
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.doc = self.tmp / "resume.yml"
+        self.prof = self.tmp / build.PROFILE_NAME
+
+    def explain(self, doc, profile=PROFILE):
+        self.doc.write_text(doc, encoding="utf-8")
+        self.prof.write_text(profile, encoding="utf-8")
+        with silenced():
+            data = build.apply_profile(build.read_yaml(self.doc), self.doc)
+        with self.assertRaises(build.SchemaError) as ctx:
+            build.validate_data(data)
+        return build.explain_schema_error(ctx.exception)
+
+    @staticmethod
+    def line_of(text, needle):
+        return text.splitlines().index(needle) + 1
+
+    def test_a_value_in_the_document_is_located_there(self):
+        doc = self.DOC.replace("title: Clerk", "title: \"\"")
+        said = self.explain(doc)
+        line = self.line_of(doc, "        title: \"\"")
+        self.assertTrue(said.startswith(f"{self.doc}:{line}:9: "), said)
+        self.assertIn("jobs[0]: 'title' is blank", said)
+        self.assertNotIn(build.PROFILE_NAME, said)
+
+    def test_a_value_from_the_profile_is_blamed_on_the_profile(self):
+        said = self.explain(self.DOC, self.PROFILE.replace("maxPages: 2", "maxPages: 0"))
+        line = self.line_of(self.PROFILE, "  maxPages: 2")
+        self.assertTrue(said.startswith(f"{self.prof}:{line}:3: "), said)
+        self.assertIn(f"from {self.prof}", said)
+
+    def test_the_document_overriding_the_profile_is_blamed(self):
+        doc = self.DOC.replace("  description: A resume\n",
+                               "  description: A resume\n  maxPages: 0\n")
+        said = self.explain(doc)
+        self.assertTrue(said.startswith(f"{self.doc}:3:3: "), said)
+        self.assertNotIn(build.PROFILE_NAME, said)
+
+    def test_a_section_is_found_by_its_type(self):
+        doc = self.DOC.replace("    heading: Education\n", "    heading: \"\"\n")
+        said = self.explain(doc)
+        line = self.line_of(doc, "    heading: \"\"")
+        self.assertTrue(said.startswith(f"{self.doc}:{line}:5: "), said)
+
+    def test_a_missing_top_level_key_names_the_file(self):
+        doc = self.DOC.replace("sidebar:", "sidebars:")
+        said = self.explain(doc)
+        self.assertTrue(said.startswith(f"{self.doc}: missing top-level key"), said)
+
+    def test_the_text_that_was_parsed_is_located_not_the_file_now(self):
+        doc = self.DOC.replace("title: Clerk", "title: \"\"")
+        self.doc.write_text(doc, encoding="utf-8")
+        self.prof.write_text(self.PROFILE, encoding="utf-8")
+        with silenced():
+            data = build.apply_profile(build.read_yaml(self.doc), self.doc)
+        self.doc.write_text("# saved again meanwhile\n" * 5 + doc, encoding="utf-8")
+        with self.assertRaises(build.SchemaError) as ctx:
+            build.validate_data(data)
+        line = self.line_of(doc, "        title: \"\"")
+        self.assertTrue(build.explain_schema_error(ctx.exception)
+                        .startswith(f"{self.doc}:{line}:9: "))
+
+    def test_a_value_merged_in_with_an_anchor_is_the_documents(self):
+        # `<<: *m` is still this file: the profile, which also has a
+        # maxPages, must not be blamed for the document's own 0.
+        doc = self.DOC.replace("meta:\n", "base: &m\n  maxPages: 0\nmeta:\n  <<: *m\n", 1)
+        said = self.explain(doc)
+        self.assertTrue(said.startswith(f"{self.doc}:2:3: "), said)
+        self.assertNotIn(build.PROFILE_NAME, said)
+
+    def test_lines_are_counted_as_an_editor_counts_them(self):
+        # U+2028/U+2029/U+0085 are line breaks to YAML but not to an
+        # editor; a BOM and CRLF are nothing; columns are UTF-16 units.
+        doc = self.DOC.replace("title: Clerk", "title: \"\"").replace(
+            "text: Hello.", "text: \"Hel\u2028lo\u2029 \u0085there\"")
+        line = self.line_of(doc.replace("\u2028", "").replace("\u2029", "")
+                            .replace("\u0085", ""), "        title: \"\"")
+        self.doc.write_bytes(("\ufeff" + doc).replace("\n", "\r\n").encode("utf-8"))
+        self.prof.write_text(self.PROFILE, encoding="utf-8")
+        with silenced():
+            data = build.apply_profile(build.read_yaml(self.doc), self.doc)
+        with self.assertRaises(build.SchemaError) as ctx:
+            build.validate_data(data)
+        said = build.explain_schema_error(ctx.exception)
+        self.assertTrue(said.startswith(f"{self.doc}:{line}:9: "), said)
+        text = "a: 1\nb: [\"\U0001F600\", x]\n"
+        node = build._yaml_loader.compose(text).value[1][1].value[1]
+        self.assertEqual(build._editor_position(text, node.start_mark), (2, 11))  # 10 in code points
+
+    def test_without_a_load_the_message_is_unchanged(self):
+        self.assertEqual(build.explain_schema_error(build.SchemaError("x"), merge=[]),
+                         "x")
+
+
 class TestTwoWorlds(unittest.TestCase):
     """The template never merges your profile.
 

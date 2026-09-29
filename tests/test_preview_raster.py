@@ -296,7 +296,7 @@ class TestRasterSkipsOnlyUnchangedPages(unittest.TestCase):
                 ref_img = Image.open(io.BytesIO(base64.b64decode(ref["png"])))
                 self.assertEqual(decoded.convert("RGB").tobytes(), ref_img.convert("RGB").tobytes())
 
-    def test_hash_is_sha256_of_the_pixels(self):
+    def test_hash_is_sha256_of_the_png(self):
         import hashlib
         import pypdfium2 as pdfium
         import snapshot_pdf
@@ -308,8 +308,13 @@ class TestRasterSkipsOnlyUnchangedPages(unittest.TestCase):
             img = snapshot_pdf.render_pdf_pages(pdfium, path)[0]
         finally:
             snapshot_pdf.SCALE = saved
-        want = hashlib.sha256(f"RGB:{img.width}x{img.height}:".encode("ascii") + img.tobytes())
+        # The hash is taken over the PNG (lossless, deterministic encoder),
+        # which is a hash of the pixels; the PNG holds exactly these pixels.
+        png = base64.b64decode(r["images"][0]["png"])
+        want = hashlib.sha256(f"png:{img.width}x{img.height}:".encode("ascii") + png)
         self.assertEqual(r["images"][0]["hash"], want.hexdigest()[:32])
+        decoded = Image.open(io.BytesIO(png)).convert("RGB")
+        self.assertEqual(decoded.tobytes(), img.tobytes())
 
     def test_bytes_render_like_the_file(self):
         """The live preview sends the PDF's bytes (`data`) instead of a

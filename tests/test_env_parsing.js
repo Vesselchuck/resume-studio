@@ -8,6 +8,11 @@
  *   • FORCE_COLOR=0 forced color ON (any non-empty string was truthy).
  *   • cmd.exe's `set PYTHON=py && node resume.js` stores "py " with the
  *     trailing space, and spawning "py " fails with ENOENT.
+ *
+ * And two where the value was taken on trust: cmd.exe's
+ * `set PYTHON="C:\…\python.exe"` keeps its quotes, and a Python older
+ * than README's 3.10 got as far as a traceback mid-build. detectPython
+ * now checks both first.
  */
 
 const path = require('path');
@@ -15,7 +20,9 @@ const { assertEq, test, report } = require('./_framework');
 
 const ROOT = path.resolve(__dirname, '..');
 const c = require(path.join(ROOT, 'build', '_console'));
-const { detectPython, pythonOverride } = require(path.join(ROOT, 'build', 'detect_python'));
+const {
+  detectPython, pythonOverride, parseVersion, MIN_PYTHON,
+} = require(path.join(ROOT, 'build', 'detect_python'));
 
 const TTY = { isTTY: true };
 const PIPE = { isTTY: false };
@@ -70,10 +77,38 @@ function withPython(value, fn) {
   }
 }
 
+/** A spawnSync stand-in: `versions` maps a command to what `--version` prints. */
+function fakeRun(versions, seen = []) {
+  return (cmd) => {
+    seen.push(cmd);
+    if (!(cmd in versions)) return { error: new Error(`spawnSync ${cmd} ENOENT`), status: null };
+    return { status: 0, stdout: versions[cmd], stderr: '' };
+  };
+}
+
+/** detectPython with a fake spawn; process.exit becomes a thrown marker. */
+function detect(env, versions, seen) {
+  const write = process.stderr.write;
+  process.stderr.write = () => true;
+  try {
+    return detectPython({
+      env, run: fakeRun(versions, seen),
+      exit: (code) => { throw new Error(`exit ${code}`); },
+    });
+  } catch (err) {
+    return err.message;
+  } finally {
+    process.stderr.write = write;
+  }
+}
+
 test("cmd.exe's trailing space is trimmed", () => {
   withPython('py ', () => {
     assertEq(pythonOverride(), 'py', 'override');
-    assertEq(detectPython(), 'py', 'detectPython returns it trimmed');
+    const seen = [];
+    assertEq(detect(process.env, { py: 'Python 3.12.1' }, seen), 'py',
+      'detectPython returns it trimmed');
+    assertEq(seen, ['py'], 'and spawns it trimmed');
   });
   withPython('\tpython3.12 \r\n', () => assertEq(pythonOverride(), 'python3.12', 'all whitespace'));
 });
@@ -87,6 +122,46 @@ test('a blank PYTHON counts as unset', () => {
 test('a path with inner spaces is kept intact', () => {
   withPython(' C:\\Program Files\\Python312\\python.exe ', () =>
     assertEq(pythonOverride(), 'C:\\Program Files\\Python312\\python.exe', 'inner spaces'));
+});
+
+test("cmd.exe's quotes around a path are removed", () => {
+  // set PYTHON="C:\Program Files\Python312\python.exe" keeps the quotes,
+  // and a program spawned without a shell is looked up with them.
+  const exe = 'C:\\Program Files\\Python312\\python.exe';
+  assertEq(pythonOverride({ PYTHON: `"${exe}"` }), exe, 'double quotes');
+  assertEq(pythonOverride({ PYTHON: ` '${exe}' ` }), exe, 'single quotes, padded');
+  assertEq(pythonOverride({ PYTHON: '""' }), null, 'only quotes is unset');
+  assertEq(pythonOverride({ PYTHON: '"py' }), '"py', 'an unmatched quote is left alone');
+});
+
+test('PYTHON older than README\'s 3.10 is refused, by name', () => {
+  assertEq(MIN_PYTHON, [3, 10], "README.md: 'Python 3.10+'");
+  assertEq(detect({ PYTHON: 'python3.9' }, { 'python3.9': 'Python 3.9.18' }), 'exit 1', '3.9');
+  assertEq(detect({ PYTHON: 'python2' }, { python2: 'Python 2.7.18' }), 'exit 1', '2.7');
+  assertEq(detect({ PYTHON: 'python3.10' }, { 'python3.10': 'Python 3.10.0' }), 'python3.10', '3.10');
+});
+
+test('a PYTHON that cannot be run stops here, not mid-build', () => {
+  assertEq(detect({ PYTHON: 'py -3.12' }, { py: 'Python 3.12.1' }), 'exit 1', 'arguments');
+});
+
+test('auto-detection skips an interpreter that is too old', () => {
+  const seen = [];
+  const got = detect({}, { python3: 'Python 3.8.10', python: 'Python 3.12.1', py: 'Python 3.12.1' }, seen);
+  if (process.platform === 'win32') {
+    assertEq(got, 'python', 'first candidate on Windows');
+  } else {
+    assertEq(got, 'python', 'python3 is 3.8, python is 3.12');
+    assertEq(seen, ['python3', 'python'], 'tried in order');
+  }
+  assertEq(detect({}, { python3: 'Python 3.9.1', python: 'Python 2.7.18', py: 'Python 3.9.1' }),
+    'exit 1', 'nothing new enough');
+});
+
+test('parseVersion reads stdout (3.x) and stderr (2.x) forms', () => {
+  assertEq(parseVersion('Python 3.12.1\n'), [3, 12], '3.12');
+  assertEq(parseVersion('Python 3.10.0rc1'), [3, 10], 'rc');
+  assertEq(parseVersion(''), null, 'nothing');
 });
 
 

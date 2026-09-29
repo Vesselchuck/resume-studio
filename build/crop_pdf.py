@@ -99,6 +99,7 @@ sys.dont_write_bytecode = True
 
 import argparse
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -139,6 +140,24 @@ def letter_upper_right(left: float, bottom: float, right: float, top: float):
     return right - excess_w, top - excess_h
 
 
+#: Largest excess the crop shaves without a word. Chromium's quantization
+#: overshoots by at most 0.12 pt per axis; anything past a point is not
+#: rounding but a page printed at another size (a Legal or A4 @page, a
+#: stylesheet whose size rule was lost), and the crop would cut real
+#: content off its top or right edge.
+OVERSHOOT_WARN_PT = 1.0
+
+
+def _warn_if_overshoot(width: float, height: float) -> None:
+    """Warn when a page is larger than Letter by more than rounding."""
+    if max(width - LETTER_W_PT, height - LETTER_H_PT) > OVERSHOOT_WARN_PT:
+        c.warn(
+            f"page is {width:.2f} × {height:.2f} pt, well over Letter "
+            f"(612 × 792) — cropping it cuts off whatever is beyond the "
+            f"top and right edges. Check the page size the stylesheet sets"
+        )
+
+
 def _warn_smaller_than_letter(width: float, height: float) -> None:
     c.warn(
         f"page is smaller than Letter "
@@ -170,6 +189,7 @@ def crop_pages(reader: PdfReader, writer: PdfWriter) -> None:
         if corner is None:
             _warn_smaller_than_letter(float(box.width), float(box.height))
             continue
+        _warn_if_overshoot(float(box.width), float(box.height))
 
         # Lower-left stays put; pull the upper-right inward by the excess.
         page.mediabox.upper_right = corner
@@ -209,6 +229,7 @@ def crop_pdfium_page_to_letter(page) -> None:
     if corner is None:
         _warn_smaller_than_letter(right - left, top - bottom)
         return
+    _warn_if_overshoot(right - left, top - bottom)
     crop_left, crop_bottom, _, _ = page.get_cropbox(fallback_ok=True)
     page.set_mediabox(left, bottom, *corner)
     page.set_cropbox(crop_left, crop_bottom, *corner)
@@ -552,17 +573,36 @@ def foreign_fonts(reader: PdfReader) -> list[str]:
     CJK font), which the project otherwise guarantees never happens.
     """
     found = set()
-    for page in reader.pages:
-        fonts = (page.get("/Resources") or {}).get("/Font") or {}
-        for ref in fonts.values():
+    # Fonts are listed per resource dictionary, and a page's is not the
+    # only one: text Skia draws inside a group (opacity, a blend mode)
+    # goes into a Form XObject with Resources of its own, and a Type 3
+    # glyph can itself be drawn from resources. Walked by object
+    # identity, so a form shared by every page is read once and a form
+    # that (wrongly) contains itself cannot loop.
+    seen = set()
+
+    def walk(resources):
+        resources = resources.get_object() if resources is not None else None
+        if not resources or id(resources) in seen:
+            return
+        seen.add(id(resources))
+        for ref in (resources.get("/Font") or {}).values():
             font = ref.get_object()
             if font.get("/Subtype") == "/Type3":
                 found.add("a Type 3 font")
+                walk(font.get("/Resources"))
                 continue
             base = str(font.get("/BaseFont", ""))
             name = base.lstrip("/").split("+", 1)[-1]
             if not name.startswith(VENDORED_FONT_PREFIXES):
                 found.add(name)
+        for ref in (resources.get("/XObject") or {}).values():
+            xobject = ref.get_object()
+            if xobject.get("/Subtype") == "/Form":
+                walk(xobject.get("/Resources"))
+
+    for page in reader.pages:
+        walk(page.get("/Resources"))
     return sorted(found)
 
 
@@ -584,6 +624,39 @@ def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
         describe_links(writer)
         mark_untagged_as_artifacts(writer)
     return writer
+
+
+def write_pdf(writer: PdfWriter, dst) -> None:
+    """Write `writer` to `dst` so that `dst` is never half a PDF.
+
+    The bytes go to a temporary file beside `dst` and are moved over it
+    in one os.replace. Writing straight into `dst` truncated the
+    previous PDF first: a build stopped mid-write (Ctrl+C, the Studio
+    closing, a full disk, an exception inside pypdf) left a résumé in
+    dist/ that no viewer can open, under the name you attach.
+
+    Beside `dst`, not in the temp directory, because a rename is only
+    atomic within one filesystem. Its name starts with a dot and ends
+    in `.tmp`, so it never matches the output pattern the prune reads
+    (build/_output_name.js). It is removed if anything fails.
+
+    A PDF viewer that holds `dst` open without sharing delete access
+    (Adobe Reader on Windows) makes os.replace raise PermissionError,
+    the same error the old in-place open raised, so callers report it
+    exactly as before.
+    """
+    dst = Path(dst)
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, 'wb') as f:
+            writer.write(f)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:
@@ -619,8 +692,7 @@ def main() -> int:
         c.detail("emoji, symbols). The PDF will look different on other machines.")
 
     try:
-        with open(args.output, 'wb') as f:
-            writer.write(f)
+        write_pdf(writer, args.output)
     except PermissionError:
         # Most common cause on Windows: a PDF viewer (Adobe Reader,
         # Edge, Chrome's built-in viewer, SumatraPDF etc.) holds a

@@ -64,7 +64,8 @@ the stem is reduced to ASCII letters, digits and underscores:
 Consumed by:
   • build/build.py               — writes output_stem into pdf_meta.json
   • build/build_letter.py  — same, into letter_meta.json
-  • build/snapshot_pdf.py        — locates the PDFs it must compare
+  • build/snapshot_pdf.py        — locates the PDFs it must compare,
+                                   through the build record (RECORD)
   • build/_output_name.js        — the Node mirror (reads, never derives)
 """
 
@@ -81,6 +82,7 @@ DOC_SUFFIX = _CONSTANTS["DOC_SUFFIX"]
 SEPARATOR = _CONSTANTS["SEPARATOR"]
 MAX_PART = _CONSTANTS["MAX_PART"]
 LEGACY = _CONSTANTS["LEGACY"]
+RECORD = _CONSTANTS["RECORD"]
 
 # Letters NFKD will not decompose, because they are atomic code points
 # rather than a base plus a combining mark. Without this table they
@@ -109,6 +111,21 @@ _DROPPED = re.compile(r"['‘’ʼ´`“”\"]")
 # only on the non-ASCII fallback path, where the goal is a usable name
 # rather than an ASCII one.
 _FORBIDDEN = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+# Bidirectional embedding, override and isolate controls (U+202A–202E,
+# U+2066–2069). Invisible, and they reorder how the rest of the name is
+# DISPLAYED: "Ali\u202eFDP.exe" shows as "Aliexe.PDF" in a file
+# manager or an attachment list, the classic way to disguise a file.
+# The ASCII path drops them with everything else; the fallback path
+# keeps non-ASCII characters on purpose, so it removes these by name.
+_BIDI_CONTROLS = re.compile("[\u202a-\u202e\u2066-\u2069]")
+
+#: Longest filename, in UTF-8 bytes, that ext4 and APFS accept (NTFS
+#: counts 255 UTF-16 units, which a UTF-8 cap of 255 bytes always
+#: satisfies). MAX_PART counts characters, which bounds an ASCII stem
+#: far below this, but not a CJK one: 64 characters are 192 bytes, so
+#: two long parts made a name the build could not write.
+MAX_FILENAME_BYTES = 255
 
 
 def fold_to_ascii(text: str) -> str:
@@ -155,7 +172,7 @@ def slug_part(raw) -> str:
         # non-Latin half of a mixed-script name. Keep the name rather
         # than the convention: strip what the filesystem forbids,
         # collapse whitespace, and let the characters through.
-        cleaned = _FORBIDDEN.sub("", _DROPPED.sub("", raw))
+        cleaned = _FORBIDDEN.sub("", _DROPPED.sub("", _BIDI_CONTROLS.sub("", raw)))
         cleaned = re.sub(r"\s+", SEPARATOR, cleaned).strip("_. ")
 
     # Trailing separators can reappear after the cap lands mid-run.
@@ -182,7 +199,25 @@ def stem(name, variant: str) -> str:
                          slug_part(name.get("last"))) if p]
     if not parts:
         return suffix
-    return SEPARATOR.join(parts + [suffix])
+    return SEPARATOR.join(_fit_bytes(parts, suffix) + [suffix])
+
+
+def _fit_bytes(parts, suffix):
+    """`parts`, shortened only if the filename would exceed
+    MAX_FILENAME_BYTES; otherwise returned unchanged.
+
+    The name is public (it is the file you send), so nothing that fits
+    changes. What does not fit loses characters from the end of its
+    longest part first, whole characters only, so the first name
+    survives a long last name and every kept character stays readable.
+    """
+    fixed = len(f"{SEPARATOR}{suffix}.pdf".encode("utf-8")) \
+        + len(SEPARATOR) * (len(parts) - 1)
+    parts = list(parts)
+    while sum(len(p.encode("utf-8")) for p in parts) + fixed > MAX_FILENAME_BYTES:
+        i = max(range(len(parts)), key=lambda k: len(parts[k].encode("utf-8")))
+        parts[i] = parts[i][:-1].rstrip("_. ")
+    return [p for p in parts if p]
 
 
 def output_pdf(dist, output_stem: str) -> Path:
@@ -210,3 +245,35 @@ def stem_from_meta(meta_file, variant: str) -> str:
 def legacy_pdfs(dist, variant: str):
     """The pre-rename filenames for `variant`, as paths under `dist`."""
     return [Path(dist) / name for name in LEGACY[variant]]
+
+
+def recorded_build(dist, variant: str):
+    """What the last Build wrote for `variant`, per the build record.
+
+    Returns {"pdf": Path, "data_source": str | None, "sha256": str} or
+    None when there is no usable record of a built PDF: no file, an
+    unreadable one, or an entry without a plain file name and a hash
+    (an upgraded dist/ seeds entries with no PDF of their own).
+
+    The record is written by resume.js and letter.js right after the PDF
+    (build/_output_name.js, recordBuilt). Only a Build writes it, unlike
+    dist/pdf_meta.json, which every live preview rewrites — so it is the
+    record to trust about the PDF in dist/.
+    """
+    try:
+        record = json.loads((Path(dist) / RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    entry = record.get(variant) if isinstance(record, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    name, digest = entry.get("pdf"), entry.get("sha256")
+    if not (isinstance(name, str) and name and Path(name).name == name
+            and isinstance(digest, str) and digest):
+        return None
+    source = entry.get("data_source")
+    return {
+        "pdf": Path(dist) / name,
+        "data_source": source if isinstance(source, str) else None,
+        "sha256": digest,
+    }

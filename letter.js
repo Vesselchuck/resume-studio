@@ -50,7 +50,8 @@ const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { detectPython } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
-const { pruneStale } = require('./build/_output_name');
+const { pruneStale, recordBuilt, seedRecord } = require('./build/_output_name');
+const distLock = require('./build/_dist_lock');
 const c = require('./build/_console');
 
 
@@ -147,7 +148,10 @@ const pipeline = createPipeline({
  * plausible-looking letters under names that are no longer current, in
  * the exact directory you open when you need to attach one.
  *
- * Runs after printPdfs, so `keep` is what actually landed on disk.
+ * Runs after printPdfs and recordBuilt, so `keep` is what actually
+ * landed on disk and the build record lists it. Only names that record
+ * says a build wrote are removed (and the retired ones no build writes
+ * now), never a PDF of yours that merely looks like one.
  * _output_name.pruneStale does the deleting and is scoped there; this
  * only supplies the reporting.
  */
@@ -162,14 +166,34 @@ function pruneStaleOutputs(variant, keep) {
 }
 
 
+/** data_source from dist/letter_meta.json, or null if it can't be read. */
+function readDataSource() {
+  try {
+    const meta = JSON.parse(fs.readFileSync(pipeline.paths.pdfMeta, 'utf-8'));
+    return typeof meta.data_source === 'string' ? meta.data_source : null;
+  } catch {
+    return null;
+  }
+}
+
+
 /* ─── Orchestrator ────────────────────────────────────────────── */
 
 (async () => {
   let browser;
   let exitCode = 0;
+  let releaseDist = () => {};
   try {
     c.banner('Cover letter');
     c.ok_pair('Detected Python', PYTHON);
+    // This build owns dist/ until its PDF is written and the stale ones
+    // pruned; see build/_dist_lock.js.
+    releaseDist = await distLock.acquire(path.join(ROOT, 'dist'), {
+      owner: 'node letter.js',
+      blocking: true,     // execFileSync steps: heartbeat from a thread
+      onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
+    });
+    seedRecord(pipeline.paths.dist, 'letter', pipeline.paths.pdfMeta);
     pipeline.compileSass();
     await pipeline.buildLetter();
 
@@ -189,8 +213,11 @@ function pruneStaleOutputs(variant, keep) {
     await pipeline.verifyLetterFits(page);
 
     c.banner('PDF');
-    await pipeline.printPdfs(page, { output: pipeline.paths.pdf });
-    pruneStaleOutputs('letter', [pipeline.paths.pdf]);
+    // Read once: `paths.pdf` re-reads the metadata on every access.
+    const output = pipeline.paths.pdf;
+    await pipeline.printPdfs(page, { output });
+    recordBuilt(pipeline.paths.dist, 'letter', output, { dataSource: readDataSource() });
+    pruneStaleOutputs('letter', [output]);
   } catch (err) {
     if (!err.alreadyReported) {
       c.err('Unexpected error');
@@ -198,6 +225,7 @@ function pruneStaleOutputs(variant, keep) {
     }
     exitCode = 1;
   } finally {
+    releaseDist();
     if (browser) {
       try {
         await browser.close();
