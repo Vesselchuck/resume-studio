@@ -602,7 +602,10 @@ build keeps that text equal to the words on the page:
   0.15em came out as "I M P E R AT O R". The role line is small enough
   that pdftotext splits it even at 0.1em, so its 0.1em is built into
   its font instead (`Manrope Tracked`): the same pixels, and no gap
-  between letters for a reader to break on.
+  between letters for a reader to break on. The section headings are
+  tracked the same way (`Newsreader opsz18.67 Tracked`): as
+  letter-spacing, Xpdf's pdftotext (the one Git for Windows ships)
+  read "C E RT I F ICAT ION S" and "E DUCAT ION".
 - **Real spaces.** A space that is only markup between two elements
   can vanish from the text; the name's is inside the first one.
 
@@ -1326,9 +1329,9 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   │                         Body text, one file per weight.
 │   ├── Manrope-500-tracked0.1.woff2
 │   │                         The role line, its 0.1em tracking built in.
-│   ├── Newsreader-600-opsz40.woff2, -700-opsz18.67, -600-opsz13.33
-│   │                         Display text: the name, section headings,
-│   │                         the letter's signature.
+│   ├── Newsreader-600-opsz40.woff2, -700-opsz18.67-tracked0.1, -600-opsz13.33
+│   │                         Display text: the name, section headings
+│   │                         (tracking built in), the letter's signature.
 │   ├── Manrope-OFL.txt       SIL OFL 1.1 license (required to keep).
 │   ├── Newsreader-OFL.txt    SIL OFL 1.1 license (required to keep).
 │   └── variable/             The Google Fonts variable originals.

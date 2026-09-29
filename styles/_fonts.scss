@@ -41,8 +41,10 @@
      Newsreader  a family per size, named after its optical size.
                  Chromium set the opsz axis to the font size in CSS
                  px: the name 40 (30pt), section headings 18.67
-                 (14pt), the letter's signature 13.33 (10pt). See
-                 --font-display-* in _tokens.scss.
+                 (14pt; tracked at 0.1em like the role, hence
+                 'Newsreader opsz18.67 Tracked'), the letter's
+                 signature 13.33 (10pt). See --font-display-* in
+                 _tokens.scss.
 
    A weight with no file here is not an error in CSS: the browser
    draws the nearest weight, or thickens it artificially.
@@ -107,11 +109,11 @@
 }
 
 @font-face {
-  font-family: 'Newsreader opsz18.67';
+  font-family: 'Newsreader opsz18.67 Tracked';
   font-style: normal;
   font-weight: 700;
   font-display: block;
-  src: url('../fonts/Newsreader-700-opsz18.67.woff2') format('woff2');
+  src: url('../fonts/Newsreader-700-opsz18.67-tracked0.1.woff2') format('woff2');
 }
 
 @font-face {
