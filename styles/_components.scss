@@ -157,27 +157,28 @@
   display: flex;
   flex-direction: column;
 }
-/* Detail label (ADDRESS, PHONE, EMAIL in the sidebar). Visually a
-   peer of .entry-title — same weight, same size, same line-height,
-   same color — except set in UPPERCASE to mark it as a field-label
-   rather than an entry title. Sharing the size token with .entry-title
-   means future size changes touch one variable, not two.
+/* Detail label: the left-hand label of each row in a details block
+   (LINKEDIN, GITHUB above their values). Visually a peer of
+   .entry-title — same weight, same size, same line-height, same
+   color — except set in UPPERCASE to mark it as a field label rather
+   than an entry title. Sharing the size token (--size-jobtitle) with
+   .entry-title means future size changes touch one variable, not two.
+   The group headings of a list block are .list-group-heading, not
+   this.
 
-   Letter-spacing of 0.1em matches .section-heading's tracking ratio
-   so both label tiers (large section headings + small detail labels)
-   feel like part of one typographic system that scales proportionally
-   with size.                                                         */
-/* Generic subgroup label — bold/tracked all-caps used for any
-   labeled cluster of items inside a sidebar block. Two contexts:
-   the DETAILS block (ADDRESS / PHONE / EMAIL above their values),
-   and the per-group headers inside grouped Key Skills lists.
-   Sized at --size-jobtitle so labels are visibly distinct from
-   their --size-body values without needing an extra token.        */
+   Tracked at 0.1em like .section-heading, so both label tiers feel
+   like one typographic system. The tracking is in the font, not
+   letter-spacing, for the reason given at .name-role: as
+   letter-spacing, pdftotext read a label "SECURIT Y CLEARANCE".
+   'Manrope Tracked' 600 draws the same pixels. letter-spacing must
+   stay 0 here, or the tracking doubles; tests/test_font_faces.js
+   checks that.                                                      */
 .subgroup-label {
+  font-family: var(--font-label);
   font-weight: 600;
   font-size: var(--size-jobtitle);
   line-height: 1.3;
-  letter-spacing: var(--ls-wide);
+  letter-spacing: 0;                /* 0.1em, in the font: see above */
   text-transform: uppercase;
 }
 .detail-value {

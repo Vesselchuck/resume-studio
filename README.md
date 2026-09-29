@@ -605,7 +605,9 @@ build keeps that text equal to the words on the page:
   between letters for a reader to break on. The section headings are
   tracked the same way (`Newsreader opsz18.67 Tracked`): as
   letter-spacing, Xpdf's pdftotext (the one Git for Windows ships)
-  read "C E RT I F ICAT ION S" and "E DUCAT ION".
+  read "C E RT I F ICAT ION S" and "E DUCAT ION". So are the labels of
+  a details block (`Manrope Tracked` 600), which poppler's pdftotext
+  read as "SECURIT Y CLEARANCE".
 - **Real spaces.** A space that is only markup between two elements
   can vanish from the text; the name's is inside the first one.
 
@@ -1327,8 +1329,9 @@ ones it needs itself, from its checkboxes and data-source menu.
 ├── fonts/                    Vendored static WOFF2 fonts, cut from fonts/variable/.
 │   ├── Manrope-{350,400,500,600}.woff2
 │   │                         Body text, one file per weight.
-│   ├── Manrope-500-tracked0.1.woff2
-│   │                         The role line, its 0.1em tracking built in.
+│   ├── Manrope-500-tracked0.1.woff2, Manrope-600-tracked0.1.woff2
+│   │                         The role line and details labels, their
+│   │                         0.1em tracking built in.
 │   ├── Newsreader-600-opsz40.woff2, -700-opsz18.67-tracked0.1, -600-opsz13.33
 │   │                         Display text: the name, section headings
 │   │                         (tracking built in), the letter's signature.

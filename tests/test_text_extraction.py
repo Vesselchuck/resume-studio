@@ -18,6 +18,9 @@ all invisible on screen:
     (styles/_components.scss, .name-role).
   • The name. Two spans with only markup whitespace between them read
     as "GaiusCaesar" in pypdf. Fixed by a real space inside the first.
+  • Tracked headings and labels. Xpdf 4.06's pdftotext read the section
+    headings "C E RT I F ICAT ION S", and poppler's read a details
+    label "SECURIT Y CLEARANCE". Their 0.1em moved into the font too.
 
 WHAT THIS CHECKS
 ────────────────
@@ -28,6 +31,9 @@ extractors in requirements.txt. For each:
   • every word the page shows is in the text, as often as it is shown;
   • no ligature code points (U+FB00–FB06) appear;
   • the name and the role read as whole words.
+
+The template has no details block, so TestDetailLabels builds a copy
+with one and checks that its labels read whole.
 
 pdfplumber and pdftotext, also checked when the fix was made, are not
 project dependencies; they are used here when installed and skipped
@@ -182,6 +188,57 @@ class TestTextLayer(unittest.TestCase):
                 with self.subTest(document=doc, extractor=name, field="role"):
                     self.assertIsNotNone(re.search(r"IMPERATOR\s+ROMANUS", text),
                                          f"the header reads as: {head}")
+
+
+class TestDetailLabels(unittest.TestCase):
+    """The labels of a details block read as whole words.
+
+    Built in a copy of its own, from the template with the details
+    block its comments give as an example, first in the sidebar.
+    """
+
+    BLOCK = {"id": "online", "type": "details", "heading": "Online", "rows": [
+        {"label": "LinkedIn", "value": "linkedin.com/in/gcaesar",
+         "href": "https://linkedin.com/in/gcaesar"},
+        {"label": "Security Clearance", "value": "Secret"},
+    ]}
+
+    @classmethod
+    def setUpClass(cls):
+        import yaml
+        sys.path.insert(0, str(ROOT / "build"))
+        import _yaml_loader
+        cls.project = Project("detail-label-test")
+        data = cls.project.root / "data"
+        doc = _yaml_loader.load((data / "resume_default.yml").read_text(encoding="utf-8"))
+        doc["sidebar"]["blocks"].insert(0, cls.BLOCK)
+        # resume.yml wins over the template in the copy's CLI build.
+        (data / "resume.yml").write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False),
+                                         encoding="utf-8")
+        problem = cls.project.build()
+        if problem:
+            cls.project.remove()
+            raise unittest.SkipTest(f"could not build the copy ({problem})")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.project.remove()
+
+    def test_the_labels_read_whole(self):
+        found = list(self.project.dist.glob("*_Resume.pdf"))
+        self.assertEqual(len(found), 1, found)
+        for name, fn in EXTRACTORS.items():
+            text = fn(found[0])
+            if text is None:
+                continue
+            for row in self.BLOCK["rows"]:
+                label = row["label"].upper()
+                with self.subTest(extractor=name, label=label):
+                    near = [" ".join(line.split()) for line in text.splitlines()
+                            if label.split()[0][:3] in line.replace(" ", "")]
+                    self.assertIsNotNone(
+                        re.search(r"\s+".join(map(re.escape, label.split())), text),
+                        f"{name} ({_version(name)}) read it as {near[:3]!r}")
 
 
 class TestLongWords(unittest.TestCase):
