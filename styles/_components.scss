@@ -119,7 +119,14 @@
      it feel integrated rather than purely decorative.            */
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: var(--ls-wide);
+  /* Tracked at --ls-wide (0.1em) in the font, not with letter-spacing,
+     for the reason given at .name-role: as letter-spacing each letter
+     was placed on its own, and Xpdf 4.06's pdftotext read page 2's
+     "C E RT I F ICAT ION S". The layout is identical; a few edge
+     pixels of the headings shift by a shade (0.016% of page 2 at the
+     snapshot's scale and tolerance, limit 0.1%). letter-spacing must
+     stay 0, or the tracking doubles (tests/test_font_faces.js).    */
+  letter-spacing: 0;
   /* line-height: 1 keeps the line-box at exactly font-size so
      glyph overshoot (the small upward extension of letters like
      K, S, R for optical balance) is not clipped at the top.

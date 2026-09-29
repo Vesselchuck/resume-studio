@@ -79,9 +79,10 @@ nothing from Google.*
 5. If a script of yours runs `python build/snapshot_pdf.py`, treat
    exit code 2 as "nothing was compared", not as a difference: only 1
    means the PDF differs from the fixture.
-6. Nothing to regenerate. Placement and pixels are unchanged on the
-   template data and on real data, so the snapshot fixtures stay as
-   they are.
+6. Nothing to regenerate. Placement is unchanged on the template data
+   and on real data, and so are the pixels apart from the edges of the
+   section headings (0.016% of a page, well inside the snapshot's
+   limit), so the snapshot fixtures stay as they are.
 
 ### Changes
 
@@ -262,6 +263,14 @@ nothing from Google.*
   the letter `meta`, `meta.description` and `recipient`. They now
   print nothing, as documented. In the Studio the crash was also
   mislabelled as a stale layout.
+- **Fixed.** Section headings could come out of the PDF as letters:
+  Xpdf 4.06's pdftotext, the one Git for Windows ships, read page 2's
+  headings as "C E RT I F ICAT ION S" and "E DUCAT ION", so a parser
+  working that way would miss the Education section. Their 0.1em
+  tracking is now built into the heading font, as the role line's
+  already was, which leaves no gap between letters to read as a word
+  break. Placement is unchanged; a few edge pixels of the headings
+  shift by a shade.
 - **Fixed.** A word longer than its column (a long URL, say) ran over
   the column divider or off the page, where it was cut from the
   printed text as well as from view, and the layout check still said

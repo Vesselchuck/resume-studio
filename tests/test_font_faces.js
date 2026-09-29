@@ -92,7 +92,7 @@ async function checkPage(page, file, usedFaces) {
       problems.push(`${u.where}: ${u.family} carries its tracking; letter-spacing ${u.letterSpacing} doubles it`);
     }
     if (u.family.startsWith('Newsreader')) {
-      const m = /^Newsreader opsz([\d.]+)$/.exec(u.family);
+      const m = /^Newsreader opsz([\d.]+)(?: Tracked)?$/.exec(u.family);
       if (!m) problems.push(`${u.where}: ${u.family} is not one of the per-size Newsreader faces`);
       else if (Math.abs(Number(m[1]) - u.px) > 0.01) {
         problems.push(`${u.where}: drawn at ${u.px.toFixed(2)}px with the face cut for ${m[1]}px`);
