@@ -20,10 +20,16 @@
  *   • Newsreader text uses the face cut for its size: the family is
  *     named after its optical size, which must equal the font size in
  *     CSS px (what Chromium set the axis to with the variable font);
- *   • text in a tracked cut ('Manrope Tracked', its letter-spacing
- *     built into the font) has no letter-spacing of its own on top;
+ *   • text in a tracked cut ('Manrope Tracked' and the headings'
+ *     Newsreader, their letter-spacing built into the font) has no
+ *     letter-spacing of its own on top;
  *   • every @font-face in the stylesheet points at a woff2 in fonts/
  *     that exists, and no face is left unused.
+ *
+ * The résumé is the template plus one details block, the example the
+ * template's comments give: the template itself has none, and without
+ * one the labels' face ('Manrope Tracked' 600) would go unchecked and
+ * count as unused.
  *
  * tests/test_pdf_fonts.py checks the other half: that the PDFs embed
  * them as TrueType, not Type 3.
@@ -39,6 +45,30 @@ const { assertEq, assertTrue, fail, report } = require('./_framework');
 const { tempProject, realDistFingerprint } = require('./_project');
 
 const SUITE = 'test_font_faces';
+
+/** A details block, put first in the sidebar of the template's data. */
+const DETAILS = [
+  '    - id: online',
+  '      type: details',
+  '      heading: Online',
+  '      rows:',
+  '        - label: LinkedIn',
+  '          value: linkedin.com/in/gcaesar',
+  '          href: "https://linkedin.com/in/gcaesar"',
+  '        - label: Security Clearance',
+  '          value: Secret',
+];
+
+/** Write data/resume.yml in the copy: the template plus DETAILS. */
+function withDetailsBlock(root) {
+  const data = path.join(root, 'data');
+  const yml = fs.readFileSync(path.join(data, 'resume_default.yml'), 'utf-8');
+  const eol = yml.includes('\r\n') ? '\r\n' : '\n';
+  const out = yml.replace(/^sidebar:\r?\n {2}blocks:\r?\n/m, m => m + DETAILS.join(eol) + eol);
+  if (out === yml) throw new Error("resume_default.yml has no 'sidebar:' / 'blocks:' to add a details block to");
+  // resume.yml wins over the template when no data source is set.
+  fs.writeFileSync(path.join(data, 'resume.yml'), out);
+}
 
 /** What the page draws its text with, and what faces it has. */
 function inspect() {
@@ -118,6 +148,7 @@ async function checkPage(page, file, usedFaces) {
   let engine;
   let browser;
   try {
+    withDetailsBlock(project.root);
     const { createEngine } = project.require('build/engine');
     engine = await createEngine({ root: project.root });
     await engine.renderPreview({ doc: 'resume' });
@@ -142,6 +173,7 @@ async function checkPage(page, file, usedFaces) {
     const page = await browser.newPage();
     const usedFaces = new Set();
     await checkPage(page, path.join(project.dist, 'index.html'), usedFaces);
+    assertTrue(usedFaces.has('Manrope Tracked 600'), 'the details block drew its labels');
     await checkPage(page, path.join(project.dist, 'letter.html'), usedFaces);
 
     const unused = declared.map(d => `${d.family} ${d.weight}`).filter(k => !usedFaces.has(k));

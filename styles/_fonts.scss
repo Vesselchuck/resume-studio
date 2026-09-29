@@ -34,8 +34,9 @@
                  .entry-title is slanted by the browser, as before:
                  Manrope has no italic.
      Manrope Tracked
-                 Manrope 500 with 0.1em built into every advance
-                 width, for the role line: the same pixels as
+                 Manrope 500 and 600 with 0.1em built into every
+                 advance width, for the role line (500) and the labels
+                 of a details block (600): the same pixels as
                  letter-spacing 0.1em, but an extractor reads the
                  words whole. See .name-role in _components.scss.
      Newsreader  a family per size, named after its optical size.
@@ -98,6 +99,14 @@
   font-weight: 500;
   font-display: block;
   src: url('../fonts/Manrope-500-tracked0.1.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Manrope Tracked';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('../fonts/Manrope-600-tracked0.1.woff2') format('woff2');
 }
 
 @font-face {

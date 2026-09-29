@@ -122,6 +122,9 @@
   /* The role line: Manrope 500 with --ls-wide (0.1em) built into the
      font's advances instead of set as letter-spacing. See .name-role. */
   --font-role:            'Manrope Tracked', 'Helvetica Neue', Arial, sans-serif;
+  /* The labels of a details block: Manrope 600, tracked the same way.
+     See .subgroup-label.                                            */
+  --font-label:           'Manrope Tracked', 'Helvetica Neue', Arial, sans-serif;
   --font-display-name:    'Newsreader opsz40', Georgia, 'Times New Roman', serif;
   --font-display-heading: 'Newsreader opsz18.67 Tracked', Georgia, 'Times New Roman', serif;
   --font-display-small:   'Newsreader opsz13.33', Georgia, 'Times New Roman', serif;

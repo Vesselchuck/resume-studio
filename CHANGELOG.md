@@ -271,6 +271,12 @@ nothing from Google.*
   already was, which leaves no gap between letters to read as a word
   break. Placement is unchanged; a few edge pixels of the headings
   shift by a shade.
+- **Fixed.** The labels of a details block could come out of the PDF
+  split the same way: poppler's pdftotext read "Security Clearance" as
+  "SECURIT Y CLEARANCE". Their tracking is built into the font now too
+  (Manrope 600, tracked 0.1em). The template has no details block, so
+  nothing in it changes; with one, placement is unchanged and a few
+  edge pixels of the labels shift by a shade.
 - **Fixed.** A word longer than its column (a long URL, say) ran over
   the column divider or off the page, where it was cut from the
   printed text as well as from view, and the layout check still said

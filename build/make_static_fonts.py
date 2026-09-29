@@ -29,14 +29,15 @@ TRACKED CUTS
 ────────────
 A cut can also carry letter-spacing in the font itself: every advance
 width made wider by a fraction of the em. The role line under the name
-is tracked at 0.1em, and so are the section headings. As CSS
-letter-spacing, pdftotext takes a gap that wide between two letters of
-a 9pt TrueType font for a word break and reads "I M P E R AT O R";
-Xpdf 4.06's pdftotext (the one Git for Windows ships) read the section
-headings "C E RT I F ICAT ION S" and "E DUCAT ION" the same way. The
-same space built into the advances is no
-gap at all to an extractor, since each letter's width now includes it,
-and the page is pixel for pixel the same (checked at 4× on the template
+is tracked at 0.1em, and so are the section headings and the labels of
+a details block. As CSS letter-spacing, pdftotext takes a gap that wide
+between two letters of a 9pt TrueType font for a word break and reads
+"I M P E R AT O R"; Xpdf 4.06's pdftotext (the one Git for Windows
+ships) read the section headings "C E RT I F ICAT ION S" and
+"E DUCAT ION" the same way, and poppler's read a details label as
+"SECURIT Y CLEARANCE". The same space built into the advances is no gap
+at all to an extractor, since each letter's width now includes it, and
+the page is pixel for pixel the same (checked at 4× on the template
 résumé). The stylesheet then sets letter-spacing to 0 on that text, and
 tests/test_font_faces.js checks that it does.
 
@@ -71,6 +72,8 @@ INSTANCES = [
     ("Manrope-600.woff2", "Manrope.woff2", "Manrope", {"wght": 600}, 0),
     # The role line under the name: 500, tracked at 0.1em (--ls-wide).
     ("Manrope-500-tracked0.1.woff2", "Manrope.woff2", "Manrope Tracked", {"wght": 500}, 0.1),
+    # The labels of a details block: 600, tracked the same.
+    ("Manrope-600-tracked0.1.woff2", "Manrope.woff2", "Manrope Tracked", {"wght": 600}, 0.1),
     # The name: 30pt = 40px.
     ("Newsreader-600-opsz40.woff2", "Newsreader.woff2", "Newsreader", {"wght": 600, "opsz": 40}, 0),
     # Section headings: 14pt = 18.67px, tracked at 0.1em like the role.
