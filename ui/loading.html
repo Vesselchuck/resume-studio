@@ -23,55 +23,70 @@
 <title>Resume Studio</title>
 <style>
 :root{
-  --ground:#e4e7e1;
-  --ink:#15181a;
-  --muted:#5d645d;
-  --accent:#2d4a3e;
-  --err:#9d382a;
-  --err-wash:#f6e3df;
-  --rule:#d5d9cf;
-  --ui:'Manrope','Helvetica Neue',Arial,sans-serif;
-  --mono:ui-monospace,'SF Mono',Consolas,monospace;
+  /* The same tokens as index.html (and so the résumé's accent and
+     greys). Only system fonts: this page is served before the server
+     that serves the project's fonts exists. */
+  --ground:#e6e8e3;
+  --panel:#ffffff;
+  --ink:#1a1a1a;
+  --muted:#4a4a4a;
+  --accent:#2a4436;
+  --accent-ink:#ffffff;
+  --err:#9b3526;
+  --err-wash:#f7e4df;
+  --rule:#d3d8d0;
+  --ui:'Manrope','Segoe UI Variable Text','Segoe UI','Helvetica Neue',Arial,sans-serif;
+  --display:'Newsreader',Georgia,'Times New Roman',serif;
+  --mono:ui-monospace,'Cascadia Mono','SF Mono',Consolas,monospace;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --ground:#111512;
-    --ink:#e7eae4;
-    --muted:#9aa398;
-    --accent:#7fb497;
-    --err:#e08b7c;
+    --ground:#101311;
+    --panel:#1e2320;
+    --ink:#e9ece7;
+    --muted:#b6bdb4;
+    --accent:#8fc1a4;
+    --accent-ink:#0e1f15;
+    --err:#eb9484;
     --err-wash:#3a1f1a;
-    --rule:#333a31;
+    --rule:#39413b;
   }
 }
 html,body{height:100%;margin:0}
 body{
   background:var(--ground);color:var(--ink);font:14px/1.5 var(--ui);
   display:flex;align-items:center;justify-content:center;
+  -webkit-font-smoothing:antialiased;
 }
-.box{max-width:560px;padding:24px;text-align:center}
+.box{max-width:560px;padding:24px;text-align:center;display:flex;flex-direction:column;align-items:center}
+.brand{
+  width:44px;height:44px;border-radius:10px;display:grid;place-items:center;margin:0 0 18px;
+  background:var(--accent);color:var(--accent-ink);
+  font:600 26px/1 var(--display);
+}
 .mark{
-  width:18px;height:18px;margin:0 auto 14px;border-radius:50%;
+  width:20px;height:20px;margin:0 auto 16px;border-radius:50%;
   border:2px solid var(--rule);border-top-color:var(--accent);
   animation:spin 0.9s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.mark{animation:none;border-color:var(--accent)}}
-h1{font-size:15px;font-weight:600;margin:0 0 4px}
+h1{font:600 22px/1.25 var(--display);margin:0 0 6px}
 p{margin:0;color:var(--muted)}
-.error{display:none;text-align:left}
+.error{display:none;text-align:left;align-items:stretch;width:100%}
 .error h1{color:var(--err)}
 .error pre{
-  margin:12px 0 0;padding:12px 14px;border-radius:8px;
-  background:var(--err-wash);color:var(--ink);
-  font:12.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;
+  margin:14px 0 0;padding:14px 16px;border-radius:8px;
+  background:var(--err-wash);color:var(--ink);border-left:4px solid var(--err);
+  font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word;
 }
 body.failed .starting{display:none}
-body.failed .error{display:block}
+body.failed .error{display:flex}
 </style>
 </head>
 <body>
 <div class="box starting" role="status" aria-live="polite">
+  <div class="brand" aria-hidden="true">R</div>
   <div class="mark" aria-hidden="true"></div>
   <h1>Starting Resume Studio</h1>
   <p>Starting the preview engine…</p>
