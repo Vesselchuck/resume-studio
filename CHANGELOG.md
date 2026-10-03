@@ -6,19 +6,17 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 and version numbers follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html):
 **MAJOR.MINOR.PATCH**.
 
-The project is still in **initial development**, which SemVer marks
-with a major version of **0**: the interface below can still change,
-and nothing about it is promised yet. While the major version is 0,
-this project follows the usual convention for that range:
+Since **1.0.0** the interface below is settled, and the standard
+rules apply:
 
-- **MINOR** goes up when something you rely on stops working unless
+- **MAJOR** goes up when something you rely on stops working unless
   you change it,
-- **PATCH** goes up for everything else — new features, fixes and
-  adjustments that break nothing.
+- **MINOR** goes up for new features that break nothing,
+- **PATCH** goes up for fixes and adjustments that break nothing.
 
-**1.0.0** will mean the interface is settled. From then on the rules
-become the standard ones: a breaking change takes a new major version,
-a new feature a minor one, and a fix a patch.
+Before 1.0.0 the project was in **initial development**, which SemVer
+marks with a major version of **0**: a breaking change took a new
+minor version, and everything else a patch.
 
 "Something you rely on" is this project's public interface, and it
 has four parts:
@@ -37,17 +35,26 @@ that interface. Neither is an internal refactor.
 Headings under each release: **Added** for new capability, **Changed**
 for existing behavior that now works differently, **Removed** for what
 is gone, **Fixed** for bugs, **Security** for what used to be exposed.
-**Breaking** marks the changes that forced a new minor version.
+**Breaking** marks the changes that forced a new major version (a new
+minor one before 1.0.0).
 
 ---
 
 ## [Unreleased]
 
-*Builds are faster: in a measured run, the Studio's Build took 15–17%
-less time and `node resume.js` 11% less. The PDFs look and read exactly
-as before. The dependencies are up to date, and Node 20.19 is now the
-minimum (24 LTS recommended). Python 3.14 is recommended; 3.10 still
-works.*
+Nothing yet.
+
+---
+
+## [1.0.0] — 2026-10-02
+
+*The interface is settled: from 1.0.0 on, a change that breaks the
+data format, the commands, the environment variables or the outputs
+takes a new major version. Builds are faster: in a measured run, the
+Studio's Build took 15–17% less time and `node resume.js` 11% less.
+The PDFs look and read exactly as before. The dependencies are up to
+date, and Node 20.19 is now the minimum (24 LTS recommended). Python
+3.14 is recommended; 3.10 still works.*
 
 ### Upgrading from 0.10.0
 
@@ -99,7 +106,7 @@ works.*
 Before and after, measured on Linux with the same Chromium, interleaved
 (median; CLI n=20, Studio n=8):
 
-| | 0.10.0 | Unreleased |
+| | 0.10.0 | 1.0.0 |
 |---|---|---|
 | Studio Build, résumé | 1950 ms | 1624 ms |
 | Studio Build, letter | 1394 ms | 1190 ms |
@@ -1654,8 +1661,10 @@ the old names can still be followed.
 | 0.9.0 | — | breaking: one PDF per document, no grayscale variant |
 | 0.9.1 | — | readable and accessible PDFs, static fonts, a lighter Studio |
 | 0.10.0 | — | breaking: links must be full addresses; a recovering, keyboard-ready Studio |
+| 1.0.0 | — | the interface settled; Node 20.19 minimum, faster builds |
 
 [Unreleased]: #unreleased
+[1.0.0]: #100--2026-10-02
 [0.10.0]: #0100--2026-09-29
 [0.9.1]: #091--2026-09-27
 [0.9.0]: #090--2026-09-23

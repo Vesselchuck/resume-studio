@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-Only the latest release gets security fixes. Resume Studio is in initial
-development (0.x), so a fix ships as a new release rather than a patch
-to an older one.
+Only the latest release gets security fixes. A fix ships as a new
+release rather than a patch to an older one.
 
 ## Reporting a vulnerability
 
