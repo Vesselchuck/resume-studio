@@ -31,8 +31,10 @@ All screenshots show the placeholder data the project ships with
 
 ### Requirements
 
-- **Python** 3.10+ (tested on 3.10 and 3.12; CI runs 3.11).
-- **Node** 18+ (for Playwright 1.60).
+- **Python** 3.14 recommended; 3.10+ works (tested on 3.10 and 3.14;
+  CI runs 3.14).
+- **Node** 24 LTS recommended; 20.19+ works (Playwright 1.63 and Sass
+  need it). The compile cache that speeds up start-up needs 22.8+.
 - **Rust** (stable, installed with [rustup](https://rustup.rs/)) for the
   desktop window. On Windows, Rust also needs the Microsoft C++ Build
   Tools, which the rustup installer offers to set up. No Rust? The same
@@ -818,7 +820,8 @@ The desktop window opens at once, on a small loading page, while the
 server starts; it switches to the Studio as soon as the server has a
 port, and anything that needs Chromium or the Python worker waits
 behind the scenes. If the server cannot start, the loading page shows
-why. Node's compile cache is
+why. Node's compile cache, which `node resume.js` and `node letter.js`
+use too, is
 kept out of the project, in your user cache directory
 (`%LOCALAPPDATA%\resume-studio\node-compile-cache` on Windows), and
 is skipped on Node older than 22.8.
@@ -1357,6 +1360,7 @@ ones it needs itself, from its checkboxes and data-source menu.
 │   ├── _png.py               The preview's PNG writer.
 │   ├── _power.py             Windows: opt the Studio's processes out of power throttling.
 │   ├── _compile_cache.js     Node's compile cache, kept out of the project.
+│   ├── _cli.js               What resume.js and letter.js share: running Python, stale-PDF cleanup.
 │   ├── snapshot_pdf.py       Visual regression test.
 │   ├── make_static_fonts.py  One-off: cut fonts/ from fonts/variable/ (needs fontTools).
 │   ├── solve_layout.js       Pure-function layout solver.

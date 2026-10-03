@@ -240,14 +240,6 @@ svg{flex:none}
   animation:spin .7s linear infinite;
 }
 
-.iconbtn{
-  background:transparent;border:1px solid transparent;border-radius:var(--r-sm);
-  width:var(--h-sm);height:var(--h-sm);display:grid;place-items:center;color:var(--muted);
-  transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease);
-}
-.iconbtn:hover{background:var(--panel-2);color:var(--ink)}
-.iconbtn:active{background:var(--panel-3)}
-
 /* ---------- app bar ---------- */
 .menubar{
   flex:none;display:flex;gap:var(--s-1);align-items:center;
@@ -265,7 +257,6 @@ svg{flex:none}
   font-family:var(--display);font-weight:600;font-size:15px;line-height:1;
 }
 .brand-name{font-family:var(--display);font-size:var(--fs-lg);font-weight:600;letter-spacing:.005em;white-space:nowrap}
-.menubar .iconbtn{flex:none;margin-left:var(--s-1)}
 .menubar .menu.help{margin-left:var(--s-1)}
 .kbd-hint{font-family:var(--mono);font-size:var(--fs-2xs);font-weight:600;line-height:1;padding:3px 5px;border:1px solid var(--rule);border-bottom-width:2px;border-radius:var(--r-xs);color:var(--muted-2);background:var(--panel)}
 /* App-level actions: an icon and a word, so each reads as a button. */
@@ -361,7 +352,6 @@ svg{flex:none}
 .status.err i{border-radius:1px;transform:rotate(45deg);width:7px;height:7px;border-width:3.5px}
 .status.idle i{border-width:1.5px}
 .status.ok{color:var(--accent);background:var(--accent-wash);border-color:color-mix(in srgb,var(--accent) 22%, transparent)}
-.status.warn{color:var(--warn);background:var(--warn-wash);border-color:color-mix(in srgb,var(--warn) 25%, transparent)}
 .status.err{color:var(--err);background:var(--err-wash);border-color:color-mix(in srgb,var(--err) 25%, transparent)}
 .status.idle{color:var(--muted);background:var(--panel-2);border-color:var(--rule-soft)}
 .status.run i{animation:pulse 1s ease-in-out infinite}
@@ -446,7 +436,6 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
   position:relative;padding-left:34px}
 .hint.tip::before{content:"i";position:absolute;left:10px;top:12px;width:16px;height:16px;border-radius:50%;
   display:grid;place-items:center;font:700 10px/1 var(--display);background:var(--accent-wash);color:var(--accent)}
-.sep{height:1px;background:var(--rule-soft);margin:var(--s-5) 0}
 
 /* ---------- canvas ---------- */
 .canvas-bar{
@@ -465,13 +454,7 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 .tgroup .btn.ghost{min-height:var(--h-tool);border-radius:var(--r-sm);font-weight:600}
 .tgroup .btn.ghost svg{color:var(--muted-2)}
 .tgroup .btn.ghost[aria-pressed="true"] svg{color:var(--accent)}
-.canvas-tools .tsep{width:1px;height:16px;background:var(--rule);margin:0 2px}
 .zoom{font-family:var(--ui);font-weight:700;font-size:var(--fs-xs);color:var(--ink);min-width:44px;padding:0 6px;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}
-.stale{
-  font-size:var(--fs-xs);color:var(--warn);background:var(--warn-wash);
-  border:1px solid color-mix(in srgb,var(--warn) 25%, transparent);
-  padding:2px 8px;border-radius:var(--r-pill);font-weight:600;
-}
 .liveflag{
   display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none;
   font-size:var(--fs-xs);font-weight:700;color:var(--accent);
@@ -507,15 +490,7 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 .eo-held{font-size:var(--fs-xs);color:var(--muted)}
 .eo-foot .spacer{flex:1}
 
-/* re-render shimmer */
 .sheet{position:relative}
-.sheet.rendering::after{
-  content:"";position:absolute;inset:0;pointer-events:none;
-  background:linear-gradient(105deg,transparent 38%,rgba(42,68,54,.10) 50%,transparent 62%);
-  background-size:280% 100%;
-  animation:sweep .62s ease-out;
-}
-@keyframes sweep{from{background-position:180% 0}to{background-position:-80% 0}}
 .sheet.held{opacity:.55;filter:saturate(.55);transition:opacity var(--dur-3) var(--ease)}
 /* Changed since the last render: outlined, then faded over 4 s. */
 .chg{position:absolute;pointer-events:none;outline:2px solid var(--change);outline-offset:1px;border-radius:2px;
@@ -549,33 +524,20 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 }
 .sheet-label{display:flex;justify-content:space-between;align-items:center;gap:var(--s-2);font-size:var(--fs-xs);color:var(--muted-2);padding:0 2px}
 .budget{display:flex;align-items:center;gap:7px;font-variant-numeric:tabular-nums;font-family:var(--mono)}
-.budget .bar{width:74px;height:4px;border-radius:2px;background:var(--rule-soft);overflow:hidden}
-.budget .bar span{display:block;height:100%;background:var(--accent)}
 
 /* ---------- inspector ---------- */
 .ins-group{margin-bottom:var(--s-5)}
 .inspector > .srcbox{margin-bottom:var(--s-5)}
 .ins-title{font-family:var(--display);font-size:var(--fs-xl);font-weight:600;margin:0 0 var(--s-4);line-height:var(--lh-tight)}
 .ins-title span{display:block;font-family:var(--ui);font-size:var(--fs-xs);font-weight:700;letter-spacing:var(--ls-label);text-transform:uppercase;color:var(--muted-2);margin-bottom:4px}
-.field{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
-.field label,.field-label{font-size:var(--fs-xs);font-weight:700;letter-spacing:var(--ls-label);text-transform:uppercase;color:var(--muted-2)}
+.field-label{font-size:var(--fs-xs);font-weight:700;letter-spacing:var(--ls-label);text-transform:uppercase;color:var(--muted-2)}
 .field-label{display:block;margin:0 0 6px}
-.field input,.field select,.field textarea{
-  font:inherit;font-size:var(--fs-sm);color:var(--ink);
-  background:var(--panel);border:1px solid var(--rule);border-radius:var(--r-sm);
-  padding:6px 8px;width:100%;
-}
-.field textarea{resize:vertical;min-height:52px;line-height:1.45}
-.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent);outline:none}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 
 .srcbox{
   background:var(--panel);border:1px solid var(--rule-soft);border-radius:var(--r-md);
   padding:var(--s-3);display:flex;flex-direction:column;gap:var(--s-2);box-shadow:var(--sh-1);
 }
-.srcbox .path{font-family:var(--mono);font-size:var(--fs-xs);word-break:break-all;color:var(--ink)}
 .srcbox .note{font-size:var(--fs-xs);color:var(--muted-2);line-height:1.5}
-.srcbox .row{display:flex;gap:7px}
 .srcbox select{
   font:inherit;font-size:var(--fs-md);font-weight:600;color:var(--ink);background-color:var(--panel);
   border:1px solid var(--rule);border-radius:var(--r-sm);min-height:var(--h-lg);padding:0 32px 0 10px;width:100%;
@@ -599,21 +561,12 @@ button.s{background:none;border:0;padding:0;font:inherit;text-align:right}
 .kv .btn{margin-left:auto;flex:none;min-height:var(--h-xs);padding:0 8px;font-size:var(--fs-xs)}
 .kv:has(.btn) .v{margin-left:auto}
 
-.checks{display:flex;flex-direction:column;gap:7px}
-.check{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--rule);border-radius:var(--r-sm);background:var(--panel);cursor:pointer}
-.check input{accent-color:var(--accent);width:14px;height:14px;margin:0}
-.check .t{font-size:var(--fs-sm);font-weight:600}
-.check .d{font-size:var(--fs-xs);color:var(--muted-2);font-family:var(--mono)}
-.check.off{opacity:.55}
-
 /* phase stepper */
 .phases{display:flex;flex-direction:column;gap:0;border:1px solid var(--rule-soft);border-radius:var(--r-md);background:var(--panel);overflow:hidden}
 .phase{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:6px 10px;font-size:var(--fs-sm);border-bottom:1px solid var(--rule-soft)}
 .phase:last-child{border-bottom:0}
 .phase .m{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;border:1.5px solid var(--rule);color:transparent;font-size:var(--fs-2xs);font-weight:800}
 .phase.done .m{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.phase.run .m{border-color:var(--accent);border-right-color:transparent;animation:spin .7s linear infinite}
-.phase.todo{color:var(--muted-2)}
 .phase b{font-weight:600}
 .phase .ms{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted-2);font-variant-numeric:tabular-nums}
 
@@ -775,8 +728,7 @@ details.diag>summary .lg-badge{margin-left:var(--s-2);letter-spacing:0;text-tran
   box-shadow:var(--sh-1);
   transition:border-color var(--dur-1) var(--ease),background var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease);
 }
-.target:not([disabled]):hover,.target.suggest{border-color:var(--accent);background:var(--accent-wash);box-shadow:var(--sh-2)}
-.target.suggest{border-width:2px}
+.target:not([disabled]):hover{border-color:var(--accent);background:var(--accent-wash);box-shadow:var(--sh-2)}
 .target .tn{font-family:var(--display);font-size:var(--fs-xl);font-weight:600}
 .target .td{font-size:var(--fs-xs);color:var(--muted)}
 .target .tag{font-size:var(--fs-2xs);font-weight:800;letter-spacing:var(--ls-label);text-transform:uppercase;color:var(--accent)}
@@ -835,12 +787,6 @@ details.diag>summary .lg-badge{margin-left:var(--s-2);letter-spacing:0;text-tran
 .toast.warn .tk{display:grid;background:var(--warn);color:var(--warn-wash)}
 .toast.warn .tk::before{content:"!"}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
-
-/* annotations */
-.note-pill{
-  position:absolute;z-index:5;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
-  background:var(--ink);color:var(--ground);border-radius:5px;padding:3px 7px;opacity:.85;
-}
 
 /* keyboard shortcuts */
 .keys{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
@@ -2361,7 +2307,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     var first = base + (state.log.length - lines.length);
     var runAt = {};
     logRuns.forEach(function (r) { if (r.seq >= first && r.seq < logSeq) runAt[r.seq - first] = r; });
-    var runs = [], run = null, sec = null, lastRow = null, runIdx = 0;
+    var runs = [], run = null, sec = null, lastRow = null;
     function newRun(r) {
       finishSection();
       run = { r: r, el: el('div', 'lg-run'), counts: { ok: 0, err: 0, warn: 0, info: 0 }, last: null };
@@ -2454,7 +2400,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       rn.el.classList.add('st-' + state_);
       head.addEventListener('click', function () {
         logView.folded[key] = !rn.el.classList.contains('folded');
-        refreshConsoles(false);
+        refreshConsoles();
       });
       rn.el.insertBefore(head, rn.body);
     });
@@ -2466,7 +2412,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // Lines arrive in bursts (a build prints dozens at once): one redraw
     // per frame, whatever the number of lines in it.
     if (logFrame) return;
-    logFrame = requestAnimationFrame(function () { logFrame = 0; refreshConsoles(false); });
+    logFrame = requestAnimationFrame(function () { logFrame = 0; refreshConsoles(); });
   }
   /* ─── console tools ────────────────────────────────────────────
    *
@@ -2482,7 +2428,6 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
    */
   var LOG_ALL = 500;
   var logView = { filter: 'all', query: '', follow: true, folded: {} };
-  var LOC_ANY_RE = /((?:data|styles)[\\/][^\s:]+?\.(?:ya?ml|scss)):(\d+):(\d+)/g;
 
   function logCounts() {
     var c = { err: 0, warn: 0 };
@@ -2505,7 +2450,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       b.type = 'button';
       b.dataset.logFilter = f[0];
       b.setAttribute('aria-pressed', String(logView.filter === f[0]));
-      b.addEventListener('click', function () { logView.filter = f[0]; refreshConsoles(true); });
+      b.addEventListener('click', function () { logView.filter = f[0]; refreshConsoles(); });
       seg.appendChild(b);
     });
     bar.appendChild(seg);
@@ -2518,7 +2463,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     find.value = logView.query;
     find.addEventListener('input', function () {
       logView.query = find.value;
-      refreshConsoles(false);
+      refreshConsoles();
     });
     bar.appendChild(find);
 
@@ -2536,7 +2481,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     follow.setAttribute('aria-pressed', String(logView.follow));
     follow.addEventListener('click', function () {
       logView.follow = !logView.follow;
-      refreshConsoles(false);
+      refreshConsoles();
     });
     tools.appendChild(copy);
     tools.appendChild(follow);
@@ -2602,7 +2547,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   }
 
   /** Redraw both consoles (inline and expanded), their counts and toggles. */
-  function refreshConsoles(bars) {
+  function refreshConsoles() {
     // While the console window is open it covers the Inspector's copy:
     // only the window is redrawn, and the Inspector's when it closes.
     var bigOpen = Boolean(document.getElementById('logBoxBig'));
@@ -2655,7 +2600,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       if (scrim.isConnected) return;
       obs.disconnect();
       var small = $('logBox');
-      if (small && small._stale) { small._stale = false; refreshConsoles(false); }
+      if (small && small._stale) { small._stale = false; refreshConsoles(); }
     }).observe(document.body, { childList: true });
     closeBtn.addEventListener('click', function () { close(); });
     scrim.addEventListener('click', function (e) { if (e.target === scrim) close(); });
@@ -3240,18 +3185,6 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     } catch (err) {
       toast('Could not switch', err.message.slice(0, 90));
     }
-  }
-
-  async function setDataSource(source) {
-    await api('POST', '/api/datasource', { source: source });
-    // The card names the file the next build reads, and that just
-    // changed — re-read the status before redrawing or it keeps
-    // reporting the previous choice.
-    await refreshStatus();
-    state.dataSource = source;
-    toast('Data source: ' + (source || 'auto'), 're-rendering');
-    renderAll();
-    preview();
   }
 
   /** For cleanup paths: an unreachable engine must not stop the redraw. */

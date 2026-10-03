@@ -53,11 +53,6 @@ const READY_PREFIX = '\x1eSTUDIO_READY ';
 
 const compileCache = require('../build/_compile_cache');
 
-function skip(reason) {
-  console.log(`SKIP ${SUITE}: ${reason}`);
-  process.exitCode = 0;
-}
-
 /** A GET, with the time it took. */
 function get(port, route) {
   const started = Date.now();

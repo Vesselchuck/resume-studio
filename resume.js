@@ -73,13 +73,20 @@
  *   runSnapshot()   — phase 10  (here)
  */
 
+// Before anything heavy is required: V8 reuses the compiled form of
+// every module loaded after this line. require('playwright') is most of
+// this script's start-up, and the Studio's Build runs this script as a
+// fresh process every time. Same cache as the Studio's own; see
+// build/_compile_cache.js.
+require('./build/_compile_cache').enable();
+
 const { chromium } = require('playwright');
 const path = require('path');
-const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { detectPython } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
-const { pruneStale, recordBuilt, seedRecord, readRecord } = require('./build/_output_name');
+const { recordBuilt, seedRecord, readRecord } = require('./build/_output_name');
+const { subprocessEnv, pythonRunner, pruneStaleOutputs, readDataSource } = require('./build/_cli');
 const distLock = require('./build/_dist_lock');
 const {
   ENV_SKIP_SNAPSHOT,
@@ -100,92 +107,10 @@ const ROOT = __dirname;
 // Detect Python via the shared detect_python module. Done once at
 // startup so all subprocess calls share the same interpreter.
 const PYTHON = detectPython();
+const runPython = pythonRunner(ROOT, PYTHON);
 
 
 /* ─── Helpers ─────────────────────────────────────────────────── */
-
-/**
- * Build the env passed to subprocesses (build.py, crop_pdf.py,
- * snapshot_pdf.py, the test runner). When resume.js would itself print
- * color (its stdout is a TTY, or FORCE_COLOR asks for it), forward
- * that via FORCE_COLOR=1 so subprocesses keep their ANSI codes —
- * otherwise execFileSync's pipe-captured stdout would look like
- * non-TTY to them and they'd suppress color. Asking colorEnabled()
- * rather than isTTY is what keeps a user's FORCE_COLOR=0 from being
- * overwritten with 1. NO_COLOR passthrough is automatic since
- * process.env is inherited.
- *
- * PYTHONUTF8 / PYTHONIOENCODING: the Python children print emoji (the
- * _console symbols). With stdout captured into a pipe, Windows Python
- * encodes to the ANSI code page (cp1252), where ✅ raises
- * UnicodeEncodeError and the build dies on its first status line.
- * build/engine.js sets the same two for its worker.
- */
-function subprocessEnv() {
-  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
-  if (c.colorEnabled(process.stdout)) {
-    env.FORCE_COLOR = '1';
-  }
-  return env;
-}
-
-
-/**
- * Run a Python script as a subprocess, handling stdio + errors uniformly.
- *
- * The `-B` flag is added unconditionally to suppress __pycache__/
- * creation; the cwd and FORCE_COLOR-forwarding env are set the same
- * way every time.
- *
- * On success, the captured stdout is written through to the parent's
- * stdout so the subprocess's _console output appears in order.
- *
- * On failure:
- *   • The subprocess's stderr was already auto-streamed to the parent's
- *     stderr by execFileSync (Node behavior), so failure markers from
- *     _console.err() etc. have already reached the user.
- *   • We flush captured stdout (which is NOT auto-streamed) so any
- *     in-progress success markers don't get lost.
- *   • If the subprocess emitted nothing to either stream (rare —
- *     usually means execFileSync itself failed before the script
- *     ran), we emit a fallback _console error.
- *   • We re-throw so the orchestrator can decide the exit policy.
- *
- * @param {string[]} scriptArgs — args after `-B`, typically [script_path, ...]
- * @param {string}   fallbackLabel — error label used if the subprocess
- *                                   produced no output of its own
- */
-function runPython(scriptArgs, fallbackLabel) {
-  try {
-    const out = execFileSync(
-      PYTHON,
-      ['-B', ...scriptArgs],
-      {
-        cwd: ROOT,
-        encoding: 'utf-8',
-        env: subprocessEnv(),
-        // Explicit: stdin ignored, stdout captured into `out` for
-        // ordered replay below, stderr inherited so subprocess
-        // diagnostics stream live. Without this, the implicit Node
-        // default (which inherits stderr) happens to do the right
-        // thing, but a future stdio override would silently break
-        // the streaming-diagnostics contract.
-        stdio: ['ignore', 'pipe', 'inherit'],
-      },
-    );
-    process.stdout.write(out);
-  } catch (err) {
-    if (err.stdout) process.stdout.write(err.stdout);
-    // A null status means the script never ran to an exit — spawn
-    // failed (a bad PYTHON) or a signal killed it — so whatever it
-    // printed, it did not print why it stopped.
-    if ((!err.stdout && !err.stderr) || typeof err.status !== 'number') {
-      c.err(`${fallbackLabel}: ${err.message}`);
-    }
-    throw reported(err);
-  }
-}
-
 
 /**
  * Symmetric counterpart for spawning a Node subprocess with INHERITED
@@ -193,7 +118,7 @@ function runPython(scriptArgs, fallbackLabel) {
  * progress dots) should stream directly to the user's terminal in real
  * time, rather than being captured and replayed after exit.
  *
- * Differences from runPython:
+ * Differences from runPython (build/_cli.js):
  *   • stdio:'inherit' — child writes straight to parent's stdout/stderr
  *   • No captured output to replay on failure — the child already
  *     printed everything by the time execFileSync returns/throws
@@ -427,46 +352,6 @@ function builtDataSource() {
 }
 
 
-/** data_source from dist/pdf_meta.json, or null if it can't be read. */
-function readDataSource() {
-  try {
-    const meta = JSON.parse(
-      fs.readFileSync(path.join(ROOT, 'dist', 'pdf_meta.json'), 'utf-8'));
-    return typeof meta.data_source === 'string' ? meta.data_source : null;
-  } catch {
-    return null;
-  }
-}
-
-
-/**
- * Clear this document's outputs from earlier builds that this one did
- * not overwrite.
- *
- * The PDF is named after you, so the set of filenames a build occupies
- * moves when `name.first` / `name.last` does — and it moved for
- * everyone twice already: once when outputs stopped being called
- * {DOC}-color.pdf, and again when the grayscale variant stopped being
- * built at all. Left alone, dist/ accumulates complete,
- * plausible-looking resumes under names that are no longer current, in
- * the exact directory you open when you need to attach one.
- *
- * Runs after printPdfs and recordBuilt, so `keep` is what actually
- * landed on disk and the build record lists it. Only names that record
- * says a build wrote are removed (and the retired ones no build writes
- * now), never a PDF of yours that merely looks like one.
- * _output_name.pruneStale does the deleting and is scoped there; this
- * only supplies the reporting.
- */
-function pruneStaleOutputs(variant, keep) {
-  pruneStale(
-    path.join(ROOT, 'dist'),
-    variant,
-    keep,
-    name => c.info_pair('Removed stale PDF', `${path.join('dist', name)} (not this build's name)`),
-    (name, why) => c.warn_pair('Could not remove', `${path.join('dist', name)} — ${why}`),
-  );
-}
 
 
 /* ─── Pipeline orchestrator ───────────────────────────────────── */
@@ -521,8 +406,8 @@ function pruneStaleOutputs(variant, keep) {
     // and the print, the record and the prune must agree on one name.
     const output = pipeline.paths.pdf;
     await pipeline.printPdfs(page, { output });
-    recordBuilt(pipeline.paths.dist, 'resume', output, { dataSource: readDataSource() });
-    pruneStaleOutputs('resume', [output]);
+    recordBuilt(pipeline.paths.dist, 'resume', output, { dataSource: readDataSource(path.join(ROOT, 'dist', 'pdf_meta.json')) });
+    pruneStaleOutputs(ROOT, 'resume', [output]);
     releaseDist();
 
     runSnapshot();

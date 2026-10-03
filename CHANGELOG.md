@@ -43,7 +43,70 @@ is gone, **Fixed** for bugs, **Security** for what used to be exposed.
 
 ## [Unreleased]
 
-Nothing yet.
+*Builds are faster: in a measured run, the Studio's Build took 15–17%
+less time and `node resume.js` 11% less. The PDFs look and read exactly
+as before. The dependencies are up to date, and Node 20.19 is now the
+minimum (24 LTS recommended). Python 3.14 is recommended; 3.10 still
+works.*
+
+### Upgrading from 0.10.0
+
+1. Check `node --version`. Below 20.19, install Node 24 LTS. Older
+   versions can no longer run the build: Playwright 1.63 needs Node 20
+   and Sass needs 20.19.
+2. Run `npm ci`, then `npx playwright install chromium`. Playwright
+   1.63 drives Chromium 153 (it was 1.60 with its own Chromium), and
+   the old browser is not used any more.
+3. Run `pip install -r requirements.txt` (`py -m pip …` on Windows).
+   This brings pypdf to 6.19.0 and pypdfium2 to 5.13.0. To move to
+   Python 3.14, install it first and then run this step with it.
+4. Build once with the snapshot comparison on (`RESUME_SNAPSHOT=on`;
+   it is off by default). If it reports a difference, the new Chromium
+   drew the page differently. Look at
+   `tests/fixtures/diff_page*.png`, and if the change is only how text
+   is rasterized, run `python build/snapshot_pdf.py --update-all`.
+
+### Changes
+
+- **Changed — Breaking.** Node 20.19 or newer is required, up from 18.
+  The dependency upgrades below need it. Node 24 LTS is recommended,
+  and CI now runs Node 24 and Python 3.14. The desktop window's
+  "Could not start Node" message names the new versions.
+- **Changed.** Dependency versions: Playwright 1.60.0 → 1.63.0
+  (Chromium 153), sass-embedded 1.99.0 → 1.105.1, @tauri-apps/cli
+  2.11.4 → 2.12.1, pypdf 6.16.1 → 6.19.0, pypdfium2 5.7.1 → 5.13.0. The
+  Python suite passes on 3.10 and 3.14 with the new versions, and every
+  pinned package has a Windows wheel for 3.14. Python 3.10 is still the
+  minimum.
+- **Changed.** `node resume.js` and `node letter.js` use the same
+  compiled-code cache as the Studio. Most of their start-up is loading
+  Playwright, and the Studio's Build starts them fresh every time.
+- **Changed.** Marking untagged drawing as PDF/UA artifacts no longer
+  has pypdf parse and rewrite every operand on the page. The markers
+  are inserted into Chromium's own content stream. That step went from
+  ~110 to ~20 ms per résumé and from ~35 to ~6 ms per letter (measured
+  on 25 documents). The pages have the same operations, pixels, text
+  and structure tree. The files come out a few hundred bytes smaller
+  because Chromium's spelling of each number is kept. Content the small
+  scanner does not read, such as an inline image or deeply nested
+  parentheses in a string, still goes through pypdf.
+- **Changed.** The code the two command-line builds shared but each
+  kept its own copy of now lives in `build/_cli.js`: running Python,
+  the stale-PDF cleanup and reading the data source back. Code and
+  styles that nothing used were removed from the Studio page, the
+  server and the build.
+
+Before and after, measured on Linux with the same Chromium, interleaved
+(median; CLI n=20, Studio n=8):
+
+| | 0.10.0 | Unreleased |
+|---|---|---|
+| Studio Build, résumé | 1950 ms | 1624 ms |
+| Studio Build, letter | 1394 ms | 1190 ms |
+| `node resume.js` | 1766 ms | 1565 ms |
+| `node letter.js` | 1308 ms | 1217 ms |
+
+Start-up, previews, page load and memory did not change measurably.
 
 ---
 

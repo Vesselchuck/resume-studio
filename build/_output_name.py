@@ -81,7 +81,6 @@ _CONSTANTS = json.loads(
 DOC_SUFFIX = _CONSTANTS["DOC_SUFFIX"]
 SEPARATOR = _CONSTANTS["SEPARATOR"]
 MAX_PART = _CONSTANTS["MAX_PART"]
-LEGACY = _CONSTANTS["LEGACY"]
 RECORD = _CONSTANTS["RECORD"]
 
 # Letters NFKD will not decompose, because they are atomic code points
@@ -240,11 +239,6 @@ def stem_from_meta(meta_file, variant: str) -> str:
 
     value = meta.get("output_stem")
     return value if isinstance(value, str) and value else DOC_SUFFIX[variant]
-
-
-def legacy_pdfs(dist, variant: str):
-    """The pre-rename filenames for `variant`, as paths under `dist`."""
-    return [Path(dist) / name for name in LEGACY[variant]]
 
 
 def recorded_build(dist, variant: str):

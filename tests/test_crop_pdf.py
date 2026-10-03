@@ -784,11 +784,12 @@ class TestLinkDescription(unittest.TestCase):
                 self.assertEqual(crop_pdf.link_description(uri), want)
 
 
-def make_tagged_pdf_with_content() -> PdfWriter:
+def make_tagged_pdf_with_content(content: bytes | None = None) -> PdfWriter:
     """One tagged page like Chromium's: a background fill and a rule
     outside any marked content, a tagged text run inside BDC … EMC,
     an untagged text run, a clip path, and two link annotations, one
-    of which already has a /Contents."""
+    of which already has a /Contents. `content` replaces the page's
+    content stream."""
     from pypdf.generic import (ArrayObject, BooleanObject, DecodedStreamObject,
                                DictionaryObject, FloatObject, NameObject,
                                NumberObject, TextStringObject)
@@ -811,6 +812,8 @@ def make_tagged_pdf_with_content() -> PdfWriter:
         b"BT /F1 9 Tf 500 40 Td (Page 1 of 1) Tj ET\n"
         b"Q\n"
     )
+    if content is not None:
+        stream.set_data(content)
     page[NameObject("/Contents")] = w._add_object(stream)
 
     def link(uri, contents=None):
@@ -897,6 +900,52 @@ class TestAccessibility(unittest.TestCase):
         w = make_tagged_pdf_with_content()
         crop_pdf.mark_untagged_as_artifacts(w)
         self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 0)
+
+    # Operands a scanner can get wrong: a comment, a dictionary holding a
+    # literal string with an escaped parenthesis, hex strings with and
+    # without spaces around them, a boolean, a kerned TJ array whose
+    # string nests parentheses, operators against a delimiter.
+    TRICKY = (
+        b"% Chromium writes none, but a comment is legal\n"
+        b"/P <</MCID 0 /ActualText (a \\) b) /Alt <48 49> /Flag true>> BDC\n"
+        b"BT /F1 9 Tf 1 0 0 1 72 650 Tm [(Ke\\(rn) -20 (ed (nested) x)]TJ ET EMC\n"
+        b"BT/F1 9 Tf 72 640 Td<48656C6C6F>Tj ET\n"
+        b"0 0 1 rg 10 10 m 20 20 l h f*\nQ q\n"
+        b"[] 0 d 0.5 w 1 1 m 2 2 l S Q\n"
+    )
+
+    def test_the_scanner_reads_what_pypdf_reads(self):
+        w = make_tagged_pdf_with_content(self.TRICKY)
+        page = w.pages[0]
+        scanned = [op for op, _, _ in crop_pdf._scan_operators(page.get_contents().get_data())]
+        self.assertEqual(scanned, [op for _, op in _operations(page, w)])
+
+    def test_splicing_matches_marking_on_pypdf_objects(self):
+        # The fast path splices markers into the bytes; the fallback
+        # rewrites pypdf's parse. Both must leave the same operations.
+        spliced = make_tagged_pdf_with_content(self.TRICKY)
+        parsed = make_tagged_pdf_with_content(self.TRICKY)
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(spliced), 3)
+        page = parsed.pages[0]
+        self.assertEqual(crop_pdf._mark_with_pypdf(page, page.get_contents()), 3)
+        a, b = round_trip(spliced), round_trip(parsed)
+        self.assertEqual(_operations(a.pages[0], a), _operations(b.pages[0], b))
+        self.assertEqual(_unmarked_painting(a.pages[0], a), [])
+
+    def test_what_the_scanner_cannot_read_goes_through_pypdf(self):
+        for content in (
+            # An inline image, whose data is binary.
+            b"q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q\n",
+            # A string nested deeper than one pair of parentheses.
+            b"BT /F1 9 Tf 72 640 Td (a (b (c) b) a) Tj ET\n",
+        ):
+            with self.subTest(content=content):
+                with self.assertRaises(ValueError):
+                    crop_pdf._scan_operators(content)
+                w = make_tagged_pdf_with_content(content)
+                self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
+                r = round_trip(w)
+                self.assertEqual(_unmarked_painting(r.pages[0], r), [])
 
     @unittest.skipUnless(HAVE_PDFIUM, "pypdfium2 / Pillow not installed")
     def test_same_pixels(self):

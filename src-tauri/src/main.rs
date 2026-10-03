@@ -498,8 +498,8 @@ fn start_server(root: &std::path::Path) -> Result<(String, Child), String> {
     let mut child = command.spawn().map_err(|e| {
         format!(
             "Could not start Node ({e}).\n\n\
-             Resume Studio runs the build pipeline with Node. Install Node 18 \
-             or newer and make sure `node` is on your PATH."
+             Resume Studio runs the build pipeline with Node. Install Node 24 \
+             (20.19 or newer works) and make sure `node` is on your PATH."
         )
     })?;
 
