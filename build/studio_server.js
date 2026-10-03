@@ -76,7 +76,6 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const os = require('os');
 
 const { createEngine } = require('./engine');
 const {

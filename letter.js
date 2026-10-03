@@ -44,13 +44,19 @@
  * the desktop app can re-render the letter as you edit it.
  */
 
+// Before anything heavy is required: V8 reuses the compiled form of
+// every module loaded after this line. require('playwright') is most of
+// this script's start-up, and the Studio's Build runs this script as a
+// fresh process every time. Same cache as the Studio's own; see
+// build/_compile_cache.js.
+require('./build/_compile_cache').enable();
+
 const { chromium } = require('playwright');
 const path = require('path');
-const fs = require('fs');
-const { execFileSync } = require('child_process');
 const { detectPython } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
-const { pruneStale, recordBuilt, seedRecord } = require('./build/_output_name');
+const { recordBuilt, seedRecord } = require('./build/_output_name');
+const { pythonRunner, pruneStaleOutputs, readDataSource } = require('./build/_cli');
 const distLock = require('./build/_dist_lock');
 const c = require('./build/_console');
 
@@ -59,42 +65,7 @@ const c = require('./build/_console');
 
 const ROOT = __dirname;
 const PYTHON = detectPython();
-
-
-/* ─── Helpers (mirrors resume.js's, trimmed) ──────────────────── */
-
-/**
- * Forward color to subprocesses so crop_pdf.py keeps it, and make
- * Python write UTF-8 to its pipes so the emoji status symbols do not
- * crash it on a Windows cp1252 console. Same contract as resume.js's.
- */
-function subprocessEnv() {
-  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
-  if (c.colorEnabled(process.stdout)) env.FORCE_COLOR = '1';
-  return env;
-}
-
-/**
- * Run a Python script, streaming stderr live and replaying captured
- * stdout in order. Identical contract to resume.js's runPython.
- */
-function runPython(scriptArgs, fallbackLabel) {
-  try {
-    const out = execFileSync(
-      PYTHON,
-      ['-B', ...scriptArgs],
-      { cwd: ROOT, encoding: 'utf-8', env: subprocessEnv(),
-        stdio: ['ignore', 'pipe', 'inherit'] },
-    );
-    process.stdout.write(out);
-  } catch (err) {
-    if (err.stdout) process.stdout.write(err.stdout);
-    if ((!err.stdout && !err.stderr) || typeof err.status !== 'number') {
-      c.err(`${fallbackLabel}: ${err.message}`);
-    }
-    throw reported(err);
-  }
-}
+const runPython = pythonRunner(ROOT, PYTHON);
 
 
 /* ─── The cold Python adapter ─────────────────────────────────── */
@@ -136,47 +107,6 @@ const pipeline = createPipeline({
 });
 
 
-/**
- * Clear this document's outputs from earlier builds that this one did
- * not overwrite.
- *
- * The PDF is named after you, so the set of filenames a build occupies
- * moves when `name.first` / `name.last` does — and it moved for
- * everyone twice already: once when outputs stopped being called
- * {DOC}-color.pdf, and again when the grayscale variant stopped being
- * built at all. Left alone, dist/ accumulates complete,
- * plausible-looking letters under names that are no longer current, in
- * the exact directory you open when you need to attach one.
- *
- * Runs after printPdfs and recordBuilt, so `keep` is what actually
- * landed on disk and the build record lists it. Only names that record
- * says a build wrote are removed (and the retired ones no build writes
- * now), never a PDF of yours that merely looks like one.
- * _output_name.pruneStale does the deleting and is scoped there; this
- * only supplies the reporting.
- */
-function pruneStaleOutputs(variant, keep) {
-  pruneStale(
-    path.join(ROOT, 'dist'),
-    variant,
-    keep,
-    name => c.info_pair('Removed stale PDF', `${path.join('dist', name)} (not this build's name)`),
-    (name, why) => c.warn_pair('Could not remove', `${path.join('dist', name)} — ${why}`),
-  );
-}
-
-
-/** data_source from dist/letter_meta.json, or null if it can't be read. */
-function readDataSource() {
-  try {
-    const meta = JSON.parse(fs.readFileSync(pipeline.paths.pdfMeta, 'utf-8'));
-    return typeof meta.data_source === 'string' ? meta.data_source : null;
-  } catch {
-    return null;
-  }
-}
-
-
 /* ─── Orchestrator ────────────────────────────────────────────── */
 
 (async () => {
@@ -216,8 +146,8 @@ function readDataSource() {
     // Read once: `paths.pdf` re-reads the metadata on every access.
     const output = pipeline.paths.pdf;
     await pipeline.printPdfs(page, { output });
-    recordBuilt(pipeline.paths.dist, 'letter', output, { dataSource: readDataSource() });
-    pruneStaleOutputs('letter', [output]);
+    recordBuilt(pipeline.paths.dist, 'letter', output, { dataSource: readDataSource(pipeline.paths.pdfMeta) });
+    pruneStaleOutputs(ROOT, 'letter', [output]);
   } catch (err) {
     if (!err.alreadyReported) {
       c.err('Unexpected error');

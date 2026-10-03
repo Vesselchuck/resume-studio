@@ -104,7 +104,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ContentStream, NameObject, TextStringObject
+from pypdf.generic import DecodedStreamObject, NameObject, TextStringObject
 from pypdf.xmp import XmpInformation
 
 # Local console helper.
@@ -271,7 +271,7 @@ def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None)
          mapping, so they keep their copied-from-input values.
 
     The final `writer.add_metadata(info)` call respects explicitly-
-    passed /Producer / /Creator values (verified in pypdf 6.16.1, the
+    passed /Producer / /Creator values (verified in pypdf 6.19.0, the
     pinned version). Future pypdf versions could in principle change
     that — the regression gate is
     `test_does_not_override_creator_or_producer` in
@@ -331,7 +331,7 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
     """
     lang = read_lang(meta_path)
     # `writer.root_object` is pypdf's public accessor for the document
-    # catalog (verified in pypdf 6.16.1, the pinned version). The
+    # catalog (verified in pypdf 6.19.0, the pinned version). The
     # leading-underscore `_root_object` works too but is private and
     # subject to rename across versions; the public name is the
     # forward-compatible choice.
@@ -504,6 +504,80 @@ _PAINT = {b'f', b'F', b'f*', b'S', b's', b'B', b'B*', b'b', b'b*'}
 _SHOW = {b'Tj', b'TJ', b"'", b'"', b'Do', b'sh', b'INLINE IMAGE'}
 
 
+def _artifact_spans(ops):
+    """(first, last) operator index of each drawing operation, in
+    `ops` (a page's operators in order), that lies outside every
+    marked-content sequence. See mark_untagged_as_artifacts."""
+    depth = 0
+    path_start = None
+    for i, op in enumerate(ops):
+        if op in (b'BDC', b'BMC'):
+            depth += 1
+        elif op == b'EMC':
+            depth = max(0, depth - 1)
+        elif op in _PATH:
+            if depth == 0 and path_start is None:
+                path_start = i
+        elif op in _PAINT or op == b'n':
+            if depth == 0 and op != b'n':
+                yield (i if path_start is None else path_start, i)
+            path_start = None
+        elif op in _SHOW and depth == 0:
+            yield (i, i)
+
+
+# One content-stream token (ISO 32000, 7.2 and 7.8.2): whitespace or a
+# comment (no group), an operator (or true/false/null, which read the
+# same), an operand, an array or dictionary bracket, or a byte nothing
+# else matches. A literal string may nest one pair of parentheses;
+# deeper nesting, valid but never seen from Chromium, is `bad`.
+_REGULAR = rb'[^\x00\t\n\x0c\r ()<>\[\]{}/%]*'
+_STRING = rb'\((?:[^()\\]|\\.|\((?:[^()\\]|\\.)*\))*\)'
+_TOKEN = re.compile(
+    rb'[\x00\t\n\x0c\r ]+|%[^\r\n]*'
+    rb'|(?P<op>[A-Za-z\'"]' + _REGULAR + rb')'
+    rb'|(?P<arg>[-+.0-9]' + _REGULAR + rb'|/' + _REGULAR
+    + rb'|<[0-9A-Fa-f\x00\t\n\x0c\r ]*>|' + _STRING + rb')'
+    rb'|(?P<open><<|\[)|(?P<close>>>|\])|(?P<bad>.)',
+    re.DOTALL)
+
+
+def _scan_operators(data: bytes):
+    """Each operator in a decoded content stream, as (operator, start,
+    end): `start` is where its first operand begins (or the operator,
+    if it has none) and `end` is just past the operator. Raises
+    ValueError on anything it does not read, an inline image included;
+    the caller then falls back to pypdf's parser."""
+    ops = []
+    nesting = 0
+    op_start = None
+    for m in _TOKEN.finditer(data):
+        kind = m.lastgroup
+        if kind is None:
+            continue
+        if kind == 'op' and not nesting:
+            word = m.group()
+            if word not in (b'true', b'false', b'null'):
+                if word in (b'BI', b'ID', b'EI'):
+                    raise ValueError('inline image')
+                ops.append((word, m.start() if op_start is None else op_start, m.end()))
+                op_start = None
+                continue
+        if kind == 'bad':
+            raise ValueError(f'unreadable content at byte {m.start()}')
+        if op_start is None:
+            op_start = m.start()
+        if kind == 'open':
+            nesting += 1
+        elif kind == 'close':
+            nesting -= 1
+            if nesting < 0:
+                raise ValueError(f'unbalanced {m.group()!r} at byte {m.start()}')
+    if nesting or op_start is not None:
+        raise ValueError('content ends inside an operation')
+    return ops
+
+
 def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
     """Wrap drawing that is outside every marked-content sequence in
     /Artifact BMC … EMC (PDF/UA-1 7.1: content is tagged or an
@@ -517,51 +591,59 @@ def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
     image, one operator each. Drawing already inside a marked-content
     sequence — Chromium's tagged content, or anything else — is not
     touched.
+
+    The markers are spliced into the stream's own bytes, which are
+    otherwise kept as Chromium wrote them. Parsing every operand into
+    pypdf objects and writing them all back out, as this used to,
+    was most of this step's time. A page the small scanner above does
+    not read (an inline image, say) still goes through pypdf.
     """
-    artifact = ([NameObject('/Artifact')], b'BMC')
-    end = ([], b'EMC')
     wrapped = 0
     for page in writer.pages:
         contents = page.get_contents()
         if contents is None:
             continue
-        stream = ContentStream(contents, writer)
+        try:
+            data = contents.get_data()
+            ops = _scan_operators(data)
+        except ValueError:
+            wrapped += _mark_with_pypdf(page, contents)
+            continue
+        spans = list(_artifact_spans(op for op, _, _ in ops))
+        if not spans:
+            continue
+        cuts = sorted([(ops[a][1], 1, b'/Artifact BMC\n') for a, _ in spans]
+                      + [(ops[b][2], 0, b'\nEMC\n') for _, b in spans])
         out = []
-        depth = 0
-        path_start = None
-        changed = False
-        for operands, op in stream.operations:
-            if op in (b'BDC', b'BMC'):
-                depth += 1
-                out.append((operands, op))
-            elif op == b'EMC':
-                depth = max(0, depth - 1)
-                out.append((operands, op))
-            elif op in _PATH:
-                if depth == 0 and path_start is None:
-                    path_start = len(out)
-                out.append((operands, op))
-            elif op in _PAINT or op == b'n':
-                if depth == 0 and op != b'n':
-                    out.insert(path_start if path_start is not None else len(out), artifact)
-                    out.append((operands, op))
-                    out.append(end)
-                    wrapped += 1
-                    changed = True
-                else:
-                    out.append((operands, op))
-                path_start = None
-            elif op in _SHOW and depth == 0:
-                out.extend([artifact, (operands, op), end])
-                wrapped += 1
-                changed = True
-            else:
-                out.append((operands, op))
-        if changed:
-            stream.operations = out
-            page.replace_contents(stream)
-            page.compress_content_streams()
+        last = 0
+        for at, _, marker in cuts:
+            out += [data[last:at], marker]
+            last = at
+        out.append(data[last:])
+        stream = DecodedStreamObject()
+        stream.set_data(b''.join(out))
+        page.replace_contents(stream.flate_encode())
+        wrapped += len(spans)
     return wrapped
+
+
+def _mark_with_pypdf(page, contents) -> int:
+    """mark_untagged_as_artifacts for one page, on pypdf's parse."""
+    operations = contents.operations
+    spans = list(_artifact_spans(op for _, op in operations))
+    if not spans:
+        return 0
+    starts = [a for a, _ in spans]
+    ends = [b for _, b in spans]
+    out = []
+    for i, operation in enumerate(operations):
+        out += [([NameObject('/Artifact')], b'BMC')] * starts.count(i)
+        out.append(operation)
+        out += [([], b'EMC')] * ends.count(i)
+    contents.operations = out
+    page.replace_contents(contents)
+    page.compress_content_streams()
+    return len(spans)
 
 
 VENDORED_FONT_PREFIXES = ("Manrope", "Newsreader")

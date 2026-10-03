@@ -61,7 +61,6 @@ const net = require('net');
 const { spawn } = require('child_process');
 const { assertEq, assertTrue, fail, report } = require('./_framework');
 
-const ROOT = path.join(__dirname, '..');
 const READY_PREFIX = '\x1eSTUDIO_READY ';
 
 const server = require('../build/studio_server');

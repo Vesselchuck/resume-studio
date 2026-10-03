@@ -185,12 +185,6 @@ def verify_built_pdf(pdf_path) -> bool:
     return False
 
 
-#: The data_source values that have fixtures. build.py can also stamp
-#: 'explicit' — a file named through RESUME_DATA_FILE that is neither
-#: of these — and that one deliberately has none.
-FIXTURE_SOURCES = ('default', 'mine')
-
-
 def read_data_source():
     """
     The `data_source` the last build recorded for the PDF it wrote,
