@@ -20,6 +20,15 @@
  *     its process exit on its own after dispose(). Needs a POSIX shell
  *     to delay Python, so this part does not run on Windows — the bug is
  *     in JavaScript ordering, which is the same everywhere.
+ *   • The same race from the other side. Chromium closing while Python
+ *     is still starting runs the engine's 'disconnected' handler, which
+ *     resets the page bookkeeping. Declared below the await, that
+ *     bookkeeping was in its temporal dead zone: the handler threw, and
+ *     nothing caught it, so the whole process died. Here Python is made
+ *     to start 4 s late (a sitecustomize.py on PYTHONPATH, so this part
+ *     runs everywhere) and the first Chromium is closed half a second
+ *     after its launch; the engine must start, render with a new one,
+ *     and exit on its own.
  *
  * Runs in a throwaway copy of the project (tests/_project.js). Needs
  * Chromium; without it this prints the runner's SKIP marker.
@@ -127,6 +136,73 @@ async function launchRaceTest(root) {
   }
 }
 
+/** Chromium closing while Python starts, in a child process that must exit on its own. */
+async function closedDuringStartTest(root) {
+  const python = detectPython();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slowpy-'));
+  // Python imports sitecustomize from PYTHONPATH before it runs anything,
+  // which delays the worker's start on every platform. `python` is found
+  // here, without it, so detecting the interpreter is not delayed too.
+  fs.writeFileSync(path.join(tmp, 'sitecustomize.py'), 'import time\ntime.sleep(4)\n');
+  const script = `
+    (async () => {
+      const { chromium } = require(require.resolve('playwright',
+        { paths: [${JSON.stringify(path.join(root, 'build'))}] }));
+      const launch = chromium.launch.bind(chromium);
+      let first = true;
+      chromium.launch = async (...args) => {
+        const b = await launch(...args);
+        if (first) {
+          first = false;
+          setTimeout(() => b.close().catch(() => {}), 500);
+        }
+        return b;
+      };
+      const { createEngine } = require(${JSON.stringify(path.join(root, 'build', 'engine'))});
+      const e = await createEngine({ root: ${JSON.stringify(root)}, warm: true,
+        python: ${JSON.stringify(python)} });
+      const r = await e.renderPreview({ doc: 'letter' });
+      console.log('RESULT ' + JSON.stringify({ pages: r.images.length }));
+      await e.dispose();
+    })().catch((err) => { console.log('ERROR ' + err.message); process.exitCode = 1; });
+  `;
+  try {
+    const child = spawn(process.execPath, ['-e', script], {
+      cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: !WINDOWS,
+      env: { ...process.env, PYTHONPATH: tmp },
+    });
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stderr.on('data', (c) => { out += c; });
+    // Whatever the child leaves behind goes with it, as in launchRaceTest:
+    // its process group, or on Windows its process tree.
+    const killAll = () => {
+      try {
+        if (WINDOWS) spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch { /* already gone */ }
+    };
+    const code = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        killAll();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve('timeout');
+      }, 60000);
+      child.once('exit', (c) => { clearTimeout(timer); resolve(c); });
+    });
+    if (!WINDOWS) killAll();
+    const line = (out.match(/^RESULT (.*)$/m) || [])[1];
+    const result = line ? JSON.parse(line) : null;
+    const why = (out.match(/^(ERROR.*|\S*Error: .*)$/m) || [''])[0];
+    assertTrue(result && result.pages > 0,
+      `closed during start: the engine survives and renders with a new Chromium (${why})`);
+    assertEq(code, 0, 'closed during start: after dispose() the process exits on its own');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   try {
     const { chromium } = require('playwright');
@@ -142,6 +218,7 @@ async function launchRaceTest(root) {
     const { createEngine } = project.require('build/engine');
     await optOutTests(createEngine, project.root);
     if (!WINDOWS) await launchRaceTest(project.root);
+    await closedDuringStartTest(project.root);
   } catch (err) {
     fail('power throttling run', { error: err.stack || err.message });
   } finally {

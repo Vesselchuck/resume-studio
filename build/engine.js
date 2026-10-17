@@ -705,10 +705,17 @@ async function createEngine({
   // exist by then. Declared further down, it was in its temporal dead
   // zone at that moment: the launch threw after Chromium was up, and the
   // first render launched a second one, leaving the first running
-  // through dispose().
+  // through dispose(). The same goes for the page bookkeeping that
+  // Chromium's 'disconnected' and 'crash' handlers reset (`nav`,
+  // `specNav`): a Chromium that closed during that wait threw from its
+  // handler, which nothing catches, and the process died.
   let chain = Promise.resolve();
   let disposed = false;
   let powerThrottling = null;
+  // How the main page and the speculative page last loaded their
+  // document; see "Real navigations versus in-place loads" below.
+  const nav = { assets: null, sinceGoto: 0 };
+  const specNav = { assets: null, sinceGoto: 0 };
 
   // Chromium next, before anything else this function does.
   //
@@ -1156,12 +1163,12 @@ async function createEngine({
    * accumulates in one document outlives a few dozen renders. The
    * pipeline itself also navigates whenever the page is not showing the
    * file it last navigated to (switching between resume and letter).
+   *
+   * `nav` holds that history for the main page, `specNav` for the
+   * speculative page, which loads its own copy of the final HTML and
+   * must decide goto-versus-swap on its own history rather than the main
+   * page's. Both are declared at the top of createEngine: see there.
    */
-  const nav = { assets: null, sinceGoto: 0 };
-  // The same bookkeeping for the speculative page, which loads its own
-  // copy of the final HTML and must decide goto-versus-swap on its own
-  // history rather than the main page's.
-  const specNav = { assets: null, sinceGoto: 0 };
 
   function renderInputs(pl) {
     return {

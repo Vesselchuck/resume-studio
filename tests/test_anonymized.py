@@ -100,12 +100,13 @@ WINDOWS_TESSERACT = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 OCR_UPSCALE = 2
 
 
-def _norm(text):
+def _norm(text, fold=True):
     """NFKC, casefolded, without soft hyphens and zero-width characters:
     the forms a PDF text layer, a macOS file name or a pasted value can
-    take for the same letters."""
+    take for the same letters. `fold=False` keeps the case."""
     text = unicodedata.normalize("NFKC", text)
-    return re.sub("[\u00ad\u200b-\u200d\u2060\ufeff]", "", text).casefold()
+    text = re.sub("[\u00ad\u200b-\u200d\u2060\ufeff]", "", text)
+    return text.casefold() if fold else text
 
 
 def _load(path):
@@ -152,6 +153,14 @@ def _identifying_values(doc):
         if isinstance(value, str) and "," in value:
             add(value.split(",", 1)[0])
 
+    def add_company(value):
+        # A company named in one word is often an ordinary word as well,
+        # and code uses ordinary words in lower case: matched with its
+        # case kept (see CASE_KEPT).
+        add(value)
+        if isinstance(value, str) and len(value.split()) == 1:
+            CASE_KEPT.add(value.strip())
+
     contact = doc.get("contact") or {}
     if isinstance(contact, dict):
         add_place(contact.get("address"))
@@ -174,7 +183,9 @@ def _identifying_values(doc):
         lines = [ln for ln in recipient.splitlines()
                  if ln.strip() and not GENERIC_ADDRESSEE.search(ln)]
         for i, line in enumerate(lines):
-            if i == 0 or re.search(r"\d", line):
+            if i == 0:
+                add_company(line)
+            elif re.search(r"\d", line):
                 add(line)
 
     for section in doc.get("mainColumn") or []:
@@ -185,7 +196,7 @@ def _identifying_values(doc):
                 add_place(job.get("location"))
                 title = job.get("title")
                 if isinstance(title, str) and "," in title:
-                    add(title.split(",", 1)[1])       # the employer
+                    add_company(title.split(",", 1)[1])   # the employer
         for item in section.get("items") or []:
             if isinstance(item, dict):
                 add(item.get("institution"))
@@ -221,6 +232,13 @@ def _whole(needle):
 # ("Page" in "maxPages"): kept, but matched as whole words only, or
 # every file that says "maxPages" would be reported.
 WORD_ONLY = set()
+
+# One-word company names (a letter's addressee, an employer): matched as
+# whole words with their case kept, as written or in capitals. Folded,
+# a name that is also an ordinary word matched that word wherever the
+# code used it in lower case. The cost: the name written in lower case,
+# in a web address say, is not reported.
+CASE_KEPT = set()
 
 
 def _needles():
@@ -307,15 +325,20 @@ def _matches(text, needles):
     ("GaiusCaesar"), and OCR drops or adds spaces around letter-spaced
     type, so each needle is also compared with all whitespace removed.
     A phone number matches in any punctuation ("(555) 867 5309" for
-    "555-867-5309", "tel:+15558675309").
+    "555-867-5309", "tel:+15558675309"). A one-word company name keeps
+    its case (CASE_KEPT).
     """
     low = _norm(text)
+    cased = _norm(text, fold=False)
     squashed = re.sub(r"\s+", "", low)
     phones = {_digits(m) for m in PHONE.findall(low)}
     found = []
     for n in needles:
         nl = _norm(n)
-        if n in WORD_ONLY:
+        if n in CASE_KEPT:
+            nc = _norm(n, fold=False)
+            hit = any(_whole(form).search(cased) for form in (nc, nc.upper()))
+        elif n in WORD_ONLY:
             hit = bool(_whole(nl).search(low))
         else:
             hit = nl in low or re.sub(r"\s+", "", nl) in squashed

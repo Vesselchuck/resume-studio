@@ -1020,6 +1020,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_console_encoding.py`    | Log output on a Windows code page; color settings |
 | `test_output_name.py`         | How your name becomes the PDF file names    |
 | `test_anonymized.py`          | No personal details in committable files, screenshots included |
+| `test_image_chunks.py`        | Committed PNGs hold their pixels and no other chunks |
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
@@ -1038,7 +1039,7 @@ that build a throwaway copy of the project through the CLI.
 | `test_worker_restarts.js`     | A Python worker that keeps crashing stops being restarted; Re-render brings it back |
 | `test_hidden_release.js`      | Chromium closes while the window is hidden and comes back when it is shown |
 | `test_failure_recovery.js`    | A killed Chromium is replaced; the window shown during a pending release keeps it; unreadable entries in `data/`; a failed render ends for every window |
-| `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium |
+| `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium, and Chromium closing during it cannot take the engine down |
 | `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON` (quotes, the 3.10 floor), `NO_COLOR` / `FORCE_COLOR` parsing |
@@ -1067,9 +1068,19 @@ either way, in whatever encoding it was written in. Committed PDFs are
 searched in their text, their XMP metadata, their link addresses and
 their bookmarks. Names are compared after Unicode normalization and
 phone numbers by their digits, so a different spelling of the same
-detail is still found. A data file of yours that does not parse fails
-the test rather than being skipped, and backups next to it
-(`*.yml.bak`, `*.yml~`, `*.yml.orig`) are read as well.
+detail is still found. A company named in one word (a letter's
+addressee, an employer) is the exception: it is matched as a whole
+word with its case kept, as written or in capitals, because such a
+name is often an ordinary word that code uses in lower case. A data
+file of yours that does not parse fails the test rather than being
+skipped, and backups next to it (`*.yml.bak`, `*.yml~`, `*.yml.orig`)
+are read as well.
+
+`test_image_chunks.py` runs everywhere: every committed PNG, including
+those inside `.ico` files, may hold only the chunks that draw it
+(`IHDR`, `PLTE`, `tRNS`, `IDAT`, `IEND`). Image tools add text chunks
+and provenance manifests that the metadata check above, which reads
+images through Pillow, cannot see.
 
 The suites that build — the engine, the preview, the Studio server —
 each run in a throwaway copy of the project in the system temp
@@ -1394,6 +1405,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_output_name.py              PDF file names from your profile.
     ├── test_output_name.js              PDF names read back in Node; stale-PDF cleanup.
     ├── test_anonymized.py               No personal details in committable files or screenshots.
+    ├── test_image_chunks.py             Committed PNGs carry pixels only.
     ├── test_snapshot_guard.py           Fixtures are never written from the wrong data.
     ├── test_console_encoding.py         Log output on a Windows code page; color settings.
     ├── test_detect_doc.js               Which document a dropped file is.
@@ -1412,7 +1424,7 @@ ones it needs itself, from its checkboxes and data-source menu.
     ├── test_worker_restarts.js          The cap on Python worker restarts.
     ├── test_hidden_release.js           Chromium closed while the window is hidden.
     ├── test_failure_recovery.js         The engine and server recover from failures.
-    ├── test_power_throttling.js         The opt-out request, and the launch race.
+    ├── test_power_throttling.js         The opt-out request, and the start-up races.
     ├── test_font_faces.js               A font file for every weight and size in use.
     ├── test_pipeline_reports.js         Every build failure prints why.
     ├── test_env_parsing.js              PYTHON and color variable parsing.

@@ -42,7 +42,30 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
-Nothing yet.
+- **Fixed.** The Studio no longer dies when Chromium closes while the
+  Python worker is still starting: a slow first start, with Chromium
+  killed or crashing in that window. The engine's handler for a closed
+  Chromium reset state that was declared too late in start-up; it
+  threw, nothing caught it, and the server process exited.
+  `tests/test_power_throttling.js` now closes Chromium during a Python
+  start delayed by 4 s, on Windows as well as elsewhere.
+- **Fixed.** `tests/test_anonymized.py` reported an ordinary word in
+  the code as a leak when one of your data files names a company made
+  of that one word, and since `node resume.js` runs the tests first,
+  the build stopped too. A one-word company name (a letter's addressee,
+  an employer) is now matched as a whole word with its case kept, as
+  written or in capitals. Written in lower case, in a web address for
+  instance, it is no longer reported; every other detail is matched as
+  before.
+- **Fixed.** Two screenshots in `docs/screenshots/` and every PNG in
+  `src-tauri/icons/` carried a provenance manifest (a C2PA `caBX`
+  chunk) from the tool that saved them, about 5.7 KB each. They hold
+  only their pixel data now; the pixels are unchanged.
+- **Added.** `tests/test_image_chunks.py`: every committed PNG, and
+  every PNG inside a committed `.ico`, holds only the chunks that draw
+  it. The metadata check in `test_anonymized.py` reads images through
+  Pillow, which skips chunk types it does not know, so it never saw the
+  manifests. This one needs none of your data files and runs on GitHub.
 
 ---
 
