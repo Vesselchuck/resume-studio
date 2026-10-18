@@ -28,13 +28,16 @@ What it deliberately does not do: raise or lower priority classes (a
 lower priority can itself pull a process's QoS down), or set affinity
 masks. Both would fight the scheduler instead of informing it.
 
-UNVERIFIED
-──────────
-Written against the documented API and tested here only for its
-non-Windows no-op and its process-tree logic. Whether it changes
-preview times on your machine, on battery, with the window covered or
-minimized, has not been measured. Chromium may also set power
-throttling on its own renderers; if it does, it can override this.
+WHAT IS KNOWN
+─────────────
+On Windows 11, on a laptop, tests/test_power.py's Windows case passes,
+and the Studio applied it to 9 processes with none failing. Whether it
+speeds previews up is not settled: on battery with the window mostly
+minimized, 4 alternating rounds of 40 full résumé previews each way
+gave a median of 495 ms with it and 535 ms without, but the per-round
+medians overlap, so no clear effect either way. It is kept because it
+costs nothing. Unverified: Chromium may also set power throttling on
+its own renderers; if it does, it can override this.
 
 Windows 10 1709 or later has the API; on anything else, or off Windows,
 every call reports what it could not do rather than raising.
@@ -220,13 +223,21 @@ def opt_out_tree(root):
     """Opt `root` and its descendants out of power throttling.
 
     Returns {"supported", "applied": [pids], "failed": [{pid, error}]};
-    never raises. Off Windows, supported is False and nothing is done.
+    never raises. Off Windows, supported is False and nothing is done,
+    and the same goes for a root that is not a process id, with a reason
+    saying so. A process id is an int above 0, and not a bool: int()
+    turned True and 1.9 into pid 1 and b'12' into 12, raised
+    OverflowError on infinity, and 0 walked the System Idle Process's
+    tree.
     """
     if sys.platform != "win32":
         return {"supported": False, "applied": [], "failed": [],
                 "reason": f"not Windows ({sys.platform})"}
+    if not isinstance(root, int) or isinstance(root, bool) or root <= 0:
+        return {"supported": False, "applied": [], "failed": [],
+                "reason": f"not a process id: {root!r}"}
     try:
-        pids = descendants(_process_parents(), int(root), _creation_times())
+        pids = descendants(_process_parents(), root, _creation_times())
         applied, failed = _opt_out(pids)
         return {"supported": True, "applied": applied, "failed": failed}
     except (OSError, AttributeError, ValueError) as err:

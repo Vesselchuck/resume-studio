@@ -5,10 +5,13 @@
     ],
     "./schemas/resume.schema.json": [
       "data/resume*.yml",
-      "data/legacy/resume*.yml"
+      "data/resume*.yaml",
+      "data/legacy/resume*.yml",
+      "data/legacy/resume*.yaml"
     ],
     "./schemas/letter.schema.json": [
-      "data/letter*.yml"
+      "data/letter*.yml",
+      "data/letter*.yaml"
     ]
   },
   "yaml.schemaStore.enable": false,

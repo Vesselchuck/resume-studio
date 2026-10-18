@@ -54,7 +54,8 @@ address { font-style: normal; }
 h1, h2, h3, h4 { font-weight: inherit; line-height: 1.2; }
 strong { font-weight: 600; }
 
-/* TRACKED UPPERCASE TEXT (.name-role, .section-heading) is written
+/* TRACKED UPPERCASE TEXT (.name-role, .section-heading,
+   .subgroup-label) is written
    once, visible, and tagged in the PDF. It used to be written twice —
    a visible copy with aria-hidden="true" and an off-screen copy for
    screen readers (the "visually-hidden" pattern) — so that a screen

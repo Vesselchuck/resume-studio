@@ -44,8 +44,9 @@
                                   being light in color but by being thin —
                                   see --rule-paint below. */
   --accent:         #2a4436;   /* deep slate-green; structural accent.
-                                  Applied to: section heading bars,
-                                  link interactions. All structural rules
+                                  Applied to: section headings, the role
+                                  line, link hover and focus. All
+                                  structural rules
                                   (top rule, column divider, section
                                   separators) render in --border-rule
                                   so the accent stays exclusive to
@@ -89,8 +90,12 @@
                                   in as a matrix on a form XObject), so this
                                   is the only route to a true sub-point
                                   rule. The transform is paint-only, so
-                                  layout geometry and the solver's
-                                  measurements are untouched.
+                                  layout geometry is untouched, and so
+                                  are the solver's measurements:
+                                  build/measure_dom.js reads what a
+                                  separator costs from the sections
+                                  around it, not from the transformed
+                                  rule (see the note above .top-rule).
 
                                   0.5 measured as the knee: at 0.4 the rule
                                   is thinner than one halftone cell often
@@ -171,6 +176,11 @@
   --section-rhythm: 26px;
 
   /* TYPOGRAPHY MICRO-TOKENS — values that recur in multiple places. */
-  --ls-wide:   0.1em;          /* letter-spacing for headings/labels */
+  --ls-wide:   0.1em;          /* the tracking of the role line, section
+                                  headings and detail labels. No rule
+                                  sets it: it is built into their fonts
+                                  (build/make_static_fonts.py), and they
+                                  keep letter-spacing 0. The value
+                                  documents that tracking.            */
   --gap-entry: 0.2em;          /* vertical gap inside .entry-header  */
 }

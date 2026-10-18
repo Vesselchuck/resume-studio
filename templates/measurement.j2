@@ -2,10 +2,10 @@
   measurement.j2 — Single-page flowing layout for the layout solver.
 
   This template renders ALL sidebar blocks and ALL jobs/bullets in a
-  single tall page (no page breaks). The solver in resume.js opens
-  this in Playwright, measures the height/position of every
-  data-measure element, and produces the placement that drives the
-  final build.
+  single tall page (no page breaks). The build opens this in
+  Playwright, build/measure_dom.js measures the heights of the
+  data-measure elements, and build/solve_layout.js produces the
+  placement that drives the final build.
 
   The structure mirrors the final layout (two-column body grid,
   same widths) so measured heights are realistic. Only the
@@ -16,22 +16,29 @@
   exactly as the final templates do (see render_sidebar_block in
   templates/_macros.j2 for why it is no longer written twice).
 
-  Markers (emitted by _macros.j2 macros when called with measure=True):
+  Markers (emitted here and by the _macros.j2 macros when called with
+  measure=True). build/measure_dom.js reads those marked *; the others
+  are emitted but read by nothing, a trace for whoever inspects the
+  measurement HTML:
     data-measure="resume-header"  — page-1 header (eats vertical space)
-    data-measure="block"          — a sidebar block (the whole section)
-    data-measure="separator"      — an <hr class="section-sep">
-    data-measure="item"           — a sidebar block's heading-or-row item
-    data-measure="block-heading"  — the heading inside a sidebar block
-    data-measure="section"        — main-column section
-    data-measure="section-heading"— main column section heading
+  * data-measure="block"          — a sidebar block (the whole section)
+  * data-measure="separator"      — an <hr class="section-sep">
+  * data-measure="item"           — a sidebar block's heading-or-row item
+  * data-measure="block-heading"  — the heading inside a sidebar block
+  * data-measure="section"        — main-column section
+  * data-measure="section-heading"— main column section heading
     data-measure="summary-text"   — summary section text body
-    data-measure="job"            — a single job article
-    data-measure="job-header"     — header (title + meta) inside a job
-    data-measure="bullet"         — single bullet <li>
+  * data-measure="job"            — a single job article
+  * data-measure="job-header"     — header (title + meta) inside a job
+  * data-measure="bullet"         — single bullet <li>
     data-measure="edu-item"       — single education item
 
-  Each measurable element also has data-id (block_id, job_id) where
-  relevant so the solver can reference them in placement.json.
+  Sidebar blocks and jobs also carry data-id (block_id, job_id) so the
+  solver can reference them in placement.json, and measure_dom.js reads
+  a block's data-type and a section's data-section-type. The page-1
+  header is measured as the distance from the page's top padding to the
+  body grid, not through its marker. data-row-index, data-item-index
+  and data-bullet-index (_macros.j2) are not read either.
 -#}
 {%- import '_macros.j2' as m -%}
 <!DOCTYPE html>
@@ -39,22 +46,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ name.first }} {{ name.last }} — Resume (measurement)</title>
+  <title>{{ [name.first, name.last] | select | map('trim') | select | join(' ') }} — Resume (measurement)</title>
   <meta name="description" content="{{ meta.description }}">
 
   <!-- Fonts: vendored Manrope (body) and Newsreader (display) loaded
        from fonts/ via @font-face rules in styles.css. Both are
-       variable WOFF2 files covering the full weight range used in the
-       document. License terms (SIL OFL 1.1) live alongside the woff2
-       binaries at fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
+       static WOFF2 cuts, one file per weight (and, for Newsreader,
+       per optical size) the document draws; the variable originals
+       they were cut from are in fonts/variable/. License terms (SIL
+       OFL 1.1) live alongside the woff2 binaries at
+       fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="measurement-mode">
 
   <!-- This is the MEASUREMENT-MODE HTML. It is NOT the final paginated
-       output. The layout solver in resume.js opens this in Playwright,
-       measures positions of [data-measure] elements, and writes
-       dist/placement.json which drives the final build. -->
+       output. The build opens this in Playwright, build/measure_dom.js
+       measures [data-measure] elements, and build/solve_layout.js
+       writes dist/placement.json, which drives the final build. -->
   <main class="resume" aria-label="Resume (measurement)">
 
     <article class="page" aria-label="Measurement page" data-measurement-page>

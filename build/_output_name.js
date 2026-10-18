@@ -17,7 +17,7 @@
  *                                   _output_name.js
  *                                          │
  *                        ┌─────────────────┼──────────────────┐
- *                   pipeline.js         resume.js       studio_server.js
+ *                   pipeline.js  resume.js, letter.js   studio_server.js
  *                   (writes it)      (prunes stale)       (opens it)
  *
  * Nothing here guesses at a name. When the metadata is absent the stem
@@ -51,6 +51,11 @@ const {
 ).output_name;
 
 
+// Throws on bytes that are not UTF-8, and leaves a BOM in (which
+// JSON.parse then refuses, as Python's json.loads does).
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+
 /** Escape a constant for literal use inside a RegExp. */
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -79,7 +84,10 @@ function assertVariant(variant) {
 function readStem(metaFile, variant) {
   assertVariant(variant);
   try {
-    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf-8'));
+    // Strict UTF-8, as stem_from_meta in _output_name.py reads it: a
+    // lenient decode turned bytes that are not UTF-8 into U+FFFD and
+    // the result into a stem naming a file no build wrote.
+    const meta = JSON.parse(UTF8.decode(fs.readFileSync(metaFile)));
     if (typeof meta.output_stem === 'string' && meta.output_stem) {
       return meta.output_stem;
     }
@@ -126,7 +134,8 @@ function outputPaths(dist, metaFile, variant) {
  * `Acme_tailored_Resume.pdf` is a perfectly good name for a tailored
  * copy — so the pattern alone is never a licence to delete. pruneStale
  * also requires the name to be in the build record, unless it is one
- * of the retired or LEGACY spellings no build has written since.
+ * of the LEGACY spellings, or a retired grayscale spelling beside a
+ * color PDF the record or this build vouches for.
  *
  * This pattern is WIDER than what a build writes, deliberately, and
  * RETIRED_GRAYSCALE_SUFFIXES is the whole of the difference. This
@@ -156,6 +165,16 @@ function retiredPattern(variant) {
   return new RegExp(
     `^(?:.+${escapeRe(SEPARATOR)})?${escapeRe(DOC_SUFFIX[variant])}`
     + `(?:${retired})\\.pdf$`);
+}
+
+/**
+ * The color PDF a retired grayscale name was written beside: the same
+ * name without the marker. Gaius_Caesar_Resume_Grayscale.pdf →
+ * Gaius_Caesar_Resume.pdf.
+ */
+function colorTwin(name) {
+  const retired = RETIRED_GRAYSCALE_SUFFIXES.map(escapeRe).join('|');
+  return name.replace(new RegExp(`(?:${retired})\\.pdf$`), '.pdf');
 }
 
 
@@ -241,7 +260,8 @@ function recordBuilt(dist, variant, pdf, { dataSource = null } = {}) {
  * PDF is there. It is the name of the last build (or preview) — the
  * one most likely stranded if the name has since changed. Names older
  * than that are left alone: nothing proves this project wrote them.
- * The retired grayscale and LEGACY names need no record; see pruneStale.
+ * The LEGACY names need no record, and a retired grayscale name needs
+ * only its color twin on it; see pruneStale.
  */
 function seedRecord(dist, variant, metaFile) {
   assertVariant(variant);
@@ -277,7 +297,9 @@ function seedRecord(dist, variant, metaFile) {
  *   • only inside dist/, which is build output and gitignored;
  *   • only names matching outputPattern(variant) that the build record
  *     lists as written by this project, plus the names no build writes
- *     any more: LEGACY[variant] and the retired grayscale spellings;
+ *     any more: LEGACY[variant], and a retired grayscale spelling whose
+ *     color twin (the same name without the marker) is on the record
+ *     or in `keep`;
  *   • never a path in `keep`, which is what the current build produced.
  *
  * The record is the part that keeps your own files safe. The pattern
@@ -313,6 +335,17 @@ function seedRecord(dist, variant, metaFile) {
  * was the whole comparison before. Both checks only ever KEEP a file:
  * on a case-sensitive APFS volume the case-folded check can spare a
  * genuinely stale differently-cased PDF, which errs the safe way.
+ *
+ * The one check that lets a file GO — a retired grayscale name's color
+ * twin is what this build kept — does not fold where identity can
+ * answer: it takes the exact path, or the same dev+ino. Folded there,
+ * on a case-sensitive APFS volume or NTFS folder, Acme_Resume.pdf kept
+ * vouched for an ACME_Resume_Grayscale.pdf of yours beside it, and it
+ * was deleted. It folds only for a twin that is there but has no inode.
+ *
+ * A retired name that could not be removed goes on the record, as a
+ * recorded one stays there: its twin may have just been removed, and
+ * then nothing would vouch for it again.
  */
 function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
                     { fs: fsImpl = fs, platform = process.platform } = {}) {
@@ -335,8 +368,10 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
   };
 
   const keptPaths = new Set(keep.map(p => fold(path.resolve(p))));
+  const keptExact = new Set(keep.map(p => path.resolve(p)));
   const keptIds = new Set(keep.map(identity).filter(Boolean));
   const removed = [];
+  const failedRetired = [];
 
   let entries;
   try {
@@ -345,8 +380,26 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
     return removed;                      // No dist/ yet: nothing to prune.
   }
 
+  // A retired grayscale name goes only beside a color PDF a build wrote:
+  // its twin is on the record or is what this build kept. The marker
+  // alone proves nothing — Acme_tailored_Resume_Grayscale.pdf is as
+  // good a name for a copy of yours as Acme_tailored_Resume.pdf.
+  // Matched exactly or by identity, never case-folded where identity can
+  // answer: this check approves a delete (see the docstring).
+  const builtTwin = (name) => {
+    const twin = colorTwin(name);
+    if (recorded.has(twin)) return true;
+    const full = path.resolve(dist, twin);
+    if (keptExact.has(full)) return true;
+    const id = identity(full);
+    if (id) return keptIds.has(id);
+    let there = false;
+    try { there = fsImpl.statSync(full).isFile(); } catch { /* missing */ }
+    return there && keptPaths.has(fold(full));
+  };
+
   const candidates = new Set(entries.filter(name => LEGACY[variant].includes(name)
-    || retired.test(name)
+    || (retired.test(name) && builtTwin(name))
     || (pattern.test(name) && recorded.has(name))));
 
   for (const name of candidates) {
@@ -360,14 +413,16 @@ function pruneStale(dist, variant, keep, onRemove = null, onFailure = null,
       removed.push(name);
       if (onRemove) onRemove(name);
     } catch (err) {
+      if (retired.test(name) && !recorded.has(name)) failedRetired.push(name);
       if (onFailure) onFailure(name, err.message);
     }
   }
 
-  // What the record may still delete: its names minus what is gone.
+  // What the record may still delete: its names minus what is gone,
+  // plus the retired names it was allowed to and could not.
   if (record[variant] && Array.isArray(record[variant].written)) {
     const gone = new Set(removed);
-    const still = [...recorded].filter(n => !gone.has(n)
+    const still = [...recorded, ...failedRetired].filter(n => !gone.has(n)
       && entries.includes(n));
     for (const k of keep) {
       const n = path.basename(k);

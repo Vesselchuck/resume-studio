@@ -11,10 +11,15 @@ Tests for crop_pdf.py — round-trip a synthetic PDF and verify:
     and /ViewerPreferences
   • apply_xmp writes an XMP packet that says what /Info says, no more,
     in a stream labelled /Type /Metadata /Subtype /XML
-  • on a tagged PDF, link annotations get a /Contents (describe_links)
-    and drawing outside every marked-content sequence is wrapped as an
-    /Artifact (mark_untagged_as_artifacts), without changing a pixel;
-    an untagged PDF is left as it is
+  • on a tagged PDF, link annotations get a /Contents (describe_links),
+    links inside the document included, and drawing that is neither
+    tagged nor an artifact is wrapped as an /Artifact
+    (mark_untagged_as_artifacts), without changing a pixel, even inside
+    other marked content (/OC, a bare /Span); a form XObject that holds
+    tagged content is marked inside, never wrapped whole, however often
+    it is drawn outside marked content, and left alone, with no PDF/UA
+    claim, when it is also drawn inside it; a form in any encoding is
+    rewritten; an untagged PDF is left as it is
 
 These tests originally motivated audit-H7: production code accessed
 pypdf's private `_root_object` to set /Lang, which a pypdf version
@@ -50,6 +55,10 @@ sys.path.insert(0, str(ROOT / "build"))
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
 import crop_pdf  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "tests"))
+import _marked_content  # noqa: E402
+from pypdf.generic import ContentStream  # noqa: E402
 
 
 def make_pdf_with_page(width_pt: float, height_pt: float,
@@ -246,6 +255,18 @@ class TestApplyMetadata(unittest.TestCase):
         self.assertEqual(xmp.dc_title["x-default"], out.metadata["/Title"])
         self.assertEqual(xmp.dc_description["x-default"], out.metadata["/Subject"])
 
+    def test_a_lone_surrogate_does_not_stop_the_crop(self):
+        # "\ud800" is valid JSON and YAML, but no UTF can encode it:
+        # writing /Title raised UnicodeEncodeError and the crop stopped.
+        meta = self._write_manifest({"title": "Gaius\ud800 Caesar\udfff — Resume",
+                                     "lang": "en\udbff-US"})
+        out = round_trip(crop_pdf.crop_and_stamp(PdfReader(make_tagged_pdf()), meta))
+        self.assertEqual(out.metadata["/Title"], "Gaius Caesar — Resume")
+        self.assertEqual(str(out.trailer["/Root"]["/Lang"]), "en-US")
+        xmp = out.xmp_metadata   # raises PdfReadError on ill-formed XML
+        self.assertEqual(xmp.dc_title["x-default"], "Gaius Caesar — Resume")
+        self.assertEqual(xmp.dc_language, ["en-US"])
+
     def test_does_not_override_creator_or_producer(self):
         # apply_metadata's mapping deliberately omits Creator/Producer —
         # Chromium's defaults pass through, truthfully describing what
@@ -377,8 +398,8 @@ class TestApplyLanguage(unittest.TestCase):
         self.assertEqual(str(r.trailer["/Root"]["/Lang"]), "en-GB")
 
     def test_lang_empty_string_falls_back_to_default(self):
-        # apply_language's guard is
-        # `if isinstance(value, str) and value.strip():` —
+        # read_lang keeps the value only if something is left after
+        # removing what XML cannot hold and stripping the whitespace;
         # whitespace-only or empty strings fall through to en-US.
         w = self._writer_with_blank_page()
         self.meta_path.write_text(
@@ -391,6 +412,22 @@ class TestApplyLanguage(unittest.TestCase):
         buf.seek(0)
         r = PdfReader(buf)
         self.assertEqual(str(r.trailer["/Root"]["/Lang"]), "en-US")
+
+    def test_control_characters_do_not_break_the_xmp(self):
+        # The language goes into the XMP as dc:language. "en\x01US"
+        # stamped /Lang as written and made the packet ill-formed, in a
+        # PDF that still declared PDF/UA-1. Removed, as from /Info.
+        self.meta_path.write_text(json.dumps({"lang": "en\x01-US\x0c"}),
+                                  encoding="utf-8")
+        self.assertEqual(crop_pdf.read_lang(self.meta_path), "en-US")
+        out = round_trip(crop_pdf.crop_and_stamp(PdfReader(make_tagged_pdf()), self.meta_path))
+        self.assertEqual(str(out.trailer["/Root"]["/Lang"]), "en-US")
+        xmp = out.xmp_metadata   # raises PdfReadError on ill-formed XML
+        self.assertEqual(xmp.dc_language, ["en-US"])
+
+    def test_lang_of_only_control_characters_falls_back_to_default(self):
+        self.meta_path.write_text(json.dumps({"lang": "\x01\x02"}), encoding="utf-8")
+        self.assertEqual(crop_pdf.read_lang(self.meta_path), "en-US")
 
     def test_lang_unreadable_manifest_falls_back_silently(self):
         # apply_language explicitly catches OSError / JSONDecodeError
@@ -845,9 +882,82 @@ def make_tagged_pdf_with_content(content: bytes | None = None) -> PdfWriter:
     return w
 
 
+#: A group as Chromium writes one when it tags inside it: an untagged
+#: background, then the tagged text, with the EMC after the Q.
+TAGGED_FORM = (b"q 0.9 0.9 0.9 rg 0 0 100 20 re f\n"
+               b"/P <</MCID 0>> BDC BT /F1 9 Tf 0 0 0 rg 2 6 Td (Faded) Tj ET Q EMC\n")
+#: A rule drawn with opacity, which Chromium leaves untagged.
+UNTAGGED_FORM = b"q 0.5 0.5 0.5 rg 0 0 100 1 re f Q\n"
+
+
+def make_tagged_pdf_with_forms(content, forms, struct_parents=True, nested=None):
+    """make_tagged_pdf_with_content(content), with the form XObjects in
+    `forms` ({name: content}) in the page's resources, or, for a name
+    listed under another in `nested`, in that form's. A form with an
+    MCID gets /StructParents unless `struct_parents` is false. Returns
+    the writer and {name: reference}."""
+    from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject,
+                               FloatObject, NameObject, NumberObject)
+    w = make_tagged_pdf_with_content(content)
+    page = w.pages[0]
+    refs = {}
+    for number, (name, data) in enumerate(forms.items(), 1):
+        form = DecodedStreamObject()
+        form.set_data(data)
+        form.update({
+            NameObject("/Type"): NameObject("/XObject"),
+            NameObject("/Subtype"): NameObject("/Form"),
+            NameObject("/BBox"): ArrayObject(FloatObject(v) for v in (0, 0, 100, 20)),
+            NameObject("/Resources"): DictionaryObject({
+                NameObject("/Font"): page["/Resources"]["/Font"],
+            }),
+        })
+        if struct_parents and b"/MCID" in data:
+            form[NameObject("/StructParents")] = NumberObject(number)
+        refs[name] = w._add_object(form)
+    owners = {inner: outer for outer, inners in (nested or {}).items() for inner in inners}
+    for name, ref in refs.items():
+        owner = refs[owners[name]].get_object() if name in owners else page
+        resources = owner["/Resources"]
+        if "/XObject" not in resources:
+            resources[NameObject("/XObject")] = DictionaryObject()
+        resources["/XObject"][NameObject(name)] = ref
+    return w, refs
+
+
 def _operations(page, pdf):
     from pypdf.generic import ContentStream
     return ContentStream(page.get_contents(), pdf).operations
+
+
+def _stamp(pdf):
+    """crop_and_stamp() on `pdf` (a writer, or a reader), read back."""
+    if isinstance(pdf, PdfWriter):
+        pdf = round_trip(pdf)
+    return round_trip(crop_pdf.crop_and_stamp(pdf, None))
+
+
+def _declares_pdfua(reader):
+    return crop_pdf.PDFUA_NS.encode() in reader.trailer["/Root"]["/Metadata"].get_data()
+
+
+def _form_named(pdf, name):
+    return pdf.pages[0]["/Resources"]["/XObject"][name].get_object()
+
+
+def _encode_in_place(w, ref, raw, filters, parms=None):
+    """Replace the form `ref` points at with one whose stream is `raw`,
+    encoded with `filters` (and `parms`), the rest of it kept."""
+    from pypdf.generic import EncodedStreamObject, NameObject, StreamObject
+    old = ref.get_object()
+    form = EncodedStreamObject()
+    form.update({k: v for k, v in old.items() if k != "/Length"})
+    StreamObject.set_data(form, raw)   # the bytes as they are, not encoded again
+    form[NameObject("/Filter")] = filters
+    if parms is not None:
+        form[NameObject("/DecodeParms")] = parms
+    w._objects[ref.idnum - 1] = form
+    return ref.get_object() is form
 
 
 def _unmarked_painting(page, pdf):
@@ -865,6 +975,38 @@ def _unmarked_painting(page, pdf):
     return found
 
 
+def _add_internal_links(w):
+    """A second page, and links on the first that go to it: by a named
+    /Dest (Chromium's `<a href="#id">`), an explicit one, and a /GoTo
+    action. Returns the three annotations."""
+    from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject,
+                               NameObject, NullObject, NumberObject)
+    second = w.add_blank_page(width=612, height=792)
+    target = ArrayObject([second.indirect_reference, NameObject("/XYZ"),
+                          NumberObject(0), FloatObject(500), NullObject()])
+    w.root_object[NameObject("/Dests")] = w._add_object(DictionaryObject({
+        NameObject("/sec2"): target,
+    }))
+
+    def link(**entries):
+        d = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in (72, 500, 200, 514)),
+        })
+        d.update({NameObject(f"/{k}"): v for k, v in entries.items()})
+        return w._add_object(d)
+
+    annots = [
+        link(Dest=NameObject("/sec2")),
+        link(Dest=target),
+        link(A=DictionaryObject({NameObject("/S"): NameObject("/GoTo"),
+                                 NameObject("/D"): NameObject("/sec2")})),
+    ]
+    w.pages[0]["/Annots"].extend(annots)
+    return annots
+
+
 class TestAccessibility(unittest.TestCase):
     def test_links_get_a_description(self):
         w = make_tagged_pdf_with_content()
@@ -872,6 +1014,26 @@ class TestAccessibility(unittest.TestCase):
         annots = [a.get_object() for a in round_trip(w).pages[0]["/Annots"]]
         self.assertEqual(annots[0]["/Contents"], "gcaesar@email.com")
         self.assertEqual(annots[1]["/Contents"], "Kept as written")
+
+    def test_a_link_inside_the_document_says_which_page(self):
+        # Chromium writes `<a href="#sec2">` as a /Link with a /Dest and
+        # no /URI, and it had no /Contents at all (PDF/UA-1 7.18.1).
+        w = make_tagged_pdf_with_content()
+        _add_internal_links(w)
+        self.assertEqual(crop_pdf.describe_links(w), 4)
+        annots = [a.get_object() for a in round_trip(w).pages[0]["/Annots"]]
+        self.assertEqual([str(a["/Contents"]) for a in annots[2:]],
+                         ["Link to page 2"] * 3)
+
+    def test_a_link_to_a_local_file_is_described_and_warned_about(self):
+        w = make_tagged_pdf_with_content()
+        w.pages[0]["/Annots"][0].get_object()["/A"][
+            crop_pdf.NameObject("/URI")] = crop_pdf.TextStringObject("file:///C:/Users/me/cv.pdf")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            self.assertEqual(crop_pdf.describe_links(w), 1)
+        self.assertIn("a file on this computer", err.getvalue())
+        self.assertIn("file:///C:/Users/me/cv.pdf", err.getvalue())
 
     def test_untagged_drawing_becomes_artifacts(self):
         w = make_tagged_pdf_with_content()
@@ -946,6 +1108,202 @@ class TestAccessibility(unittest.TestCase):
                 self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
                 r = round_trip(w)
                 self.assertEqual(_unmarked_painting(r.pages[0], r), [])
+
+    def test_a_form_holding_tags_is_marked_inside_not_wrapped(self):
+        # Chromium draws a group (opacity) as a form and tags inside it:
+        # /StructParents on the form, a BDC with an MCID in its content.
+        # Wrapping its `Do` made the tagged content an artifact.
+        w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n", {"/X1": TAGGED_FORM})
+        before = _marked_content.problems(round_trip(w))
+        self.assertEqual(before[1], [], "nothing hidden to start with")
+        # The background fill inside the form, not the `Do`.
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
+        r = round_trip(w)
+        self.assertEqual(_marked_content.problems(r), ([], []))
+        self.assertEqual([op for _, op in _operations(r.pages[0], r)], [b"Do"],
+                         "the page's `Do` is left as it is")
+        inside = [op for _, op in ContentStream(forms["/X1"].get_object(), w).operations]
+        self.assertEqual(inside[:6], [b"q", b"rg", b"BMC", b"re", b"f", b"EMC"])
+        self.assertIn(b"BDC", inside)
+
+    def test_a_form_without_tags_is_still_one_artifact(self):
+        w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n", {"/X1": UNTAGGED_FORM})
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
+        r = round_trip(w)
+        self.assertEqual([op for _, op in _operations(r.pages[0], r)], [b"BMC", b"Do", b"EMC"])
+        self.assertEqual(forms["/X1"].get_object().get_data(), UNTAGGED_FORM,
+                         "its content is not touched")
+        self.assertEqual(_marked_content.problems(r), ([], []))
+
+    def test_an_mcid_alone_marks_a_form_as_tagged(self):
+        w, _ = make_tagged_pdf_with_forms(b"/X1 Do\n", {"/X1": TAGGED_FORM},
+                                          struct_parents=False)
+        crop_pdf.mark_untagged_as_artifacts(w)
+        self.assertEqual(_marked_content.problems(round_trip(w)), ([], []))
+
+    def test_a_group_inside_a_group_is_followed(self):
+        # Nested opacity: the outer form has no tags of its own, only a
+        # form inside it that does. Wrapping the outer `Do` hid both.
+        outer = b"0 0 0 rg /X2 Do\n"
+        w, forms = make_tagged_pdf_with_forms(
+            b"/X1 Do\n", {"/X1": outer, "/X2": TAGGED_FORM}, nested={"/X1": ["/X2"]})
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
+        r = round_trip(w)
+        self.assertEqual(_marked_content.problems(r), ([], []))
+        self.assertEqual(forms["/X1"].get_object().get_data(), outer)
+
+    def test_a_form_inside_tagged_content_is_left_alone(self):
+        w, forms = make_tagged_pdf_with_forms(
+            b"/P <</MCID 0>> BDC /X1 Do EMC\n", {"/X1": UNTAGGED_FORM})
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 0)
+
+    def test_a_tagged_form_drawn_twice_outside_marked_content_is_marked_once(self):
+        # What Chromium writes for -webkit-mask-image: one tagged form,
+        # drawn twice, both times outside marked content. Its background
+        # was left loose, with a warning, in a PDF that declared PDF/UA-1.
+        w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n/X1 Do\n", {"/X1": TAGGED_FORM})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 1)
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(_marked_content.problems(round_trip(w)), ([], []))
+        inside = [op for _, op in ContentStream(forms["/X1"].get_object(), w).operations]
+        self.assertEqual(inside[:6], [b"q", b"rg", b"BMC", b"re", b"f", b"EMC"])
+        out = _stamp(w)
+        self.assertEqual(_marked_content.problems(out), ([], []))
+        self.assertTrue(_declares_pdfua(out))
+
+    def test_a_tagged_form_also_drawn_inside_tagged_content_is_left_alone(self):
+        # An artifact in its stream would be inside that tagged content
+        # too, which PDF/UA forbids as well. Chromium never writes this;
+        # the file then does not claim PDF/UA-1.
+        page = b"/X1 Do\n/P <</MCID 1>> BDC /X1 Do EMC\n"
+        w, forms = make_tagged_pdf_with_forms(page, {"/X1": TAGGED_FORM})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 0)
+            out = _stamp(make_tagged_pdf_with_forms(page, {"/X1": TAGGED_FORM})[0])
+        self.assertEqual(err.getvalue().count("1 of them inside marked content"), 2,
+                         "one warning per form, each time")
+        self.assertEqual(forms["/X1"].get_object().get_data(), TAGGED_FORM)
+        self.assertEqual(_marked_content.problems(round_trip(w))[1], [], "and never wrapped")
+        self.assertFalse(_declares_pdfua(out))
+
+    def test_a_shared_form_with_nothing_to_mark_is_not_warned_about(self):
+        # The false alarm: a form drawn both ways whose drawing is all
+        # tagged was reported as leaving untagged drawing unmarked.
+        form = b"/P <</MCID 0>> BDC BT /F1 9 Tf 2 6 Td (Faded) Tj ET EMC\n"
+        page = b"/X1 Do\n/P <</MCID 1>> BDC /X1 Do EMC\n"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            out = _stamp(make_tagged_pdf_with_forms(page, {"/X1": form})[0])
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(_marked_content.problems(out), ([], []))
+        self.assertTrue(_declares_pdfua(out))
+
+    def test_drawing_inside_other_marked_content_is_wrapped(self):
+        # Optional content (/OC) and a bare /Span are marked content but
+        # neither tagged nor an artifact; what they hold counted as
+        # covered and stayed loose.
+        content = (b"/OC /oc1 BDC 0 0 1 rg 0 0 10 10 re f EMC\n"
+                   b"/Span BMC BT /F1 9 Tf 72 640 Td (Spanned) Tj ET EMC\n"
+                   b"/P <</MCID 0>> BDC /Span BMC BT /F1 9 Tf 72 620 Td (Tagged) Tj ET EMC EMC\n")
+        before = _marked_content.problems(round_trip(make_tagged_pdf_with_content(content)))
+        self.assertEqual(before, (["page 1: f", "page 1: Tj"], []))
+        spliced = make_tagged_pdf_with_content(content)
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(spliced), 2)
+        parsed = make_tagged_pdf_with_content(content)
+        page = parsed.pages[0]
+        self.assertEqual(crop_pdf._mark_with_pypdf(page, page.get_contents()), 2)
+        a, b = round_trip(spliced), round_trip(parsed)
+        self.assertEqual(_operations(a.pages[0], a), _operations(b.pages[0], b))
+        self.assertEqual(_marked_content.problems(a), ([], []))
+        names = [op for _, op in _operations(a.pages[0], a)]
+        self.assertEqual(names[:7], [b"BDC", b"rg", b"BMC", b"re", b"f", b"EMC", b"EMC"],
+                         "wrapped inside the /OC sequence")
+
+    def test_an_mcid_in_a_named_property_list_is_tagged(self):
+        # /P /MC0 BDC with /MC0 << /MCID 0 >> in /Properties is tagged
+        # content as much as an inline << /MCID 0 >>. A form whose only
+        # tags were named was wrapped whole, hiding them in an artifact.
+        from pypdf.generic import (DictionaryObject, NameObject, NumberObject,
+                                   TextStringObject)
+
+        def entries(**values):
+            return DictionaryObject({NameObject(f"/{k}"): v for k, v in values.items()})
+
+        form = (b"q 0.9 0.9 0.9 rg 0 0 100 20 re f\n"
+                b"/P /MC0 BDC BT /F1 9 Tf 0 0 0 rg 2 6 Td (Faded) Tj ET EMC Q\n")
+        w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n/P /MC1 BDC 0 0 5 5 re f EMC\n",
+                                              {"/X1": form}, struct_parents=False)
+        forms["/X1"].get_object()["/Resources"][NameObject("/Properties")] = entries(
+            MC0=entries(MCID=NumberObject(0)))
+        w.pages[0]["/Resources"][NameObject("/Properties")] = entries(
+            MC1=entries(Lang=TextStringObject("en")))
+        # The form's background, and the page's /MC1 fill: no MCID there.
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 2)
+        r = round_trip(w)
+        self.assertEqual(_marked_content.problems(r), ([], []))
+        self.assertEqual([op for _, op in _operations(r.pages[0], r)][:1], [b"Do"],
+                         "the form's `Do` is not wrapped")
+
+    def test_a_form_in_any_encoding_is_marked(self):
+        # set_data re-encodes only a stream whose one filter is
+        # FlateDecode: [/ASCII85Decode /FlateDecode] raised PdfReadError
+        # and stopped the crop, and a predictor's /DecodeParms was kept
+        # over data encoded without it.
+        import base64
+        import zlib
+        from pypdf.generic import (ArrayObject, DictionaryObject, NameObject,
+                                   NumberObject)
+        columns = len(TAGGED_FORM)
+        cases = {
+            "ASCII85 then Flate": (
+                base64.a85encode(zlib.compress(TAGGED_FORM)) + b"~>",
+                ArrayObject([NameObject("/ASCII85Decode"), NameObject("/FlateDecode")]),
+                None),
+            "Flate with a PNG predictor": (
+                zlib.compress(b"\x00" + TAGGED_FORM),
+                NameObject("/FlateDecode"),
+                DictionaryObject({NameObject("/Predictor"): NumberObject(12),
+                                  NameObject("/Columns"): NumberObject(columns)})),
+        }
+        for name, (raw, filters, parms) in cases.items():
+            with self.subTest(encoding=name):
+                w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n", {"/X1": TAGGED_FORM})
+                encoded = _encode_in_place(w, forms["/X1"], raw, filters, parms)
+                reader = round_trip(w)
+                self.assertEqual(_form_named(reader, "/X1").get_data(), TAGGED_FORM,
+                                 "the fixture decodes to the form")
+                self.assertTrue(encoded)
+                out = _stamp(reader)
+                self.assertEqual(_marked_content.problems(out), ([], []))
+                inside = [op for _, op in ContentStream(_form_named(out, "/X1"), out).operations]
+                self.assertEqual(inside[:6], [b"q", b"rg", b"BMC", b"re", b"f", b"EMC"])
+                self.assertIn(b"(Faded) Tj", _form_named(out, "/X1").get_data())
+
+    def test_a_tagged_form_the_scanner_cannot_read_goes_through_pypdf(self):
+        form = (b"q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q\n"
+                + TAGGED_FORM)
+        w, forms = make_tagged_pdf_with_forms(b"/X1 Do\n", {"/X1": form})
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 2)
+        self.assertEqual(_marked_content.problems(round_trip(w)), ([], []))
+
+    @unittest.skipUnless(HAVE_PDFIUM, "pypdfium2 / Pillow not installed")
+    def test_same_pixels_with_forms(self):
+        def render(w):
+            buf = io.BytesIO()
+            w.write(buf)
+            doc = pdfium.PdfDocument(buf.getvalue())
+            try:
+                return doc[0].render(scale=2).to_pil().tobytes()
+            finally:
+                doc.close()
+        args = (b"/X1 Do\n/X3 Do\n", {"/X1": TAGGED_FORM, "/X3": UNTAGGED_FORM})
+        before = render(make_tagged_pdf_with_forms(*args)[0])
+        w = make_tagged_pdf_with_forms(*args)[0]
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 2)
+        self.assertEqual(render(w), before)
 
     @unittest.skipUnless(HAVE_PDFIUM, "pypdfium2 / Pillow not installed")
     def test_same_pixels(self):

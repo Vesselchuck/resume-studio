@@ -46,8 +46,14 @@ main.resume {
    PAINT vs LAYOUT. Every rule below is a zero-size element whose
    only visible substance is its border, so scaling it across its
    thin axis changes what is painted and nothing else: the element
-   still occupies --rule of layout, the solver still measures the
-   same heights, and the section-rhythm formula still balances.
+   keeps its whole layout box (the border, which Chromium lays out
+   at a whole device pixel: 1pt is 1px at 96 dpi), and the section-
+   rhythm formula still balances. The solver's measurements are
+   untouched too, because build/measure_dom.js reads a separator's
+   cost from the edges of the sections around it, never from the
+   transformed <hr>, whose getBoundingClientRect covers only the
+   painted half (read that way, it made the solver undercount every
+   column by half a pixel per separator).
    That separation is what --rule-paint buys. It exists because
    Chromium snaps a sub-point border-width up to a full 1.0pt in
    the emitted PDF, so `border-top: 0.5pt` yields a 1pt rule —
@@ -79,10 +85,10 @@ main.resume {
    with .top-rule. Color stays --border-rule (not --accent) —
    section separators repeat 3–5× per page and giving them accent
    color would flood the document with green lines, collapsing the
-   visual hierarchy. The top rule is the single accent-colored
-   structural element; the column divider and section separators
-   both render in --border-rule so the accent stays exclusive
-   to the document's top frame.                                     */
+   visual hierarchy. No structural element is accent-colored: the
+   top rule, the column divider and the section separators all
+   render in --border-rule, and the accent is kept for content (the
+   section headings, the role line, a link's hover and focus).      */
 .section-sep {
   block-size: 0;
   border: 0;
@@ -151,7 +157,7 @@ main.resume {
      vertical line running the full page height was the largest single
      brand element on the page and competed with content for visual
      attention. The accent color is now reserved entirely for content-
-     level emphasis (section heading bars, link interactions); all
+     level emphasis (section headings, the role line, link hover); all
      structural rules — top rule, divider, section separators — render
      in --border-rule. Thickness tracks --rule to stay consistent
      across all three.                                                 */

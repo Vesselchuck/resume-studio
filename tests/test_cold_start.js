@@ -53,12 +53,12 @@ const READY_PREFIX = '\x1eSTUDIO_READY ';
 
 const compileCache = require('../build/_compile_cache');
 
-/** A GET, with the time it took. */
-function get(port, route) {
+/** A GET with the server's launch token, and the time it took. */
+function get(port, token, route) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: route,
-      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      headers: { host: `127.0.0.1:${port}`, 'x-studio-token': token } }, (res) => {
       res.resume();
       res.on('end', () => resolve({ route, status: res.statusCode, headers: res.headers,
                                     ms: Date.now() - started }));
@@ -168,15 +168,19 @@ async function warmTests(createEngine, root) {
 /* ─── The server announces itself early ───────────────────────── */
 
 async function readyTests(root) {
+  const env = { ...process.env };
+  for (const k of ['RESUME_DATA_SOURCE', 'RESUME_DATA_FILE', 'LETTER_DATA_FILE', 'STUDIO_PORT']) {
+    delete env[k];
+  }
   const child = spawn(process.execPath,
     [path.join(root, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent'],
-    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
+    { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const log = [];
   child.stderr.setEncoding('utf-8');
   child.stderr.on('data', c => log.push(...String(c).split('\n')));
 
   try {
-    const port = await new Promise((resolve, reject) => {
+    const { port, token } = await new Promise((resolve, reject) => {
       let buffer = '';
       const timer = setTimeout(() => reject(new Error(
         `the server did not report ready in 60 s:\n${log.slice(-10).join('\n')}`)), 60000);
@@ -190,7 +194,7 @@ async function readyTests(root) {
           log.push(line);
           if (line.startsWith(READY_PREFIX)) {
             clearTimeout(timer);
-            resolve(JSON.parse(line.slice(READY_PREFIX.length)).port);
+            resolve(JSON.parse(line.slice(READY_PREFIX.length)));
           }
         }
       });
@@ -199,23 +203,18 @@ async function readyTests(root) {
 
     // Both at once, the instant the port is known. The UI page needs
     // nothing from the engine; /api/status does.
-    const [ui, status] = await Promise.all([get(port, '/'), get(port, '/api/status')]);
+    const [ui, status] = await Promise.all([get(port, token, '/'), get(port, token, '/api/status')]);
     assertEq(ui.status, 200, 'ready: the UI is served as soon as the port is announced');
     assertEq(status.status, 200, 'ready: /api/status answers once the engine is up');
     // The page says which state the engine was in when it was served.
     // 'starting' is the proof that it did not wait; 'ready' means the
     // engine won the race, which is a pass and not something the test
-    // can or should force. Comparing the two response times instead
-    // fails on a loaded machine for reasons that have nothing to do
-    // with the code.
+    // can or should force. Both are accepted on purpose, in one
+    // assertion: comparing the two response times instead fails on a
+    // loaded machine for reasons that have nothing to do with the code.
     const served = ui.headers['x-studio-engine'];
     assertTrue(served === 'starting' || served === 'ready',
       `ready: the page reports the engine state (got ${served})`);
-    if (served === 'ready') {
-      assertTrue(true, 'ready: the engine was up before the first request (nothing to wait for)');
-    } else {
-      assertTrue(true, 'ready: the page was served while the engine was still starting');
-    }
 
     const bye = await new Promise((resolve) => {
       child.once('exit', () => resolve('exited'));
@@ -237,7 +236,10 @@ async function readyTests(root) {
     const b = await chromium.launch();
     await b.close();
   } catch (err) {
-    console.log(`(the rest of ${SUITE} needs Chromium: ${String(err.message).split('\n')[0]})`);
+    // The runner's SKIP marker, as the header promises: without it the
+    // cache checks' passes showed the whole suite as passed.
+    console.log(`SKIP ${SUITE}: chromium unavailable for the rest `
+      + `(${String(err.message).split('\n')[0]})`);
     return report();
   }
 

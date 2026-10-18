@@ -9,8 +9,17 @@
 # those files are never on GitHub.
 #
 # A second job runs the same suite on Windows, the platform the app is
-# built for, and type-checks the Tauri shell there (src-tauri/), which
-# nothing else compiles before a release.
+# built for, and type-checks the Tauri shell there (src-tauri/) and runs
+# its unit tests, which nothing else compiles before a release. A third
+# runs the suite on Linux with the oldest Node and Python the README
+# says are supported.
+#
+# Every job runs the tests with STRICT_TESTS=1, so a suite that skips
+# fails the job: a Chromium that cannot start used to leave a dozen
+# suites printing SKIP and the run green. The Python skips that are
+# right here (the private-data checks, the other platform's test, the
+# optional text extractors) are listed in build/run_tests.js
+# (EXPECTED_SKIPS) and pass; any other skip fails.
 #
 # Actions are pinned to a commit, not a tag: a tag can be moved to other
 # code after the fact, a commit cannot. The comment names the release;
@@ -93,8 +102,20 @@ jobs:
       - name: Build the cover letter
         run: node letter.js
 
+      # The text-layer test reads the PDFs with poppler's pdftotext too,
+      # and the image ships without it (runner-images' Ubuntu 24.04
+      # package list has no poppler-utils), so this job always took that
+      # test's optional-extractor skip. Installed, the check runs here.
+      - name: Install pdftotext
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          command -v pdftotext && { pdftotext -v || true; }
+
       - name: Run the tests
         run: npm test
+        env:
+          STRICT_TESTS: "1"
 
       - name: Keep the built PDFs
         if: always()
@@ -104,8 +125,85 @@ jobs:
           path: dist/*.pdf
           if-no-files-found: ignore
 
+  # The README gives Node 20.19 and Python 3.10 as the minimums, and
+  # nothing ran on them: both other jobs use the recommended 24 and 3.14,
+  # so a dependency or a language feature that needs newer would reach a
+  # release unnoticed. Same steps as the first job, on the same pinned
+  # image and the same lockfiles, less keeping the PDFs; only the two
+  # versions differ.
+  minimums:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Quoted: unquoted, YAML reads 3.10 as the number 3.1.
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20.19"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install Node packages
+        run: npm ci
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      # The same Chromium as the first job's, under the same key: it
+      # depends on the Playwright version, not on Node's.
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Chromium from the cache
+        id: chromium-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Chromium for Playwright
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Chromium's system libraries
+        if: steps.chromium-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Build the resume
+        run: node resume.js
+        env:
+          RESUME_TESTS: "off"
+
+      - name: Build the cover letter
+        run: node letter.js
+
+      - name: Install pdftotext
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          command -v pdftotext && { pdftotext -v || true; }
+
+      - name: Run the tests
+        run: npm test
+        env:
+          STRICT_TESTS: "1"
+
   windows:
-    runs-on: windows-latest
+    # Pinned for the same reason as the Linux job. windows-latest was
+    # windows-2025 when this was pinned; move it up on purpose.
+    runs-on: windows-2025
     timeout-minutes: 30
     defaults:
       run:
@@ -159,14 +257,21 @@ jobs:
       - name: Build the cover letter
         run: node letter.js
 
-      # Which text extractors the text-layer test will find here, and
-      # their versions, which need not match the Linux job's.
-      - name: Show the text extractors
+      # The pdftotext the text-layer test reads with here is Xpdf's, from
+      # Git for Windows, and it is the one that has split tracked text
+      # that every other extractor read whole. Without it that check
+      # would only skip, so its absence fails the job. Its version need
+      # not match the Linux job's. Xpdf's `pdftotext -v` exits 99 after
+      # printing the version, which the `|| true` allows.
+      - name: Check the text extractors
         run: |
-          command -v pdftotext && pdftotext -v || echo "no pdftotext on PATH"
+          command -v pdftotext || { echo "::error::no pdftotext on PATH"; exit 1; }
+          pdftotext -v || true
 
       - name: Run the tests
         run: npm test
+        env:
+          STRICT_TESTS: "1"
 
       - name: Keep the built PDFs
         if: always()
@@ -176,13 +281,17 @@ jobs:
           path: dist/*.pdf
           if-no-files-found: ignore
 
-      # The runner image ships a stable Rust toolchain. Only a check, not
-      # a build: it proves the shell compiles against Cargo.lock without
-      # linking or bundling an installer.
+      # The runner image ships a stable Rust toolchain. A check and the
+      # shell's unit tests, not a release build: they prove the shell
+      # compiles against Cargo.lock and its tests pass, without building
+      # the app in release mode or bundling an installer.
       # The toolchain is in the key as well as Cargo.lock: when the image
       # moves to a new Rust, everything in target/ is rebuilt, and a key
       # that still matched would restore the stale copy and never save the
-      # new one, so every run after that would build from nothing.
+      # new one, so every run after that would build from nothing. The
+      # same goes for what the job builds: the key's prefix names it
+      # (cargo-test since the unit tests run), so a cache saved when only
+      # the check ran is not restored in place of one with the test build.
       - name: Read the Rust version
         id: rust
         run: echo "version=$(rustc -V | tr -c '[:alnum:].\n' '-')" >> "$GITHUB_OUTPUT"
@@ -195,7 +304,10 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             src-tauri/target
-          key: cargo-check-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: cargo-test-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
       - name: Type-check the Tauri shell
         run: cargo check --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Run the Tauri shell's unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked

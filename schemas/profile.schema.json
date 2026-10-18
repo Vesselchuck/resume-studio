@@ -4,26 +4,25 @@
   "title": "Shared profile",
   "description": "data/_profile.yml — values common to every document, merged underneath each resume and cover letter beside it. The document always wins; this file only fills in what a document leaves out. Delete the file to turn the whole mechanism off.",
   "type": "object",
-  "additionalProperties": false,
   "properties": {
     "name": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Your name, split in two because the design styles them differently — the last name is set bolder than the first.",
       "required": ["first", "last"],
       "additionalProperties": false,
       "properties": {
-        "first": { "type": "string", "minLength": 1, "description": "Given name, shown in the lighter weight." },
-        "last": { "type": "string", "minLength": 1, "description": "Family name, shown bolder." }
+        "first": { "type": "string", "description": "Given name, shown in the lighter weight." },
+        "last": { "type": "string", "description": "Family name, shown bolder." }
       }
     },
 
     "contact": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Contact details. Change a number here and it changes on every resume and every cover letter — that is the point of this file.",
       "additionalProperties": false,
       "properties": {
         "address": {
-          "type": "string",
+          "type": ["string", "null"],
           "description": "Shown on its own line. Usually just 'City, State'."
         },
         "rows": {
@@ -36,8 +35,8 @@
             "properties": {
               "value": { "type": "string", "minLength": 1, "description": "The text people see." },
               "href": {
-                "type": "string",
-                "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)",
+                "type": ["string", "null"],
+                "pattern": "^$|^[\\x00-\\x20\\x7f-\\xa0\\xad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890\\u0891\\u08e2\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u2066-\\u206f\\u3000\\ufeff\\ufff9-\\ufffb]*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Mm][Aa][Ii][Ll][Tt][Oo]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Tt][Ee][Ll]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])",
                 "description": "What clicking it does: 'tel:', 'mailto:', 'https:' or 'http:', written in full. Empty means no link.",
                 "examples": ["tel:+15551234567", "mailto:you@example.com"]
               }
@@ -48,26 +47,25 @@
     },
 
     "role": {
-      "type": "string",
+      "type": ["string", "null"],
       "description": "A fallback subtitle under your name. Rarely useful here — 'role' names the job you are applying for, so it almost always belongs in the document instead. Kept available for a standing title you never change."
     },
 
     "meta": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "'lang' and 'maxPages' belong here — both are standing decisions rather than per-application ones. 'description' names the target role, so it stays in each document.",
-      "additionalProperties": false,
       "properties": {
         "lang": {
-          "type": "string",
-          "description": "BCP 47 language tag, stamped into the PDF so screen readers pronounce it correctly.",
+          "type": ["string", "null"],
+          "description": "BCP 47 language tag, stamped into the PDF so screen readers pronounce it correctly. Anything that is not a tag is marked en-US, with a warning.",
           "examples": ["en-US", "en-GB", "ru-RU"]
         },
         "description": {
-          "type": "string",
+          "type": ["string", "null"],
           "description": "A fallback metadata sentence for a document that sets none. Prefer writing a specific one per application — this sentence names the target role and is read by some applicant tracking systems."
         },
         "maxPages": {
-          "type": "integer",
+          "type": ["integer", "null"],
           "minimum": 1,
           "description": "The ceiling the layout solver works under, for every resume. A document that needs more room sets its own maxPages, which wins. The cover letter has no solver and ignores this."
         }

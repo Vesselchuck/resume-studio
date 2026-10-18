@@ -97,10 +97,13 @@ function buildFixture(opts = {}) {
   `;
 
   function buildColumn(cls, hrCount) {
-    // Render: block, hr, block, hr, block, ... (alternating)
+    // Render: block, hr, block, hr, block, ... (alternating). The blocks
+    // are <div>s, not <section>s: this fixture models geometry only, and
+    // content conservation (invariant 5) reads sections, headings and
+    // ids that it does not have. contentFixture below models those.
     const blocks = [];
     for (let i = 0; i <= hrCount; i++) {
-      blocks.push(`<section class="block" data-block-${i}>block ${cls}-${i}</section>`);
+      blocks.push(`<div class="block" data-block-${i}>block ${cls}-${i}</div>`);
     }
     const parts = [];
     for (let i = 0; i < blocks.length; i++) {
@@ -180,6 +183,117 @@ function absolutePositionedFixture(opts = {}) {
     <meta charset="utf-8"><title>fixture</title><style>${css}</style>
   </head><body>${pages.join('')}</body></html>`;
 }
+
+
+/**
+ * A two-page document in the final templates' shape, for invariants 5
+ * and 6: a sidebar list begun on page 1 and continued on page 2, and an
+ * experience section whose one job is split the same way.
+ *
+ *   dropExperienceHeading: page 1's experience section has no heading —
+ *     what the solver produced when it charged the heading to page 1 and
+ *     sent the first job to page 2 as a continuation.
+ *   longWord: text for the first sidebar item, wrapped nowhere.
+ *   contactRow: text for the page-1 header's last contact row, laid out
+ *     as the templates' header is (_components.scss): name left, the
+ *     contact block right-aligned, a top rule below, and a page footer
+ *     at the right margin. Null (the default) draws no header or footer.
+ *   noEducationItems: the education section has its heading and no
+ *     items, as `items: []` renders.
+ *
+ * SOURCE is the matching solver input (what measure_dom.js returns),
+ * cut down to what the check reads.
+ */
+function contentFixture(opts = {}) {
+  const {
+    dropExperienceHeading = false, longWord = 'item one', contactRow = null,
+    noEducationItems = false,
+  } = opts;
+  const css = `
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    .page {
+      width: 8.5in; height: 11in; padding: 36px; position: relative;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .resume-header { display: flex; justify-content: space-between; align-items: flex-end; }
+    .header-contact { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+    .top-rule { border: 0; border-top: 1px solid #888; margin-bottom: 12px; }
+    .page-footer { position: absolute; bottom: 12px; right: 36px; }
+    .body-grid {
+      flex: 1 1 auto; display: grid; gap: 32px;
+      grid-template-columns: 200px minmax(0, 1fr);
+    }
+    .sidebar, .main-col { display: flex; flex-direction: column; min-width: 0; }
+    hr.section-sep { border: 0; border-top: 1px solid #888; margin: 12px 0; }
+  `;
+  const heading = dropExperienceHeading ? '' : '<h2 class="section-heading"><span>Work</span></h2>';
+  const header = contactRow === null ? '' : `
+      <header class="resume-header">
+        <div class="header-left"><h1 class="name"><span class="name-text">A Name</span></h1></div>
+        <address class="header-contact">
+          <span class="header-contact-item">(000) 000-0000</span>
+          <span class="header-contact-item">${contactRow}</span>
+        </address>
+      </header>
+      <hr class="top-rule">`;
+  const footer = (n) => (contactRow === null ? ''
+    : `<footer class="page-footer">Page ${n} of 2</footer>`);
+  const educationItems = noEducationItems ? '' : `
+          <article class="edu-item"><header class="entry-header">
+            <h3 class="entry-title">A degree</h3></header></article>`;
+  return `<!doctype html><html><head>
+    <meta charset="utf-8"><title>fixture</title><style>${css}</style>
+  </head><body>
+    <article class="page">${header}<div class="body-grid">
+      <aside class="sidebar">
+        <section class="block" id="langs">
+          <h2 class="section-heading"><span>Languages</span></h2>
+          <ul class="plain-list"><li>${longWord}</li><li>item two</li></ul>
+        </section>
+      </aside>
+      <div class="main-col">
+        <section class="block">
+          <h2 class="section-heading"><span>Summary</span></h2>
+          <p class="summary-text">A summary.</p>
+        </section>
+        <hr class="section-sep">
+        <section class="block experience">${heading}
+          <article class="job" id="a">
+            <header class="entry-header"><h3 class="entry-title">Job A</h3></header>
+            <ul class="bullets"><li>one</li><li>two</li></ul>
+          </article>
+        </section>
+      </div>
+    </div>${footer(1)}</article>
+    <article class="page"><div class="body-grid">
+      <aside class="sidebar">
+        <section class="block block--continued" data-continues-from="langs">
+          <ul class="plain-list"><li>item three</li></ul>
+        </section>
+      </aside>
+      <div class="main-col">
+        <section class="block experience" aria-label="Work experience continued">
+          <article class="job job--continued" data-continues-from="a">
+            <ul class="bullets"><li>three</li></ul>
+          </article>
+        </section>
+        <hr class="section-sep">
+        <section class="block">
+          <h2 class="section-heading"><span>Education</span></h2>${educationItems}
+        </section>
+      </div>
+    </div>${footer(2)}</article>
+  </body></html>`;
+}
+
+const SOURCE = {
+  sidebar: [{ id: 'langs', items: [{}, {}, {}] }],
+  mainColumn: [
+    { kind: 'summary' },
+    { kind: 'experience', jobs: [{ id: 'a', bullets: [{}, {}, {}] }] },
+    { kind: 'education' },
+  ],
+};
 
 
 // ─── Suite ───────────────────────────────────────────────────────
@@ -277,13 +391,14 @@ function absolutePositionedFixture(opts = {}) {
   }
 
 
-  // ── Page-count: default falls back to LAYOUT_CONSTANTS ────────
-  // Caller passes no options. Default (2) should match a 2-page HTML.
+  // ── Page-count: no expectedPageCount, no count assumed ────────
+  // Caller passes no options. There is no default count any more (it
+  // was 2), so a 3-page document is not a violation; presence still is.
   {
-    const html = buildFixture({ pageCount: 2 });
+    const html = buildFixture({ pageCount: 3 });
     const r = await check(html);  // no options
     assertEq(r.violations.filter((v) => v.invariant === 'page-count'),
-      [], 'default page-count: 2-page HTML produces no violation');
+      [], 'no expectedPageCount: a 3-page HTML produces no page-count violation');
   }
 
 
@@ -441,6 +556,136 @@ function absolutePositionedFixture(opts = {}) {
       'multiple violations: grid-presence reported');
     assertTrue((counts['content-overflow'] || 0) >= 1,
       'multiple violations: content-overflow reported');
+  }
+
+
+  // ── Content conservation: a split list and job, all there ────
+  {
+    const r = await check(contentFixture(), { expectedPageCount: 2 });
+    assertEq(r.violations, [], 'conservation, HTML only: clean');
+    const s = await check(contentFixture(), { expectedPageCount: 2, measurements: SOURCE });
+    assertEq(s.violations, [], 'conservation, against the source: clean');
+  }
+
+
+  // ── Content conservation: the experience heading printed nowhere ─
+  // The shape the solver produced when the heading's fit and the first
+  // job's disagreed by a rounding error. Every other invariant is clean.
+  {
+    const r = await check(contentFixture({ dropExperienceHeading: true }),
+      { expectedPageCount: 2 });
+    const v = r.violations.filter((x) => x.invariant === 'content-conservation');
+    assertEq(r.violations.length, v.length, 'lost heading: only conservation fires');
+    assertEq(v.map((x) => [x.what, x.id]), [['main section', 'experience']],
+      'lost heading: reported as the experience section');
+  }
+
+
+  // ── Content conservation: against the source ─────────────────
+  // Missing bullets and items, and content the source does not have,
+  // are invisible from the HTML alone.
+  {
+    const shortJob = { ...SOURCE, mainColumn: [
+      SOURCE.mainColumn[0],
+      { kind: 'experience', jobs: [{ id: 'a', bullets: [{}, {}, {}, {}] }, { id: 'b', bullets: [{}] }] },
+      SOURCE.mainColumn[2],
+    ] };
+    const r = await check(contentFixture(), { expectedPageCount: 2, measurements: shortJob });
+    const problems = r.violations.map((x) => `${x.id}: ${x.problem}`);
+    assertEq(problems, ['a: 3 of 4 bullets rendered', 'b: missing'],
+      'source: a missing bullet and a missing job');
+
+    const extraBlock = { ...SOURCE, sidebar: [{ id: 'langs', items: [{}, {}] }, { id: 'skills', items: [{}] }] };
+    const s = await check(contentFixture(), { expectedPageCount: 2, measurements: extraBlock });
+    assertEq(s.violations.map((x) => `${x.id}: ${x.problem}`),
+      ['langs: 3 of 2 items rendered', 'skills: missing'],
+      'source: an item too many and a missing block');
+  }
+
+
+  // ── Horizontal overflow: a word wider than its column ────────
+  {
+    const r = await check(contentFixture({ longWord: 'x'.repeat(120) }), { expectedPageCount: 2 });
+    const v = findViolation(r.violations, 'horizontal-overflow', 'horizontal-overflow: violation present');
+    if (v) {
+      assertEq([v.page, v.column], [1, 'sidebar'], 'horizontal-overflow: page 1 sidebar');
+      assertTrue(parseFloat(v.overflow_px) > 100, 'horizontal-overflow: overflow_px is the overrun');
+    }
+    const clean = await check(contentFixture(), { expectedPageCount: 2 });
+    assertEq(clean.violations.filter((x) => x.invariant === 'horizontal-overflow'), [],
+      'horizontal-overflow: none on ordinary text');
+  }
+
+
+  // ── Horizontal overflow: a contact row too long for the header ─
+  // The header and the footer are outside both columns. A long contact
+  // row pushed the right-aligned contact block past the right margin
+  // (and, longer, off the page, where .page clips it) while this check
+  // walked only the columns and said clean.
+  {
+    const r = await check(contentFixture({ contactRow: 'x'.repeat(110) + '@example.com' }),
+      { expectedPageCount: 2, measurements: SOURCE });
+    const v = r.violations.filter((x) => x.invariant === 'horizontal-overflow');
+    assertEq(v.map((x) => [x.page, x.column]), [[1, 'resume-header']],
+      `horizontal-overflow: a long contact row is caught in the page-1 header (${JSON.stringify(r.violations)})`);
+    assertTrue(v.length === 1 && parseFloat(v[0].overflow_px) > 100,
+      'horizontal-overflow: ...by how far it runs past the right margin');
+    const clean = await check(contentFixture({ contactRow: 'a@example.com' }),
+      { expectedPageCount: 2, measurements: SOURCE });
+    assertEq(clean.violations, [],
+      'horizontal-overflow: a header and footer inside the margins are clean');
+  }
+
+
+  // ── Content conservation: an education section with no items ─
+  // `items: []` builds (with a warning): the section is its heading
+  // alone. It used to be told apart by its items, so it read as a
+  // section of no known kind and failed the build.
+  {
+    const r = await check(contentFixture({ noEducationItems: true }), { expectedPageCount: 2 });
+    assertEq(r.violations, [], 'empty education: clean from the HTML alone');
+    const s = await check(contentFixture({ noEducationItems: true }),
+      { expectedPageCount: 2, measurements: SOURCE });
+    assertEq(s.violations, [], 'empty education: clean against the source');
+  }
+
+
+  // ── The viewport is put back ─────────────────────────────────
+  // The engine measures the next build on the same page; it must not
+  // inherit the check's 816×1056.
+  {
+    const page = await ctx.newPage();
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.setContent(contentFixture(), { waitUntil: 'load' });
+    await checkLayoutInvariants(page, { expectedPageCount: 2 });
+    assertEq(page.viewportSize(), { width: 1280, height: 720 }, 'viewport restored');
+    assertEq(await page.evaluate(() => matchMedia('print').matches), false, 'media restored');
+    await page.close();
+  }
+
+
+  // ── ...also when the check throws ────────────────────────────
+  // A check that cannot run throws rather than reporting a violation.
+  // It used to leave the page in print media at 816×1056 for the next
+  // measurement on it.
+  {
+    const page = await ctx.newPage();
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.setContent(contentFixture(), { waitUntil: 'load' });
+    await page.evaluate(() => {
+      Document.prototype.querySelectorAll = () => { throw new Error('the check broke'); };
+    });
+    let err = null;
+    try {
+      await checkLayoutInvariants(page, { expectedPageCount: 2 });
+    } catch (e) {
+      err = e;
+    }
+    assertTrue(Boolean(err) && /the check broke/.test(err.message),
+      `a check that cannot run throws its own error (${err && err.message.split('\n')[0]})`);
+    assertEq(page.viewportSize(), { width: 1280, height: 720 }, 'viewport restored after a throw');
+    assertEq(await page.evaluate(() => matchMedia('print').matches), false, 'media restored after a throw');
+    await page.close();
   }
 
 

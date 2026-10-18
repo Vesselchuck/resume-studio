@@ -34,6 +34,22 @@
  *   STRICT_TESTS=1 converts SKIP into a hard failure (exit code 1).
  *   Use this in CI to ensure no suite is silently bypassed. Accepts
  *   1/true/on/yes (any case); anything else, including 0/false, is off.
+ *   Every JS SKIP and every suite that ran 0 tests fails. A Python
+ *   skip fails unless its reason is one of EXPECTED_SKIPS below: the
+ *   skips that are right on a machine like CI's (a test for the other
+ *   platform, no private data files on GitHub, an optional tool not
+ *   installed). Without that list strict mode could never pass
+ *   anywhere, which is why CI ran without it and a suite skipped there
+ *   stayed green.
+ *
+ * This checkout's dist/
+ * ─────────────────────
+ * No suite may write this checkout's dist/: the ones that build work in
+ * a temp copy (tests/_project.js, tests/_project.py) and each checks
+ * that dist/ is unchanged after it. The runner checks the whole run as
+ * well, by content and not only by mtime, and names what changed. A
+ * change is a warning, or a failure under STRICT_TESTS. See
+ * distFingerprint().
  *
  * Run with:  node build/run_tests.js
  *
@@ -48,9 +64,13 @@
  * Behavior:
  *   • No arg → runs ALL Python tests, then ALL JS tests. Exits with
  *     code 1 if any test failed, 0 if all passed.
- *   • Arg matching a Python module → runs only that Python test.
  *   • Arg matching a JS file (tests/test_<arg>.js exists) → runs
- *     only that JS test.
+ *     only that JS test. The JS file wins when both exist: the Python
+ *     twin of a same-named suite is reached as tests.<name>
+ *     (`test_output_name` runs the JS suite, `tests.test_output_name`
+ *     the Python one).
+ *   • Arg naming a Python module (tests/<module>.py exists; a dotted
+ *     class or test after it is passed on) → runs only that Python test.
  *   • Arg matching neither → exits 2 with an error.
  *
  * Exits 0 on success, 1 on any test failure (or skip when
@@ -59,15 +79,18 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { detectPython } = require('./detect_python');
 const c = require('./_console');
 
 const ROOT = path.resolve(__dirname, '..');
 const TESTS_DIR = path.join(ROOT, 'tests');
+const DIST = path.join(ROOT, 'dist');
 const PYTHON = detectPython();
 
 const userArg = process.argv[2];
+const strictTests = envFlag('STRICT_TESTS');
 
 /**
  * Limits on a captured suite.
@@ -85,6 +108,131 @@ const userArg = process.argv[2];
  */
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 const SUITE_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * The Python skips STRICT_TESTS lets through, matched against the whole
+ * reason a test gives. Each is an environment that is legitimately
+ * different, not something broken:
+ *
+ *   test_power.py           each platform skips the other's test, and
+ *                           only the other's: "Windows only" is
+ *                           expected off Windows, the no-op path's skip
+ *                           on it
+ *   test_anonymized.py      no private data files, only on GitHub
+ *                           (GITHUB_ACTIONS set). On any other machine
+ *                           that skip means _real_files() found nothing,
+ *                           and every anonymity check behind it skipped
+ *   test_text_extraction.py the optional extractors (the Windows CI job
+ *                           fails earlier on its own if pdftotext is gone)
+ *
+ * Tesseract is not here: CI never reaches that skip (the OCR test skips
+ * on "no real data files" first), and on a machine with real data a
+ * missing Tesseract means the screenshots were not read.
+ *
+ * Anything else that skips under STRICT_TESTS fails the run. Add a
+ * reason here only for a skip that is right on CI as well; a skip that
+ * means "this could not be checked" belongs out of this list.
+ */
+const ON_WINDOWS = process.platform === 'win32';
+const ON_GITHUB = Boolean(process.env.GITHUB_ACTIONS);
+const EXPECTED_SKIPS = [
+  { reason: /^Windows only$/, when: !ON_WINDOWS },
+  { reason: /^the no-op path is for other platforms$/, when: ON_WINDOWS },
+  { reason: /^no real data files in data\/ — nothing of yours to leak$/, when: ON_GITHUB },
+  { reason: /^no data\/_profile\.yml$/, when: ON_GITHUB },
+  { reason: /^pdfplumber is not installed, so the text layer is not read with it \(optional\)$/, when: true },
+  { reason: /^pdftotext is not on PATH, so the text layer is not read with it \(optional\)$/, when: true },
+].filter(s => s.when).map(s => s.reason);
+
+/**
+ * This checkout's dist/, so the run can tell whether it was written.
+ *
+ * Each suite that builds checks dist/ itself, by name, size and mtime
+ * (realDistFingerprint in tests/_project.*), and only around its own
+ * work. A full run once left the real PDFs, styles.css, .lock and
+ * .studio-prefs.json rewritten with every suite passing, and it could
+ * not be reproduced. Likely, though not shown: a Studio left open, or a
+ * `node resume.js` (or a Studio Build with tests on) running at the
+ * same time, which write there between suites. So the runner takes
+ * this before and after the whole run, with a content hash of every
+ * file up to SMALL_FILE_BYTES (so a rewrite with the same bytes shows
+ * as that), and names each difference.
+ *
+ * The lock files are left out of the comparison and reported on their
+ * own: dist/.lock names whoever holds dist/ (its pid and host), which
+ * is the likeliest answer to "who wrote this".
+ */
+const SMALL_FILE_BYTES = 1024 * 1024;
+const LOCK_FILES = new Set(['.lock', '.lock.next', '.lock.break']);
+
+function distFingerprint(dist) {
+  const out = new Map();
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      const rel = path.relative(dist, p).split(path.sep).join('/');
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile() && !LOCK_FILES.has(rel)) {
+        try {
+          const st = fs.statSync(p);
+          const hash = st.size <= SMALL_FILE_BYTES
+            ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') : null;
+          out.set(rel, { size: st.size, mtimeMs: st.mtimeMs, hash });
+        } catch { /* removed between the listing and the read */ }
+      }
+    }
+  };
+  walk(dist);
+  return out;
+}
+
+/** What dist/.lock says (its holder), or null when there is none. */
+function lockHolder(dist) {
+  try {
+    return fs.readFileSync(path.join(dist, '.lock'), 'utf-8').trim() || '(empty)';
+  } catch {
+    return null;
+  }
+}
+
+/** One line per file that differs between two distFingerprint()s. */
+function distChanges(before, after) {
+  const lines = [];
+  for (const [rel, now] of after) {
+    const was = before.get(rel);
+    if (!was) lines.push(`${rel}: added`);
+    else if (was.size !== now.size || was.hash !== now.hash) lines.push(`${rel}: changed`);
+    else if (was.mtimeMs !== now.mtimeMs) {
+      lines.push(now.hash ? `${rel}: rewritten with the same bytes` : `${rel}: modified time changed`);
+    }
+  }
+  for (const rel of before.keys()) {
+    if (!after.has(rel)) lines.push(`${rel}: removed`);
+  }
+  return lines.sort();
+}
+
+/**
+ * Report a difference in dist/ over the run, and return whether there
+ * was one: a warning, or an error under STRICT_TESTS (the caller then
+ * fails the run).
+ */
+function reportDist(before, lockBefore) {
+  const changes = distChanges(before, distFingerprint(DIST));
+  const lockAfter = lockHolder(DIST);
+  if (!changes.length) return false;
+  const say = strictTests ? c.err : c.warn;
+  say(`this checkout's dist/ changed during the test run (${changes.length} `
+    + `file${changes.length === 1 ? '' : 's'}); no suite should write there`);
+  for (const line of changes) c.detail(line);
+  c.detail(`dist/.lock before the run: ${lockBefore === null ? 'none' : `held: ${lockBefore}`}`);
+  c.detail(`dist/.lock after the run: ${lockAfter === null ? 'none' : `held: ${lockAfter}`}`);
+  c.detail('A Studio left open, or a `node resume.js` / `node letter.js` or a Studio '
+    + 'Build running at the same time, writes there: close it or let it finish, and run again.');
+  return true;
+}
 
 /**
  * Parse a boolean-ish env var: 1/true/on/yes (trimmed, any case) is on,
@@ -165,9 +313,9 @@ function runNodeInherit(jsFile) {
  * captured output so the user sees the assertion details.
  *
  * Returns { exitCode, skipped }. `skipped` is true if the suite
- * exited 0 but reported skipped tests (unittest prints
- * "OK (skipped=N)" in that case). The dispatcher uses `skipped`
- * to honor STRICT_TESTS.
+ * exited 0 but reported a skip that is not in EXPECTED_SKIPS
+ * (unittest prints "OK (skipped=N…)" in that case), or ran 0 tests.
+ * The dispatcher uses `skipped` to honor STRICT_TESTS.
  */
 function runPythonCaptured(args, label) {
   const start = Date.now();
@@ -201,10 +349,13 @@ function runPythonCaptured(args, label) {
   }
 
   // Detect skipped tests in the unittest summary block.
-  // unittest prints e.g. "OK (skipped=2)" when tests were skipped.
-  const skipMatch = combined.match(/OK\s*\(skipped=(\d+)\)/);
+  // unittest prints e.g. "OK (skipped=2)" when tests were skipped, and
+  // other counts after it when there are any ("OK (skipped=1, expected
+  // failures=1)"), which an earlier, closed match missed: that run
+  // showed as a plain pass.
+  const skipMatch = combined.match(/OK\s*\([^)]*\bskipped=(\d+)/);
   if (skipMatch) {
-    const n = skipMatch[1];
+    const n = Number(skipMatch[1]);
     c.warn_pair(label, `${n} skipped (in ${elapsed}s)`);
     // Say WHICH and WHY, not just how many.
     //
@@ -223,13 +374,24 @@ function runPythonCaptured(args, label) {
     // the first line of its docstring when it has one, and most of
     // these do. Matching either is what makes this work at all — an
     // earlier version anchored on the id form and silently printed
-    // nothing for every documented test, which is the majority.
-    for (const [, label_, why] of combined.matchAll(
-      /^(.*?) \.\.\. skipped ['"](.+?)['"]\s*$/gm)) {
+    // nothing for every documented test, which is the majority. A skip
+    // raised in setUpModule or setUpClass can come with no label at all,
+    // a bare "skipped '<reason>'" line, so the label is optional too.
+    //
+    // Under STRICT_TESTS each reason is checked against EXPECTED_SKIPS,
+    // and a skip whose reason could not be read at all counts as
+    // unexpected: strict mode cannot vouch for what it did not see.
+    const reasons = [...combined.matchAll(
+      /^(?:(.*?) \.\.\. )?skipped (['"])(.+)\2\s*$/gm)];
+    let unexpected = Math.max(0, n - reasons.length);
+    for (const [, label_, , why] of reasons) {
+      const expected = EXPECTED_SKIPS.some((re) => re.test(why));
+      if (!expected) unexpected++;
       const reason = why.length > 110 ? `${why.slice(0, 107)}...` : why;
-      c.detail(`${label_.trim()} — ${reason}`);
+      const mark = strictTests && !expected ? ' (not an expected skip)' : '';
+      c.detail(`${(label_ || 'setUpModule / setUpClass').trim()} — ${reason}${mark}`);
     }
-    return { exitCode: 0, skipped: true };
+    return { exitCode: 0, skipped: unexpected > 0 };
   }
 
   // "Ran N tests in X.YYYs" is the count. Without it the run cannot be
@@ -343,6 +505,8 @@ function listJsTests() {
    ────────────────────────────────────────────────────────────── */
 
 let exitCode = 0;
+const distBefore = distFingerprint(DIST);
+const lockBefore = lockHolder(DIST);
 
 if (userArg) {
   // Single-target mode. Use pass-through (native) output: the user
@@ -350,16 +514,23 @@ if (userArg) {
   // unsummarized output (verbose names, traceback, etc.).
   const jsCandidate = path.join(TESTS_DIR,
     userArg.endsWith('.js') ? userArg : `${userArg}.js`);
+  // The module is checked here, not left to unittest: a module that
+  // does not exist is an ImportError there, exit 1, which reads as a
+  // test failure rather than the usage error it is.
+  const dotted = userArg.startsWith('tests.') ? userArg : `tests.${userArg}`;
+  const pyCandidate = path.join(TESTS_DIR, `${dotted.split('.')[1]}.py`);
   if (fs.existsSync(jsCandidate)) {
     exitCode = runNodeInherit(jsCandidate);
-  } else {
-    const dotted = userArg.startsWith('tests.') ? userArg : `tests.${userArg}`;
+  } else if (!userArg.endsWith('.js') && fs.existsSync(pyCandidate)) {
     exitCode = runPythonInherit(['-B', '-m', 'unittest', dotted]);
+  } else {
+    c.err(`no test named ${userArg}: neither ${path.relative(ROOT, jsCandidate)} `
+      + `nor ${path.relative(ROOT, pyCandidate)} exists`);
+    exitCode = 2;
   }
 } else {
   // Discover-all mode: capture + summarize each runner.
   // Python first since it's faster.
-  const strictTests = envFlag('STRICT_TESTS');
   let anySkipped = false;
 
   /** Fold a runner's structured result into the running tally. */
@@ -381,13 +552,19 @@ if (userArg) {
     applyResult(runNodeCaptured(jsFile, stem));
   }
 
-  // STRICT_TESTS converts any skipped suite into a hard failure.
-  // Used in CI to catch silent skips (e.g. missing browser binary
-  // that would otherwise let invariant tests slip past).
+  // STRICT_TESTS converts any skipped suite into a hard failure,
+  // Python's expected skips aside (EXPECTED_SKIPS). Used in CI to catch
+  // silent skips (e.g. missing browser binary that would otherwise let
+  // invariant tests slip past).
   if (anySkipped && strictTests && exitCode === 0) {
-    c.err('STRICT_TESTS is on — skipped suites (and suites that ran 0 tests) are treated as failures');
+    c.err('STRICT_TESTS is on — skipped suites, suites that ran 0 tests and '
+      + 'unexpected Python skips are treated as failures');
     exitCode = 1;
   }
 }
+
+// After the suites, whatever they returned: a run that failed for
+// another reason still says whether dist/ was written.
+if (reportDist(distBefore, lockBefore) && strictTests && exitCode === 0) exitCode = 1;
 
 process.exit(exitCode);

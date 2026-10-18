@@ -15,7 +15,15 @@
  * meaning (e.g. RESUME_DATA_SOURCE accepts 'default' or 'mine').
  *
  * Imported by:
- *   • resume.js         — reads ENV_SKIP_SNAPSHOT, ENV_RESUME_PIPELINE_SUFFIX
+ *   • resume.js              — reads ENV_SKIP_SNAPSHOT, ENV_RESUME_SNAPSHOT,
+ *                              ENV_RESUME_TESTS, ENV_RESUME_PIPELINE_SUFFIX;
+ *                              removes the three data-file variables from
+ *                              the unit tests' environment
+ *   • build/engine.js        — reads ENV_RESUME_SPECULATIVE
+ *   • build/studio_server.js — sets ENV_RESUME_DATA_SOURCE,
+ *                              ENV_RESUME_DATA_FILE, ENV_LETTER_DATA_FILE
+ *                              for its previews, and ENV_RESUME_SNAPSHOT,
+ *                              ENV_RESUME_TESTS for its Builds
  *
  * The exported object is frozen so a typo like `ENV.FOO = 'bar'` at
  * a call site throws TypeError immediately rather than silently

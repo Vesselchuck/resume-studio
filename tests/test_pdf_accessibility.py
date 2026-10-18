@@ -46,15 +46,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
-from _project import Project, real_dist_fingerprint  # noqa: E402
+from _project import Project, build_error, real_dist_fingerprint  # noqa: E402
 
 PROJECT = None
 _REAL_DIST = None
 
 DOCS = (("Resume", "index.html"), ("Cover_Letter", "letter.html"))
-
-DRAWING = {b"f", b"F", b"f*", b"S", b"s", b"B", b"B*", b"b", b"b*",
-           b"Tj", b"TJ", b"'", b'"', b"Do", b"sh", b"INLINE IMAGE"}
 
 
 def setUpModule():
@@ -65,7 +62,7 @@ def setUpModule():
     if problem:
         PROJECT.remove()
         PROJECT = None
-        raise unittest.SkipTest(f"could not build a copy of the project to test against ({problem})")
+        raise build_error(problem)
 
 
 def tearDownModule():
@@ -218,20 +215,27 @@ class TestPdfAccessibility(unittest.TestCase):
                                  "text marked aria-hidden is left untagged, and would end up an artifact")
 
     def test_everything_drawn_is_tagged_or_an_artifact(self):
-        from pypdf.generic import ContentStream
+        # Through every form a page draws, not only the page's own
+        # stream (tests/_marked_content.py): Chromium tags inside a
+        # group's form, and a page-only check passed a wrapped `Do`
+        # that hid that tagged content inside an artifact.
+        import _marked_content
         for doc, _ in DOCS:
-            reader = _reader(doc)
-            for number, page in enumerate(reader.pages, 1):
-                with self.subTest(document=doc, page=number):
-                    depth, loose = 0, []
-                    for _, op in ContentStream(page.get_contents(), reader).operations:
-                        if op in (b"BDC", b"BMC"):
-                            depth += 1
-                        elif op == b"EMC":
-                            depth -= 1
-                        elif op in DRAWING and depth == 0:
-                            loose.append(op.decode("latin-1"))
-                    self.assertEqual(loose, [])
+            with self.subTest(document=doc):
+                loose, hidden = _marked_content.problems(_reader(doc))
+                self.assertEqual(loose, [], "drawing neither tagged nor an artifact")
+                self.assertEqual(hidden, [], "tagged content inside an /Artifact")
+
+    def test_content_is_balanced_and_every_mcid_is_in_the_structure_tree(self):
+        # The marking splices operators into Chromium's streams; an
+        # unbalanced BMC/EMC, q/Q or BT/ET, or an MCID the ParentTree
+        # does not lead back to, would pass the test above.
+        import _marked_content
+        for doc, _ in DOCS:
+            with self.subTest(document=doc):
+                report = _marked_content.check(_reader(doc))
+                self.assertEqual(report.unbalanced, [])
+                self.assertEqual(report.orphans, [])
 
     def test_links_are_described(self):
         for doc, _ in DOCS:

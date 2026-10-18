@@ -53,19 +53,20 @@ require('./build/_compile_cache').enable();
 
 const { chromium } = require('playwright');
 const path = require('path');
-const { detectPython } = require('./build/detect_python');
+const { detectPythonInfo } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
 const { recordBuilt, seedRecord } = require('./build/_output_name');
-const { pythonRunner, pruneStaleOutputs, readDataSource } = require('./build/_cli');
-const distLock = require('./build/_dist_lock');
+const { pythonRunner, pruneStaleOutputs, readDataSource, acquireDist } = require('./build/_cli');
 const c = require('./build/_console');
 
 
 /* ─── Constants ───────────────────────────────────────────────── */
 
 const ROOT = __dirname;
-const PYTHON = detectPython();
-const runPython = pythonRunner(ROOT, PYTHON);
+// PY.exe is spawned; the log shows PY.label, which carries no home
+// directory (see build/detect_python.js).
+const PY = detectPythonInfo();
+const runPython = pythonRunner(ROOT, PY.exe);
 
 
 /* ─── The cold Python adapter ─────────────────────────────────── */
@@ -115,14 +116,10 @@ const pipeline = createPipeline({
   let releaseDist = () => {};
   try {
     c.banner('Cover letter');
-    c.ok_pair('Detected Python', PYTHON);
+    c.ok_pair('Detected Python', PY.label);
     // This build owns dist/ until its PDF is written and the stale ones
     // pruned; see build/_dist_lock.js.
-    releaseDist = await distLock.acquire(path.join(ROOT, 'dist'), {
-      owner: 'node letter.js',
-      blocking: true,     // execFileSync steps: heartbeat from a thread
-      onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
-    });
+    releaseDist = await acquireDist(ROOT, 'node letter.js');
     seedRecord(pipeline.paths.dist, 'letter', pipeline.paths.pdfMeta);
     pipeline.compileSass();
     await pipeline.buildLetter();

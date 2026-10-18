@@ -16,8 +16,8 @@
   dependency on the resume's placement-driven macros.
 
   Rendered by build/build_letter.py to dist/letter.html;
-  letter.js then prints it to the two letter PDFs in
-  dist/, which are named from the profile's name.first/name.last
+  letter.js then prints it to the letter PDF in dist/,
+  which is named from the profile's name.first/name.last
   (see build/_output_name.py).
 
   This is a SINGLE fixed sheet. Cover letters are one page by
@@ -31,15 +31,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=816, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>{{ name.first }} {{ name.last }} — Cover Letter</title>
-  <meta name="author" content="{{ name.first }} {{ name.last }}">
+  <title>{{ [name.first, name.last] | select | map('trim') | select | join(' ') }} — Cover Letter</title>
+  <meta name="author" content="{{ [name.first, name.last] | select | map('trim') | select | join(' ') }}">
   <meta name="description" content="{{ meta.description }}">
 
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <meta name="theme-color" content="{{ accent }}">
 
   <meta property="og:type" content="profile">
-  <meta property="og:title" content="{{ name.first }} {{ name.last }} — Cover Letter">
+  <meta property="og:title" content="{{ [name.first, name.last] | select | map('trim') | select | join(' ') }} — Cover Letter">
   <meta property="og:description" content="{{ meta.description }}">
   <meta property="profile:first_name" content="{{ name.first }}">
   <meta property="profile:last_name" content="{{ name.last }}">

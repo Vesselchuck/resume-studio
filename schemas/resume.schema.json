@@ -7,7 +7,7 @@
   "required": ["sidebar", "mainColumn"],
   "properties": {
     "name": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Your name, split in two because the design styles them differently — the last name is set bolder than the first. Optional here: if data/_profile.yml supplies it, omit it and this file inherits it. The build still fails if neither provides one.",
       "required": ["first", "last"],
       "additionalProperties": false,
@@ -18,17 +18,17 @@
     },
 
     "role": {
-      "type": "string",
-      "description": "Optional subtitle under your name — usually the role you are applying for. Delete the line entirely for no subtitle."
+      "type": ["string", "null"],
+      "description": "Optional subtitle under your name — usually the role you are applying for. Delete the line, or leave it empty, for no subtitle."
     },
 
     "contact": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Contact details, rendered top-right on page 1. Usually lives in data/_profile.yml instead, since it is the same on every application. Setting it here merges over that file key by key: a document that sets only `rows` keeps the profile's `address`, and vice versa. `rows` itself is a list, so it replaces the profile's whole list rather than adding to it. After the merge the build needs a `rows` list (use [] for an address only).",
       "additionalProperties": false,
       "properties": {
         "address": {
-          "type": "string",
+          "type": ["string", "null"],
           "description": "Shown on its own line. Usually just 'City, State' — a street address is rarely wanted on a resume."
         },
         "rows": {
@@ -40,22 +40,21 @@
     },
 
     "meta": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Document-level settings. These reach the PDF's metadata and the layout solver, not the visible page. 'lang' and 'maxPages' normally come from data/_profile.yml; 'description' names the target role, so it belongs to this document.",
-      "required": ["description"],
       "properties": {
         "description": {
-          "type": "string",
-          "description": "One sentence, stamped into the PDF's metadata. Some applicant tracking systems read it."
+          "type": ["string", "null"],
+          "description": "One sentence, stamped into the PDF's metadata. Some applicant tracking systems read it. The build needs one: from this file, or failing that from data/_profile.yml."
         },
         "maxPages": {
-          "type": "integer",
+          "type": ["integer", "null"],
           "minimum": 1,
           "description": "The hard ceiling the layout solver works under. It will fit your content into this many pages or fail loudly — it will never silently truncate. Normally omitted here and inherited from data/_profile.yml; set it here only to override that for this one document."
         },
         "lang": {
           "type": ["string", "null"],
-          "description": "BCP 47 language tag, e.g. 'en-US'. Stamped into the PDF so screen readers pronounce it correctly. Left empty, it falls back to data/_profile.yml, then to en-US.",
+          "description": "BCP 47 language tag, e.g. 'en-US'. Stamped into the PDF so screen readers pronounce it correctly; anything that is not a tag is marked en-US, with a warning. Left empty, it falls back to data/_profile.yml, then to en-US.",
           "examples": ["en-US", "en-GB", "ru-RU"]
         }
       }
@@ -80,7 +79,12 @@
       "type": "array",
       "description": "The wide right column. Exactly one summary, one experience and one education section, in whatever order you list them.",
       "minItems": 3,
-      "items": { "$ref": "#/definitions/section" }
+      "items": { "$ref": "#/definitions/section" },
+      "allOf": [
+        { "contains": { "properties": { "type": { "const": "summary" } }, "required": ["type"] } },
+        { "contains": { "properties": { "type": { "const": "experience" } }, "required": ["type"] } },
+        { "contains": { "properties": { "type": { "const": "education" } }, "required": ["type"] } }
+      ]
     }
   },
 
@@ -103,8 +107,8 @@
           "description": "The text people see."
         },
         "href": {
-          "type": "string",
-          "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)",
+          "type": ["string", "null"],
+          "pattern": "^$|^[\\x00-\\x20\\x7f-\\xa0\\xad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890\\u0891\\u08e2\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u2066-\\u206f\\u3000\\ufeff\\ufff9-\\ufffb]*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Mm][Aa][Ii][Ll][Tt][Oo]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Tt][Ee][Ll]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])",
           "description": "What clicking it does. 'tel:+15551234567' opens the dialer, 'mailto:you@example.com' opens mail, 'https://...' opens a site. Only https:, http:, mailto: and tel: links are allowed, written in full; empty means no link.",
           "examples": ["tel:+15551234567", "mailto:you@example.com", "https://example.com"]
         }
@@ -138,14 +142,14 @@
                 "description": "Each entry is either a plain line of text, or a group heading written as 'group: Heading Text' to label the lines beneath it. A line containing ': ' must be quoted, or YAML reads it as a mapping.",
                 "items": {
                   "oneOf": [
-                    { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S", "description": "A single line in the list." },
+                    { "type": ["string", "integer"], "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]", "description": "A single line in the list." },
                     {
                       "type": "object",
                       "description": "A subheading inside the list.",
                       "required": ["group"],
                       "additionalProperties": false,
                       "properties": {
-                        "group": { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S" }
+                        "group": { "type": ["string", "integer"], "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]" }
                       }
                     }
                   ]
@@ -169,8 +173,8 @@
                   "additionalProperties": false,
                   "properties": {
                     "label": { "type": ["string", "integer"], "description": "The left-hand label. May be empty (\"\") to continue the row above." },
-                    "value": { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S", "description": "The right-hand value." },
-                    "href": { "type": "string", "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)", "description": "Optional — makes the value a link: https:, http:, mailto: or tel:, written in full." }
+                    "value": { "type": ["string", "integer"], "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]", "description": "The right-hand value." },
+                    "href": { "type": ["string", "null"], "pattern": "^$|^[\\x00-\\x20\\x7f-\\xa0\\xad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890\\u0891\\u08e2\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u2066-\\u206f\\u3000\\ufeff\\ufff9-\\ufffb]*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Mm][Aa][Ii][Ll][Tt][Oo]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Tt][Ee][Ll]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])", "description": "Optional — makes the value a link: https:, http:, mailto: or tel:, written in full." }
                   }
                 }
               }
@@ -191,7 +195,7 @@
         "heading": {
           "type": "string",
           "minLength": 1,
-          "pattern": "\\S",
+          "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
           "description": "The visible heading, e.g. 'Work Experience'. Rename it freely; the 'type' above is what the build keys off."
         }
       },
@@ -204,7 +208,7 @@
               "text": {
                 "type": ["string", "integer"],
                 "minLength": 1,
-                "pattern": "\\S",
+                "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
                 "description": "A single paragraph. Supports **bold**; any other markdown prints literally. Use a YAML folded block ('>-') so you can wrap it across lines without inserting line breaks into the output."
               }
             }
@@ -237,7 +241,7 @@
                   "required": ["title"],
                   "additionalProperties": false,
                   "properties": {
-                    "title": { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S", "description": "The qualification, e.g. 'BA in History'." },
+                    "title": { "type": ["string", "integer"], "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]", "description": "The qualification, e.g. 'BA in History'." },
                     "subtitle": { "type": ["string", "integer", "null"], "description": "Optional second line under the title — dates, honors, field of study. Omit it and the line is left out." },
                     "institution": { "type": ["string", "integer", "null"], "description": "Optional. Where you earned it." }
                   }
@@ -258,7 +262,7 @@
         "title": {
           "type": ["string", "integer"],
           "minLength": 1,
-          "pattern": "\\S",
+          "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
           "description": "Role and employer, e.g. 'Operations Lead, Acme Coffee'."
         },
         "date": {
@@ -273,16 +277,16 @@
         },
         "location": {
           "type": ["string", "integer", "null"],
-          "description": "Where the job was, e.g. 'Springfield, IL'. Omit on a gap entry."
+          "description": "Where the job was, e.g. 'Springfield, IL'. Optional; a gap entry usually has none, and prints one if it is given."
         },
         "gap": {
           "type": "boolean",
-          "description": "Set true to render this as a career-gap entry: italic title, no location, no bullets. Must be unquoted true or false — 'true' in quotes is a string, and every non-empty string counts as true."
+          "description": "Set true to render this as a career-gap entry: italic title, no bullets. Must be unquoted true or false — 'true' in quotes is a string, and every non-empty string counts as true."
         },
         "bullets": {
-          "type": "array",
-          "description": "Achievement lines. Required unless 'gap: true'; a gap entry has none. Supports **bold**; any other markdown prints literally. Lead with the result, not the responsibility. Quote a bullet that contains ': ', or YAML reads it as a mapping.",
-          "items": { "type": ["string", "integer"], "minLength": 1, "pattern": "\\S" }
+          "type": ["array", "null"],
+          "description": "Achievement lines. Required unless 'gap: true'; a gap entry has none (bullets: left empty, or [], is none). Supports **bold**; any other markdown prints literally. Lead with the result, not the responsibility. Quote a bullet that contains ': ', or YAML reads it as a mapping.",
+          "items": { "type": ["string", "integer"], "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]" }
         }
       },
       "allOf": [
@@ -295,7 +299,7 @@
           },
           "then": {
             "required": ["bullets"],
-            "properties": { "bullets": { "minItems": 1 } }
+            "properties": { "bullets": { "type": "array", "minItems": 1 } }
           }
         },
         {

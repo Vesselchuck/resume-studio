@@ -13,6 +13,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { reported } = require('./pipeline');
 const { pruneStale } = require('./_output_name');
+const distLock = require('./_dist_lock');
 const c = require('./_console');
 
 
@@ -41,6 +42,16 @@ function subprocessEnv() {
 
 
 /**
+ * An exit status as people look it up: Windows' NTSTATUS crash codes
+ * are documented in hex, so 3221225477 is also given as 0xC0000005.
+ */
+function describeStatus(status) {
+  if (status <= 255) return String(status);
+  return `${status} (0x${(status >>> 0).toString(16).toUpperCase().padStart(8, '0')})`;
+}
+
+
+/**
  * runPython for one project and interpreter.
  *
  * Runs a Python script as a subprocess, handling stdio and errors the
@@ -56,15 +67,17 @@ function subprocessEnv() {
  *     _console.err() etc. have already reached the user.
  *   • Captured stdout (which is NOT streamed) is flushed, so any
  *     in-progress success markers are not lost.
- *   • If the subprocess emitted nothing to either stream, or never ran
- *     to an exit, a fallback _console error says why it stopped.
+ *   • If the subprocess never ran to an exit (it could not be spawned,
+ *     or a signal killed it), or exited with a status the scripts never
+ *     use (a native crash), a fallback _console error says why it
+ *     stopped. One that exited 1 or 2 has already said why, on stderr.
  *   • The error is re-thrown, marked reported(), so the orchestrator
  *     decides the exit policy without printing it again.
  *
  * Returned function: runPython(scriptArgs, fallbackLabel)
  *   scriptArgs    — args after `-B`, typically [script_path, ...]
- *   fallbackLabel — error label used if the subprocess produced no
- *                   output of its own
+ *   fallbackLabel — error label used if the subprocess never ran to
+ *                   an exit, or crashed
  */
 function pythonRunner(root, python) {
   return function runPython(scriptArgs, fallbackLabel) {
@@ -86,9 +99,24 @@ function pythonRunner(root, python) {
       if (err.stdout) process.stdout.write(err.stdout);
       // A null status means the script never ran to an exit — spawn
       // failed (a bad PYTHON) or a signal killed it — so whatever it
-      // printed, it did not print why it stopped.
-      if ((!err.stdout && !err.stderr) || typeof err.status !== 'number') {
+      // printed, it did not print why it stopped. A script that exited
+      // with a status did: these scripts say why before every non-zero
+      // exit, and Python prints a traceback for anything they do not
+      // catch, all on the inherited stderr, which err.stderr never holds.
+      // Testing that (always null) printed this fallback, "Command
+      // failed: python -B …", under the script's own message whenever
+      // its stdout happened to be empty.
+      //
+      // But only 1 and 2 are statuses these scripts exit with (2: a
+      // missing dependency or input; 1: everything else, uncaught
+      // exceptions included). Anything else is the interpreter dying
+      // under them — a native crash is 3221225477 (0xC0000005) on
+      // Windows — which prints nothing, and the build failed without a
+      // word.
+      if (typeof err.status !== 'number') {
         c.err(`${fallbackLabel}: ${err.message}`);
+      } else if (err.status !== 1 && err.status !== 2) {
+        c.err(`${fallbackLabel}: exited ${describeStatus(err.status)} without saying why`);
       }
       throw reported(err);
     }
@@ -111,7 +139,8 @@ function pythonRunner(root, python) {
  * Runs after printPdfs and recordBuilt, so `keep` is what actually
  * landed on disk and the build record lists it. Only names that record
  * says a build wrote are removed (and the retired ones no build writes
- * now), never a PDF of yours that merely looks like one.
+ * now, beside a PDF a build did write), never a PDF of yours that
+ * merely looks like one.
  * _output_name.pruneStale does the deleting and is scoped there; this
  * only supplies the reporting.
  */
@@ -126,6 +155,31 @@ function pruneStaleOutputs(root, variant, keep) {
 }
 
 
+/**
+ * Take dist/'s lock for a CLI build (build/_dist_lock.js), waiting for
+ * another holder and saying so. Giving up — a holder that did not let
+ * go, a dist/.lock that can be neither created nor read, a dist/ that
+ * cannot be made — is about this computer, not a bug in the build, so
+ * it is reported as an error and its message, marked reported(). It
+ * used to reach the drivers' catch-all as "Unexpected error" and a
+ * stack trace. An error with no code is a bug, and is left to that.
+ */
+async function acquireDist(root, owner) {
+  try {
+    return await distLock.acquire(path.join(root, 'dist'), {
+      owner,
+      blocking: true,     // execFileSync steps: heartbeat from a thread
+      onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
+    });
+  } catch (err) {
+    if (typeof err.code !== 'string') throw err;
+    c.err('Could not take dist/ for this build');
+    c.detail(err.message);
+    throw reported(err);
+  }
+}
+
+
 /** data_source from a build's metadata JSON, or null if it can't be read. */
 function readDataSource(metaFile) {
   try {
@@ -137,4 +191,6 @@ function readDataSource(metaFile) {
 }
 
 
-module.exports = { subprocessEnv, pythonRunner, pruneStaleOutputs, readDataSource };
+module.exports = {
+  subprocessEnv, pythonRunner, pruneStaleOutputs, readDataSource, acquireDist, describeStatus,
+};

@@ -18,8 +18,10 @@ So the test works from your real files outward. On a machine that has
 them, it reads the values that identify you — your name, your contact
 details, where you worked and studied — and fails if any of them
 appears in a file that git would commit, including the text of the
-committed PDFs. In a clean checkout there are no real files to read,
-and it skips: there is nothing of yours to leak.
+committed PDFs, in the name of such a file, or in what the history
+publishes besides files: the author and committer of every commit, and
+every commit and tag message. In a clean checkout there are no real
+files to read, and it skips: there is nothing of yours to leak.
 
 It deliberately does NOT look for generic words that also appear in
 your data ("Summary", "Hiring Team", "Sincerely"): only values that
@@ -69,16 +71,23 @@ def _real_files():
 
 # Mirrors .gitignore: the places that are private by design. A file
 # under one of these is allowed to contain you; nothing else is.
-PRIVATE_DIRS = {"dist", "node_modules", "Claude outputs", "__pycache__",
-                ".git", "target", "gen"}
+PRIVATE_DIRS = {"dist", "node_modules", "__pycache__", ".git", "target", "gen"}
 PRIVATE_PATTERNS = (
     re.compile(r"^data/(?!(resume_default|letter_default|_profile_default)\.yml$)"),
     re.compile(r"^tests/fixtures/.*\.(mine|local)\.pdf$"),
+    re.compile(r"^tests/fixtures/\.[^/]*\.tmp$"),
     re.compile(r"^tests/fixtures/diff_.*\.png$"),
     re.compile(r"(^|/)[^/]*\.bak$"),
     re.compile(r"(^|/)[^/]*\.log$"),
     re.compile(r"^\.vscode/(?!settings\.json$)"),
 )
+# What build/snapshot_pdf.py writes a fixture through before renaming
+# it into place. Gitignored, but a process killed in between leaves one
+# behind, and for the .mine fixture it is a render of your real résumé,
+# under a name nothing cleans up: read with the committable files, so a
+# leftover that carries you is reported.
+SNAPSHOT_LEFTOVERS = "tests/fixtures/.*.tmp"
+
 # Files allowed to name you. LICENSE states who holds the copyright;
 # that is the one place a real name belongs, and it is there on purpose.
 ALLOWED = {"LICENSE"}
@@ -298,17 +307,59 @@ def _all_committable():
             yield rel, path
 
 
+def _snapshot_leftovers():
+    for path in sorted(ROOT.glob(SNAPSHOT_LEFTOVERS)):
+        if path.is_file():
+            yield path.relative_to(ROOT).as_posix(), path
+
+
 def _committable_files():
-    """Committable files that can be searched as text."""
+    """Committable files that can be searched as text, and the snapshot
+    tool's leftovers (SNAPSHOT_LEFTOVERS)."""
     for rel, path in _all_committable():
         if path.suffix.lower() not in BINARY:
             yield rel, path
+    yield from _snapshot_leftovers()
 
 
 def _committable_images():
     for rel, path in _all_committable():
         if path.suffix.lower() in IMAGES and rel not in ALLOWED:
             yield rel, path
+
+
+def _git(*args):
+    """git's output in this checkout, or None outside one."""
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True,
+                              check=True).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _history():
+    """(where, text) for what git publishes besides files: every commit's
+    author and committer and its message, on every ref, and every tag's
+    tagger and message. None outside a git checkout.
+
+    A push sends these as they are, and once pushed they stay: a name in
+    an author line or a commit message is as public as one in a file.
+    """
+    if _git("rev-parse", "--git-dir") is None:
+        return None
+    out = []
+    log = _git("log", "--all", "--format=%x1e%h%n%an%n%ae%n%cn%n%ce%n%B") or ""
+    for entry in log.split("\x1e"):
+        if entry.strip():
+            sha, _, text = entry.partition("\n")
+            out.append((f"commit {sha}", text))
+    tags = _git("for-each-ref", "refs/tags",
+                "--format=%x1e%(refname:short)%0a%(taggername)%0a%(taggeremail)%0a%(contents)") or ""
+    for entry in tags.split("\x1e"):
+        if entry.strip():
+            name, _, text = entry.partition("\n")
+            out.append((f"tag {name}", text))
+    return out
 
 
 PHONE = re.compile(r"\+?\(?\d[\d\s().-]{6,}\d")
@@ -416,8 +467,17 @@ def _ocr(tesseract, path, workdir):
     return r.stdout.decode("utf-8", "replace")
 
 
-def _text_of(path):
+def _is_pdf(path):
+    """A PDF by name or, for a snapshot leftover (.….pdf.<pid>.tmp), by
+    its first bytes."""
     if path.suffix.lower() == ".pdf":
+        return True
+    with open(path, "rb") as f:
+        return f.read(5) == b"%PDF-"
+
+
+def _text_of(path):
+    if _is_pdf(path):
         try:
             import pypdf
         except ImportError:
@@ -474,6 +534,34 @@ class TestNothingCommittableCarriesYou(unittest.TestCase):
             "Files that would be committed contain details from your real "
             "data files. Replace them with placeholders:\n  "
             + "\n  ".join(sorted(found)))
+
+    def test_no_committable_path_names_you(self):
+        """File and folder names are published too, binary files' included."""
+        if not self.needles:
+            self.skipTest("no real data files in data/ — nothing of yours to leak")
+        found = []
+        for rel, _ in _all_committable():
+            found += [f"{rel}: {n!r}" for n in _matches(rel, self.needles)]
+        self.assertEqual(
+            found, [],
+            "Files that would be committed are named after details from your "
+            "real data files. Rename them:\n  " + "\n  ".join(sorted(found)))
+
+    def test_no_commit_or_tag_carries_your_details(self):
+        """Author and committer lines, commit messages and tag messages."""
+        if not self.needles:
+            self.skipTest("no real data files in data/ — nothing of yours to leak")
+        history = _history()
+        if history is None:
+            self.skipTest("not a git checkout — there is no history to read")
+        found = []
+        for where, text in history:
+            found += [f"{where}: {n!r}" for n in _matches(text, self.needles)]
+        self.assertEqual(
+            found, [],
+            "Commits or tags carry details from your real data files. Reword "
+            "them, or fix the author with git commit --amend --reset-author, "
+            "before they are pushed:\n  " + "\n  ".join(sorted(set(found))))
 
     def test_no_committable_image_carries_your_details_in_metadata(self):
         if not self.needles:

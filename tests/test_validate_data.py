@@ -673,5 +673,217 @@ class TestSharedIdsAndEmptyHeadings(unittest.TestCase):
             "heading prints with nothing under it"])
 
 
+class TestAuditedEdges(unittest.TestCase):
+    """Shapes that crashed the validator, slipped past it into broken
+    output, or were refused although empty means not set."""
+
+    def rejects(self, d, *needles):
+        with self.assertRaises(SchemaError) as ctx:
+            validate_data(d)
+        msg = str(ctx.exception)
+        for needle in needles:
+            self.assertIn(needle, msg)
+        return msg
+
+    # ── An href a browser does not strip ──────────────────────────
+    # Chromium keeps a leading no-break space, and its HTML parser turns
+    # U+0000 into U+FFFD; either way it read the href as relative, and
+    # the PDF linked to file:///…/dist/%C2%A0…. The build strips them,
+    # says so, and renders the link without them. It used to refuse
+    # them, which rejected a file that built in 1.0.0.
+    def test_href_with_leading_invisible_characters_is_stripped(self):
+        for space in ("\u00a0", "\u3000", "\u2028", "\u2003", "\0", "\u200b",
+                      "\ufeff", "\u2060"):
+            with self.subTest(space=hex(ord(space))):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v",
+                                          "href": f"{space}https://example.com/me"}]}
+                warnings = validate_data(d)
+                self.assertEqual(d["contact"]["rows"][0]["href"],
+                                 "https://example.com/me")
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("contact.rows[0]: 'href' starts with invisible", warnings[0])
+                self.assertIn(f"U+{ord(space):04X}", warnings[0])
+                d = good_data()
+                d["sidebar"]["blocks"][0]["rows"][0]["href"] = f"{space}{space}mailto:a@b.c"
+                warnings = validate_data(d)
+                self.assertEqual(d["sidebar"]["blocks"][0]["rows"][0]["href"],
+                                 "mailto:a@b.c")
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("sidebar.blocks[0].rows[0]: 'href'", warnings[0])
+
+    def test_href_with_invisible_characters_after_it_is_stripped(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": "v",
+                                  "href": "https://example.com/me\u00a0\u200b"}]}
+        warnings = validate_data(d)
+        self.assertEqual(d["contact"]["rows"][0]["href"], "https://example.com/me")
+        self.assertIn("U+00A0, U+200B", warnings[0])
+
+    def test_href_u0000_inside_is_stripped(self):
+        d = good_data()
+        d["contact"] = {"rows": [{"value": "v", "href": "https://example.com/a\0b"}]}
+        warnings = validate_data(d)
+        self.assertEqual(d["contact"]["rows"][0]["href"], "https://example.com/ab")
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("contact.rows[0]: 'href' contains U+0000", warnings[0])
+
+    def test_href_that_browsers_strip_themselves_is_cleaned_quietly(self):
+        # U+0001 to U+0020: what the build always stripped without a word.
+        d = good_data()
+        d["contact"] = {"rows": [{"value": "v", "href": "\t https://example.com\n"}]}
+        self.assertEqual(validate_data(d), [])
+        self.assertEqual(d["contact"]["rows"][0]["href"], "https://example.com")
+
+    def test_href_with_no_scheme_once_stripped_is_still_an_error(self):
+        for href in ("\u00a0", "\u200bexample.com", "\0ht\0tps://example.com"):
+            with self.subTest(href=ascii(href)):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                self.rejects(d, "contact.rows[0]", "has no scheme")
+
+    def test_mailto_with_nothing_visible_after_it_prints_as_text(self):
+        # `mailto:\u200b` passed the allowlist and built a link to nobody.
+        for href in ("mailto:\u200b", "tel:\u00a0\u2060", "MAILTO:\0"):
+            with self.subTest(href=ascii(href)):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                warnings = validate_data(d)
+                self.assertIsNone(d["contact"]["rows"][0]["href"])
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("contact.rows[0]: 'href' has nothing visible after",
+                              warnings[0])
+
+    def test_href_with_what_a_browser_strips_still_passes(self):
+        # U+0000 to U+0020: the URL parser drops them, so the link works.
+        for href in (" https://example.com", "\thttps://example.com\n",
+                     "\x01https://example.com"):
+            with self.subTest(href=repr(href)):
+                d = good_data()
+                d["contact"] = {"rows": [{"value": "v", "href": href}]}
+                validate_data(d)  # should not raise
+
+    # ── A type that is not a string ───────────────────────────────
+    def test_block_type_as_list_or_mapping_is_a_schema_error(self):
+        for value in (["list"], {"list": 1}):
+            with self.subTest(type=value):
+                d = good_data()
+                d["sidebar"]["blocks"][1]["type"] = value
+                self.rejects(d, "sidebar.blocks[1]", "not in ['details', 'list']")
+
+    def test_section_type_as_list_or_mapping_is_a_schema_error(self):
+        for value in (["summary"], {"summary": None}):
+            with self.subTest(type=value):
+                d = good_data()
+                d["mainColumn"][0]["type"] = value
+                self.rejects(d, "mainColumn entry 1", "not in")
+
+    # ── Empty means not set ───────────────────────────────────────
+    def test_gap_entry_with_bullets_left_empty_passes(self):
+        d = good_data()
+        d["mainColumn"][1]["jobs"][1]["bullets"] = None
+        self.assertEqual(validate_data(d), [])
+
+    def test_empty_optional_header_fields_pass(self):
+        cases = {
+            "role": lambda d: d.update(role=None),
+            "contact.address": lambda d: d.update(contact={"address": None, "rows": []}),
+            "contact row href": lambda d: d.update(
+                contact={"rows": [{"value": "v", "href": None}]}),
+            "details row href": lambda d: d["sidebar"]["blocks"][0]["rows"][0]
+                .update(href=None),
+            "empty role": lambda d: d.update(role=""),
+            "empty address": lambda d: d.update(contact={"address": "", "rows": []}),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                d = good_data()
+                mutate(d)
+                self.assertEqual(validate_data(d), [])
+
+    # ── Blank text the template would print as an empty element ───
+    # Warned about, not refused: each of these built in 1.0.0, and a
+    # stricter build must not reject a file that built.
+    def test_name_with_both_parts_blank_is_warned_about(self):
+        for first, last in (("", ""), (" ", "\t"), ("\u3000", "")):
+            with self.subTest(first=first, last=last):
+                d = good_data()
+                d["name"] = {"first": first, "last": last}
+                warnings = validate_data(d)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("'name.first' and 'name.last' are both blank",
+                              warnings[0])
+
+    def test_name_with_one_part_blank_passes(self):
+        # One name is still a name: the heading, title and file name all
+        # come out right from the part that is there.
+        for first, last in (("Gaius", ""), ("", "Caesar")):
+            with self.subTest(first=first, last=last):
+                d = good_data()
+                d["name"] = {"first": first, "last": last}
+                validate_data(d)  # should not raise
+
+    def test_blank_header_and_heading_text_is_warned_about(self):
+        # A blank role, address or contact line is left out, so the header
+        # prints no empty element for it; a blank heading prints as it did.
+        cases = {
+            "role": (lambda d: d.update(role="  "), "'role' is blank",
+                     lambda d: d["role"] is None),
+            "contact.address": (lambda d: d.update(contact={"address": " ", "rows": []}),
+                                "'contact.address' is blank",
+                                lambda d: d["contact"]["address"] is None),
+            "contact row value": (lambda d: d.update(contact={"rows": [
+                                      {"value": "   ", "href": "tel:+15550100"},
+                                      {"value": "kept"}]}),
+                                  "contact.rows[0]: 'value' is blank",
+                                  lambda d: d["contact"]["rows"] == [{"value": "kept"}]),
+            "sidebar heading": (lambda d: d["sidebar"]["blocks"][1].update(heading=" "),
+                                "sidebar.blocks[1]: 'heading' is blank",
+                                lambda d: d["sidebar"]["blocks"][1]["heading"] == " "),
+        }
+        for label, (mutate, needle, rendered) in cases.items():
+            with self.subTest(case=label):
+                d = good_data()
+                mutate(d)
+                warnings = validate_data(d)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn(needle, warnings[0])
+                self.assertTrue(rendered(d), "what the build renders")
+
+    def test_empty_contact_value_and_heading_are_still_errors(self):
+        # Refused in 1.0.0 too: an empty string, not one of spaces.
+        d = good_data()
+        d["contact"] = {"rows": [{"value": ""}]}
+        self.rejects(d, "contact.rows[0]: 'value' must be a non-empty string")
+        d = good_data()
+        d["sidebar"]["blocks"][1]["heading"] = ""
+        self.rejects(d, "sidebar.blocks[1]: 'heading' must be a non-empty string")
+
+    # ── meta.lang reaches /Lang and the XMP ───────────────────────
+    def test_lang_that_is_not_a_language_tag_is_warned_about(self):
+        # A locale name (en_US.UTF-8, C) built in 1.0.0: warned about,
+        # and the documents are marked en-US rather than with it.
+        from build import resolve_lang
+        for lang in ("en\x01US", "en US", "e", "en-", "en--US", "<en>", "en-US\u00a0x",
+                     "q-private", "en-abcdefghi", "en_US.UTF-8", "C", "en\u2011US"):
+            with self.subTest(lang=ascii(lang)):
+                d = good_data()
+                d["meta"]["lang"] = lang
+                warnings = validate_data(d)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn("'meta.lang'", warnings[0])
+                self.assertIn("is not a language tag", warnings[0])
+                self.assertEqual(resolve_lang(d), "en-US")
+
+    def test_language_tags_pass(self):
+        for lang in ("en", "en-US", "EN-us", "en_GB", "zh-Hant-TW", "de-CH-1996",
+                     "sr-Latn-RS", "en-150", "en-x-gb", "x-private", "i-klingon",
+                     " en-US ", "", "  "):
+            with self.subTest(lang=lang):
+                d = good_data()
+                d["meta"]["lang"] = lang
+                validate_data(d)  # should not raise
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,13 +40,11 @@ tests/fixtures/expected_resume.mine.pdf
 tests/fixtures/expected_resume-color.mine.pdf
 tests/fixtures/expected_resume-grayscale.mine.pdf
 tests/fixtures/*.local.pdf
-
-# ─── Assistant output ───────────────────────────────────────────
-# Files an AI assistant saves into the project folder: preview
-# renders, drafts, comparisons. They are made from YOUR data — a
-# render of your letter shows your name, phone number and email — so
-# they are private for exactly the reason data/ is.
-Claude outputs/
+# What the snapshot tool writes a fixture through before it renames it
+# into place (.expected_resume.mine.pdf.<pid>.tmp). A process killed in
+# between leaves it behind, and for the .mine fixture it is a render of
+# your real resume. tests/test_anonymized.py still reads any left there.
+tests/fixtures/.*.tmp
 
 # ─── Test artifacts ─────────────────────────────────────────────
 # Diff images written when a snapshot test fails. They're useful
@@ -116,7 +114,8 @@ src-tauri/target/
 # Installers from `npm run studio:build` go to src-tauri/target/.
 src-tauri/gen/
 
-# Studio no longer writes to data/ at all, but old timestamped copies
-# may still be lying around. Covered by `data/**` and the blanket
-# `*.bak` above; kept explicit so the intent survives a tidy-up.
+# Studio writes to data/ only to keep a file you dropped, as a new file
+# it never replaces; old timestamped copies may still be lying around.
+# Covered by `data/**` and the blanket `*.bak` above; kept explicit so
+# the intent survives a tidy-up.
 data/*.yml.*.bak

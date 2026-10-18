@@ -18,10 +18,15 @@
  * It listens on 127.0.0.1 only, on an ephemeral port by default, and
  * prints the chosen URL as a framed line the Rust side reads. Every
  * request must name this server in its Host header, an Origin must be
- * its own, and POST and PUT bodies must be JSON — see checkRequest.
+ * its own, a browser's Sec-Fetch-Site must not name another site, and
+ * POST and PUT bodies must be JSON — see checkRequest. Every request
+ * but a font's must also carry this launch's token — see "The launch
+ * token" in start().
  *
  * ENDPOINTS
- *   GET  /                 the UI
+ *   GET  /?t=<token>       sets the token's cookie and redirects to /
+ *   GET  /                 the UI (without the token: a page saying
+ *                          where to open it from)
  *   GET  /api/status       engine + data-source state
  *   GET  /api/datafiles    what's in data/
  *   GET  /api/datafile     ?name= -> one file's contents
@@ -38,7 +43,7 @@
  *                          and leaves those PNGs out of the reply;
  *                          retry:true (the Re-render button) lets a Python
  *                          worker that stopped restarting start again
- *   POST /api/build        {doc, variants, snapshot, tests} -> shells out to the
+ *   POST /api/build        {doc, scale, snapshot, tests} -> shells out to the
  *                          CLI, and returns the built PDF rasterized
  *   POST /api/datasource   {source: 'default'|'mine'}
  *   POST /api/pick         {doc, name} -> read that data/ file in place
@@ -47,7 +52,8 @@
  *                          already here, else saves it under its own name;
  *                          reports a conflict rather than ever replacing
  *   POST /api/adopt-as     {doc, name, content} -> save under a chosen free name
- *   POST /api/reveal       {path} -> show it in the OS file manager
+ *   POST /api/reveal       {path} -> show dist/ or a file in it in the OS
+ *                          file manager
  *   POST /api/visibility   {hidden, client} -> a page (client: its id from
  *                          `hello`) or, without client, the desktop shell
  *                          is hidden or shown; after five minutes of the
@@ -96,6 +102,18 @@ const DIST = path.join(ROOT, 'dist');
 
 // Printed on stdout when listening, for the Tauri shell to read.
 const READY_PREFIX = '\x1eSTUDIO_READY ';
+// Printed on stdout, once, when the start fails, before or after READY:
+// this prefix and then {"error": "<message>"}. The process then exits 1.
+// After READY the window has already gone to the server's URL, so this
+// is how the shell learns that nothing will answer there.
+const STARTUP_FAILED_PREFIX = '\x1eSTUDIO_FAILED ';
+
+// Where a caller hands over the launch token (see start()): a header
+// for a program, the query parameter of the URL in the ready frame for
+// a browser, which trades it for a cookie of this name and the port.
+const TOKEN_HEADER = 'x-studio-token';
+const TOKEN_PARAM = 't';
+const TOKEN_COOKIE = 'studio';
 
 /*
  * SAVES, AND FILES CAUGHT HALF-WRITTEN
@@ -286,12 +304,23 @@ for (const doc of Object.values(DOCS)) {
 
 /**
  * The engine and the pipeline both log through _console, which writes
- * to process.stdout. Rather than give them a second logging channel to
- * keep in sync with the first, tee stdout: the terminal still sees
- * everything, and every line is also pushed to connected SSE clients.
+ * progress to process.stdout and errors, warnings and their details to
+ * process.stderr. Rather than give them a second logging channel to
+ * keep in sync with the first, tee both: the terminal still sees
+ * everything, and every line is also pushed to connected SSE clients,
+ * in the order it was written. Only stdout used to be teed, so the log
+ * the app shows had the successes and none of the failures: a Chromium
+ * that would not launch, a page timeout, a failed build's headline.
  *
  * Frames (lines starting with ASCII RS) are protocol, not log, and are
- * passed through without being broadcast.
+ * passed through without being broadcast; so is what terminalOnly()
+ * prints.
+ *
+ * The streams are the process's, so the tee is too: it is installed
+ * once, and one server runs in a process at a time (start() refuses a
+ * second while the first is up). Installed at every start(), two
+ * starts in one process sent every line to the app's log twice, and
+ * with two servers up each one's event stream carried the other's log.
  */
 const clients = new Set();
 
@@ -317,34 +346,65 @@ function broadcast(event, data) {
   }
 }
 
-function teeStdout() {
-  // Nobody may be reading stdout. Under the desktop shell it is a pipe,
-  // and if that pipe's read end goes away every subsequent write raises
-  // EPIPE — which, unhandled, is an 'error' event on the socket and
-  // takes the whole process down. A build server must not die because
-  // its log has no audience.
-  //
-  // The listener stops the throw; the try/catch stops a synchronous one.
-  // Either way the SSE clients above still get the line, which is where
-  // the log the user actually looks at comes from.
-  process.stdout.on('error', (err) => {
-    if (err && (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED')) return;
-    throw err;
-  });
+/*
+ * The launch tokens of the servers running in this process (start()
+ * adds its own). The terminal gets the Studio's link whole, token
+ * included; the app's log, which ends up in screenshots and pasted
+ * bug reports, gets it with the token cut out.
+ */
+const liveTokens = new Set();
 
-  const original = process.stdout.write.bind(process.stdout);
-  process.stdout.write = (chunk, enc, cb) => {
-    const text = typeof chunk === 'string' ? chunk : String(chunk);
-    if (!text.startsWith('\x1e')) {
-      text.split('\n').filter(l => l.trim()).forEach(line => broadcast('log', { line }));
-    }
-    try {
-      return original(chunk, enc, cb);
-    } catch (err) {
-      if (err && (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED')) return true;
+function withoutTokens(line) {
+  let out = line;
+  for (const token of liveTokens) out = out.split(token).join('…');
+  return out;
+}
+
+// Above zero while terminalOnly() is printing.
+let teeMuted = 0;
+
+/**
+ * Print a line to the terminal and not to the app's log: console.log
+ * writes synchronously, so the tee sees the line while this is set.
+ */
+function terminalOnly(line) {
+  teeMuted += 1;
+  try { console.log(line); } finally { teeMuted -= 1; }
+}
+
+let teed = false;
+function teeOutput() {
+  if (teed) return;
+  teed = true;
+  for (const stream of [process.stdout, process.stderr]) {
+    // Nobody may be reading it. Under the desktop shell stdout is a pipe,
+    // and if that pipe's read end goes away every subsequent write raises
+    // EPIPE — which, unhandled, is an 'error' event on the socket and
+    // takes the whole process down. A build server must not die because
+    // its log has no audience.
+    //
+    // The listener stops the throw; the try/catch stops a synchronous one.
+    // Either way the SSE clients above still get the line, which is where
+    // the log the user actually looks at comes from.
+    stream.on('error', (err) => {
+      if (err && (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED')) return;
       throw err;
-    }
-  };
+    });
+
+    const original = stream.write.bind(stream);
+    stream.write = (chunk, enc, cb) => {
+      const text = typeof chunk === 'string' ? chunk : String(chunk);
+      if (!teeMuted && !text.startsWith('\x1e')) {
+        text.split('\n').filter(l => l.trim()).forEach(line => broadcast('log', { line: withoutTokens(line) }));
+      }
+      try {
+        return original(chunk, enc, cb);
+      } catch (err) {
+        if (err && (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED')) return true;
+        throw err;
+      }
+    };
+  }
 }
 
 
@@ -440,8 +500,9 @@ function uiContentSecurityPolicy(html) {
  * dist/.studio-prefs.json by default. dist/ is the one folder the app
  * already writes (the PDFs, outputs.json, .lock), it is git-ignored in
  * its entirety, and it is per project, so two checkouts do not fight
- * over one file. data/ is never written: that folder is the user's, and
- * the app's promise is that it reads it and nothing more. Deleting
+ * over one file. Not data/: that folder is the user's, and the app
+ * writes there only when asked to keep a dropped file (/api/adopt,
+ * /api/adopt-as), as a new file that never replaces one. Deleting
  * dist/ resets the settings, which is the right outcome for "start
  * over".
  *
@@ -453,10 +514,11 @@ const PREFS_FILE = path.join(DIST, '.studio-prefs.json');
 // A settings PUT is a handful of keys; nothing near this is legitimate.
 const PREFS_BODY_LIMIT = 16 * 1024;
 
-// --open-dry-run: POST /api/open answers with the command it would run
-// and runs nothing. For the test suites, which start this server as a
-// child process; not a user setting, so a switch rather than an
-// environment variable that every child of a shell would inherit.
+// --open-dry-run: POST /api/open and POST /api/reveal answer with the
+// command they would run and run nothing. For the test suites, which
+// start this server as a child process; not a user setting, so a
+// switch rather than an environment variable that every child of a
+// shell would inherit.
 const OPEN_DRY_RUN = require.main === module && process.argv.slice(2).includes('--open-dry-run');
 
 const bool = v => (typeof v === 'boolean' ? v : undefined);
@@ -585,6 +647,16 @@ function vscodeUrl(file, line, col) {
 }
 
 /**
+ * explorer.exe, by its full path. Given a bare name, Node's spawn looks
+ * in the current directory before PATH, and this server's current
+ * directory is the project root: an explorer.exe there would be run
+ * instead of Windows' own.
+ */
+function explorerPath() {
+  return path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+}
+
+/**
  * The program and arguments that open `file`, and what they open it in.
  * Returned rather than run, so a test can check it on any platform.
  *
@@ -605,7 +677,7 @@ function vscodeUrl(file, line, col) {
  */
 function openCommand(file, { line = 1, col = 1, vscode = false, platform = process.platform } = {}) {
   if (platform === 'win32') {
-    const explorer = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+    const explorer = explorerPath();
     // A UNC path (\\server\share\…, \\?\…) has no drive for the link's
     // file/C:/… form: the file's own program opens it instead.
     const unc = /^[\\/]{2}/.test(file);
@@ -620,6 +692,23 @@ function openCommand(file, { line = 1, col = 1, vscode = false, platform = proce
   }
   if (platform === 'darwin') return { editor: 'default', cmd: 'open', args: [file] };
   return { editor: 'default', cmd: 'xdg-open', args: [file] };
+}
+
+/**
+ * The program and arguments that show `target` in the file manager, a
+ * file selected in its folder, or null when it cannot be handed over
+ * safely. Returned rather than run, like openCommand. `verbatim`: the
+ * Windows argument is already quoted (see POST /api/reveal).
+ */
+function revealCommand(target, { isDir = false, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    // explorer.exe splits at commas, quoted or not (see openCommand):
+    // `/select,"…\a,b.pdf"` would hand it `b.pdf"` as a second argument.
+    if (target.includes(',')) return null;
+    return { cmd: explorerPath(), args: [isDir ? `"${target}"` : `/select,"${target}"`], verbatim: true };
+  }
+  if (platform === 'darwin') return { cmd: 'open', args: isDir ? [target] : ['-R', target], verbatim: false };
+  return { cmd: 'xdg-open', args: [isDir ? target : path.dirname(target)], verbatim: false };
 }
 
 /** What an "Open" may open: the inputs' own kinds, never a program. */
@@ -681,10 +770,56 @@ function readBody(req, limitBytes = 8 * 1024 * 1024) {
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf-8');
       if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch (err) { reject(err); }
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch (err) {
+        return reject(badRequest(`the request body is not valid JSON: ${err.message}`));
+      }
+      // Every route reads named fields; `null`, a list or a bare value
+      // used to fail inside the route as a 500 TypeError.
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return reject(badRequest('the request body must be a JSON object'));
+      }
+      resolve(body);
     });
     req.on('error', reject);
   });
+}
+
+/** An error the caller made: answered 400, not 500. */
+function badRequest(message) {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+/** A file the caller named that is not there: answered 404. */
+function notFound(message) {
+  return Object.assign(new Error(message), { status: 404 });
+}
+
+// The longest file name Windows and macOS allow, in characters (Linux
+// counts 255 bytes, which a name with accented letters reaches sooner).
+// A longer one failed only when written, as a 500 carrying the data
+// folder's absolute path.
+const NAME_MAX = 255;
+
+/** A file-name field from the page: a string of at most NAME_MAX characters. */
+function nameField(value, what) {
+  if (typeof value !== 'string') throw badRequest(`${what} must be a string`);
+  if (value.length > NAME_MAX) throw badRequest(`${what} is longer than ${NAME_MAX} characters`);
+  return value;
+}
+
+/**
+ * A document id from the page, or `fallback` when none is given (absent
+ * or null). Own keys only: 'constructor' is not a document. One that is
+ * given and is not a document is a 400: it used to fall back silently,
+ * so {"doc": "nonsense"} built the resume.
+ */
+function docId(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string' && Object.prototype.hasOwnProperty.call(DOCS, value)) return value;
+  throw badRequest(`doc must be one of ${Object.keys(DOCS).join(', ')} (got ${JSON.stringify(value).slice(0, 40)})`);
 }
 
 /**
@@ -769,6 +904,9 @@ function renderEnv(id, { dataSource = null, picked = {} } = {}) {
  * same scheme, host and port, compared exactly rather than by prefix.
  * The desktop window loads http://127.0.0.1:<port>/, so it passes.
  *
+ * These checks stop web pages, not other programs, which send whatever
+ * headers they like; the launch token is what stops those (start()).
+ *
  * Returns null when allowed, or [status, message] when not.
  */
 function checkRequest(req, port, extraHosts = []) {
@@ -786,12 +924,13 @@ function checkRequest(req, port, extraHosts = []) {
     }
   }
   // Sec-Fetch-Site, when a browser sends it, says who asked. Another
-  // site (or a sibling subdomain) gets nothing, even a GET that a CORS
-  // check would let through as a "simple" request. The one exception is
-  // a top-level navigation to the page itself: that is how a link or a
-  // shell hands the window over, and it runs nothing on the server that
-  // the page's own requests are not checked for. Requests without the
-  // header (curl, the desktop shell's own loopback POST) are unaffected.
+  // site (or a sibling subdomain, or another port on 127.0.0.1, which is
+  // the same site) gets nothing, even a GET that a CORS check would let
+  // through as a "simple" request. The one exception is a top-level
+  // navigation to the page itself, which gets no further than the token
+  // exchange or the page saying where to open the Studio from (see
+  // handle in start()). Requests without the header (curl, the desktop
+  // shell's own loopback POST) are unaffected.
   const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
   if (site === 'cross-site' || site === 'same-site') {
     const pathname = String(req.url || '').split('?')[0];
@@ -808,6 +947,60 @@ function checkRequest(req, port, extraHosts = []) {
     }
   }
   return null;
+}
+
+/**
+ * Is `given` the launch token? Compared in constant time
+ * (crypto.timingSafeEqual): a comparison that stops at the first wrong
+ * character answers sooner the more of the start is right, and a
+ * program that can time its requests could work the token out a
+ * character at a time. The length is no secret (every token is 43
+ * characters), so one of another length is turned away first.
+ */
+function tokenMatches(token, given) {
+  if (typeof given !== 'string') return false;
+  const want = Buffer.from(token, 'utf8');
+  const got = Buffer.from(given, 'utf8');
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+/**
+ * Does the request carry the launch token: in TOKEN_HEADER, as a
+ * program sends it, or in this server's cookie, as a browser does.
+ */
+function carriesToken(req, token, cookieName) {
+  if (tokenMatches(token, req.headers[TOKEN_HEADER])) return true;
+  return String(req.headers.cookie || '').split(';').some((pair) => {
+    const eq = pair.indexOf('=');
+    return eq !== -1 && pair.slice(0, eq).trim() === cookieName
+      && tokenMatches(token, pair.slice(eq + 1).trim());
+  });
+}
+
+/**
+ * What a browser gets at / without the token: an address typed or
+ * bookmarked, a tab left from an earlier launch, and any load of the
+ * page that another site or another local port started, cookie or not
+ * (see "The launch token" in start()).
+ * Nothing in it comes from the server's state, and it runs no script.
+ */
+const NOT_OPENED_PAGE = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Resume Studio</title></head>
+<body>
+<p>Open Resume Studio from the app, or from the link that <code>npm run ui</code> printed in its terminal.</p>
+<p>That link carries a key that lasts as long as this run of the Studio; this address without it does not.</p>
+</body>
+</html>
+`;
+
+function notOpened(res) {
+  res.writeHead(403, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-security-policy': "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  });
+  res.end(NOT_OPENED_PAGE);
 }
 
 /**
@@ -899,10 +1092,11 @@ function previewPages(value) {
 /**
  * Resolve a client-supplied path, or null if it escapes the project.
  *
- * Separate from its caller so it can be tested directly. It is the
- * only thing standing between `POST /api/reveal` and "ask the
- * operating system to open any path on this machine", and a check
- * like that wants a test more than it wants brevity.
+ * Separate from its callers so it can be tested directly. It is the
+ * first thing standing between `POST /api/reveal` or `POST /api/open`
+ * and "ask the operating system to open any path on this machine" —
+ * each then narrows it to its own folders — and a check like that
+ * wants a test more than it wants brevity.
  *
  * path.resolve collapses `..` before the comparison, so `../../etc`
  * is rejected on its resolved form rather than by looking for the
@@ -915,6 +1109,49 @@ function resolveInsideRoot(raw) {
   const target = path.resolve(root, String(raw || '').trim());
   if (target !== root && !target.startsWith(root + path.sep)) return null;
   return target;
+}
+
+/**
+ * What /api/reveal may show: dist/ itself or something in it — the
+ * built PDFs are all the page ever asks for — and only when it exists
+ * and is still inside dist/ after every link. Returns the path to show,
+ * or null.
+ */
+function resolveRevealable(raw) {
+  const target = resolveInsideRoot(raw);
+  if (!target) return null;
+  const dist = path.resolve(DIST);
+  if (target !== dist && !target.startsWith(dist + path.sep)) return null;
+  try {
+    const real = fs.realpathSync.native(target);
+    const realDist = fs.realpathSync.native(dist);
+    if (real !== realDist && !real.startsWith(realDist + path.sep)) return null;
+  } catch {
+    return null;
+  }
+  return target;
+}
+
+/**
+ * The file a data/ path finally is, or null unless that is an existing
+ * *.yml or *.yaml file.
+ *
+ * The name's own extension is not enough on Windows: a volume that keeps
+ * 8.3 short names gives `secret.ymlx` the short name `SECRET~1.YML`,
+ * which passes /\.ya?ml$/ and opens the .ymlx file. The real path
+ * (GetFinalPathNameByHandle, behind realpathSync.native) has the long
+ * name, so the extension is checked again on it — as resolveOpenable
+ * does, and with its rule for links: one to a .yml elsewhere is fine.
+ */
+function realYamlFile(target) {
+  let real;
+  try {
+    real = fs.realpathSync.native(target);
+    if (!fs.statSync(real).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return /\.ya?ml$/i.test(real) ? real : null;
 }
 
 /**
@@ -932,6 +1169,23 @@ function resolveInsideRoot(raw) {
  */
 function isDocumentFile(name) {
   return /\.ya?ml$/i.test(name) && !name.startsWith('_');
+}
+
+/**
+ * Is this file in data/ one of the shipped templates, the only files
+ * there that git commits?
+ *
+ * The names .gitignore allowlists, one by one, and nothing else: a
+ * `notes_default.yml` or a `resume_default.yaml` is ignored like any
+ * other file of yours, and must not be badged "committed". Compared
+ * without case, because git on Windows and macOS matches the allowlist
+ * that way by default (core.ignorecase), and there `Resume_Default.yml`
+ * is committed; on Linux it is not, and calling it committed is the
+ * safe way to be wrong.
+ */
+const TEMPLATE_FILES = ['resume_default.yml', 'letter_default.yml', '_profile_default.yml'];
+function isTemplateFile(name) {
+  return TEMPLATE_FILES.includes(String(name).toLowerCase());
 }
 
 /**
@@ -972,8 +1226,10 @@ function isWatchedInput(name) {
  *   resume  build.py              needs `sidebar` and `mainColumn`
  *   letter  build_letter.py needs `letter`
  *
- * So this is not a heuristic dressed up as detection — a file that
- * satisfies one validator cannot satisfy the other.
+ * So this is not a heuristic dressed up as detection: a file with one
+ * set of keys and not the other can only be the one document. A file
+ * with both sets passes both validators, and that is exactly the case
+ * left unanswered below.
  *
  * WHY A LINE SCAN RATHER THAN A YAML PARSE
  * ----------------------------------------
@@ -991,7 +1247,10 @@ function isWatchedInput(name) {
  */
 function detectDoc(content) {
   const top = new Set();
-  for (const line of String(content).split('\n')) {
+  // A byte-order mark (Notepad's "UTF-8 with BOM") is not part of the
+  // first key: `﻿letter:` is still a top-level `letter`, as the
+  // YAML loader reads it.
+  for (const line of String(content).replace(/^﻿/, '').split('\n')) {
     const m = /^([A-Za-z_][\w-]*)\s*:/.exec(line);
     if (m) top.add(m[1]);
   }
@@ -1002,8 +1261,8 @@ function detectDoc(content) {
   if (resumeKeys.length && letterKeys.length) {
     return {
       doc: null,
-      reason: `it has both ${resumeKeys.join(' and ')} and letter — that is `
-            + `not a shape either builder accepts`,
+      reason: `it has both ${resumeKeys.join(' and ')} and letter, so it `
+            + `could be either document`,
     };
   }
   if (resumeKeys.length) {
@@ -1095,8 +1354,46 @@ function pdfInfo(p) {
 
 /* ─── The app ─────────────────────────────────────────────────── */
 
-async function start({ port = 0, host = '127.0.0.1' } = {}) {
-  teeStdout();
+/**
+ * The port to listen on, from the text of --port or STUDIO_PORT: a whole
+ * number from 0 to 65535, where 0 asks for a free one. Checked before
+ * anything starts; a bad one used to reach listen() after Python and
+ * Chromium had been launched, and they were left running.
+ */
+function parsePort(text, what) {
+  const s = String(text === undefined ? '' : text).trim();
+  if (!/^\d{1,5}$/.test(s) || Number(s) > 65535) {
+    throw new Error(`${what} must be a port number from 0 to 65535`
+      + ` (got ${text === undefined ? 'nothing' : JSON.stringify(String(text))})`);
+  }
+  return Number(s);
+}
+
+/**
+ * Start the server and its engine.
+ *
+ * `onShutdown`, when given, is called with the shutdown routine as soon
+ * as it exists — before the listener or the engine is up — so a signal
+ * or a closed parent pipe during start-up stops everything too. A start
+ * that fails stops what it started and rejects; a failure that comes
+ * while a shutdown is already under way carries `duringShutdown`, and
+ * that shutdown exits the process.
+ *
+ * One server per process (see "Log fan-out"): a second start() while
+ * one is up rejects before starting anything. A start that failed has
+ * stopped, and another may follow it.
+ */
+let serverRunning = false;
+async function start({ port = 0, host = '127.0.0.1', onShutdown = null } = {}) {
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`the port must be a whole number from 0 to 65535 (got ${String(port)})`);
+  }
+  if (serverRunning) {
+    throw new Error('a Studio server is already running in this process; its log is the process\'s output, '
+      + 'so a second one would share it');
+  }
+  serverRunning = true;
+  teeOutput();
 
   /*
    * The engine starts alongside the HTTP listener, not before it.
@@ -1226,10 +1523,10 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
    * Who is looking, for "Releasing Chromium while hidden" in engine.js.
    *
    * The engine has one switch, and it used to be thrown by whichever
-   * report came last. Any page on the server reports — including a
-   * Studio tab that another site opened with a link (that navigation is
-   * allowed; see checkRequest) and a second window of `npm run ui` — so
-   * such a tab going to the background closed Chromium under the
+   * report came last. Any page on the server reports — a second window
+   * of `npm run ui`, and before the launch token, a Studio tab that
+   * another site opened with a link (see checkRequest) — so such a tab
+   * going to the background closed Chromium under the
    * visible desktop window, and coming forward undid the shell's
    * "minimized".
    *
@@ -1264,7 +1561,15 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     return windowHidden();
   }
 
-  const ENGINELESS_ROUTES = new Set(['GET /api/prefs', 'PUT /api/prefs', 'GET /api/open', 'POST /api/open']);
+  // POST /api/visibility among them: applyVisibility hands its verdict
+  // to the engine when the engine is there. Made to wait, a report sent
+  // just after READY waited for Python and Chromium to start: hundreds
+  // of milliseconds warm, and on a slow cold start longer than the
+  // desktop shell's 5 s read timeout (main.rs, post_visibility).
+  // POST /api/shutdown too: shutdown() waits for an engine still being
+  // started and disposes of it (stopAll), so the request need not.
+  const ENGINELESS_ROUTES = new Set(['GET /api/prefs', 'PUT /api/prefs', 'GET /api/open', 'POST /api/open',
+    'POST /api/visibility', 'POST /api/shutdown']);
 
   const routes = {
     'GET /api/status': async () => ({
@@ -1308,19 +1613,21 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
             name,
             bytes: st.size,
             mtimeMs: st.mtimeMs,
-            doc: detectDoc(text).doc
-                 || 'resume',
+            // null when detectDoc will not say, as in listDataFiles: a
+            // file that matches neither document, or both, is not quietly
+            // filed under Resume.
+            doc: detectDoc(text).doc,
             // Which files leave this machine if the project is pushed.
             //
             // This used to read `name.includes('.local.')`, which was a
             // true statement about the old naming and is now false about
             // everything — the private files lost their suffix and the
             // shipped ones gained one. It has to agree with .gitignore,
-            // which is an allowlist of exactly the *_default.yml files,
-            // because the badge it feeds says "private" or "committed"
-            // and a wrong answer there is the kind that ends with a
-            // phone number on GitHub.
-            isTemplate: /_default\.ya?ml$/i.test(name),
+            // which is an allowlist of exactly the three template names
+            // (see isTemplateFile), because the badge it feeds says
+            // "private" or "committed" and a wrong answer there is the
+            // kind that ends with a phone number on GitHub.
+            isTemplate: isTemplateFile(name),
           }];
         }).sort((a, b) => b.mtimeMs - a.mtimeMs),
       };
@@ -1334,15 +1641,17 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      * read arbitrary files off the machine.
      */
     'GET /api/datafile': async (_body, url) => {
-      const name = url.searchParams.get('name') || '';
+      const name = nameField(url.searchParams.get('name') || '', 'name');
       const target = path.resolve(DATA_DIR, name);
       if (path.dirname(target) !== path.resolve(DATA_DIR) || !/\.ya?ml$/i.test(target)) {
-        throw new Error('that is not a data file');
+        throw badRequest('that is not a data file');
       }
       // CON.yml "exists" on Windows, and reading it waits on the console.
       const unportable = unreadableName(path.basename(target));
-      if (unportable) throw new Error(unportable);
-      if (!fs.existsSync(target)) throw new Error(`no such file: ${name}`);
+      if (unportable) throw badRequest(unportable);
+      if (!fs.existsSync(target)) throw notFound(`no such file: ${name}`);
+      // An 8.3 short name (SECRET~1.YML for secret.ymlx); see realYamlFile.
+      if (!realYamlFile(target)) throw badRequest('that is not a data file');
       return { name, content: fs.readFileSync(target, 'utf-8') };
     },
 
@@ -1361,7 +1670,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     },
 
     'POST /api/preview': async (body) => {
-      const id = DOCS[body.doc] ? body.doc : 'resume';
+      const id = docId(body.doc, 'resume');
       const doc = DOCS[id];
       const scale = previewScale(body.scale);
       const pages = previewPages(body.pages);
@@ -1439,7 +1748,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     },
 
     'POST /api/build': async (body) => {
-      const id = DOCS[body.doc] ? body.doc : 'resume';
+      const id = docId(body.doc, 'resume');
       const doc = DOCS[id];
 
       busy += 1;
@@ -1516,7 +1825,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
     'POST /api/datasource': async (body) => {
       if (![null, 'default', 'mine'].includes(body.source ?? null)) {
-        throw new Error("source must be 'default', 'mine' or null");
+        throw badRequest("source must be 'default', 'mine' or null");
       }
       dataSource = body.source ?? null;
       return { dataSource };
@@ -1535,23 +1844,25 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      * local/default resolution.
      */
     'POST /api/pick': async (body) => {
-      const id = DOCS[body.doc] ? body.doc : 'resume';
+      const id = docId(body.doc, 'resume');
       if (!body.name) {
         delete picked[id];
         return { doc: id, picked: null };
       }
-      const target = path.resolve(DATA_DIR, body.name);
+      const target = path.resolve(DATA_DIR, nameField(body.name, 'name'));
       if (path.dirname(target) !== path.resolve(DATA_DIR) || !/\.ya?ml$/i.test(target)) {
-        throw new Error('that is not a data file');
+        throw badRequest('that is not a data file');
       }
       const unportable = unreadableName(path.basename(target));
-      if (unportable) throw new Error(unportable);
+      if (unportable) throw badRequest(unportable);
       if (!isDocumentFile(path.basename(target))) {
-        throw new Error(
+        throw badRequest(
           `${path.basename(target)} is a shared profile, not a document — ` +
           `it is merged into every build rather than built on its own`);
       }
-      if (!fs.existsSync(target)) throw new Error(`no such file: ${body.name}`);
+      if (!fs.existsSync(target)) throw notFound(`no such file: ${body.name}`);
+      // An 8.3 short name (SECRET~1.YML for secret.ymlx); see realYamlFile.
+      if (!realYamlFile(target)) throw badRequest('that is not a data file');
       // Refuse a file that is plainly the other document.
       //
       // The inspector no longer offers letter files under the resume
@@ -1561,7 +1872,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // wrong file than being told here.
       const asked = detectDoc(fs.readFileSync(target, 'utf-8')).doc;
       if (asked && asked !== id) {
-        throw new Error(
+        throw badRequest(
           `${path.basename(target)} is a ${DOCS[asked].label.toLowerCase()}, `
           + `not a ${DOCS[id].label.toLowerCase()}`);
       }
@@ -1591,7 +1902,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      */
     'POST /api/adopt': async (body) => {
       if (typeof body.content !== 'string' || !body.content.trim()) {
-        throw new Error('no YAML content received');
+        throw badRequest('no YAML content received');
       }
 
       // Which document this is, decided by reading it.
@@ -1601,9 +1912,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // happened to drop it on, because that is what the builders will
       // do with it anyway. See detectDoc.
       const detected = detectDoc(body.content);
-      const id = detected.doc || (DOCS[body.doc] ? body.doc : null);
+      const id = detected.doc || docId(body.doc, null);
       if (!id) {
-        const err = new Error(
+        const err = badRequest(
           `could not tell whether that is a resume or a cover letter: `
           + `${detected.reason}`);
         err.ambiguous = true;
@@ -1611,27 +1922,35 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
         throw err;
       }
 
-      const base = path.basename(body.filename || 'dropped.yml');
-      if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      const base = path.basename(nameField(body.filename || 'dropped.yml', 'filename'));
+      if (!/\.ya?ml$/i.test(base)) throw badRequest('only .yml or .yaml files');
       // Before anything is written: see unportableName.
       const unportable = unportableName(base);
-      if (unportable) throw new Error(unportable);
+      if (unportable) throw badRequest(unportable);
       // The same rule /api/pick applies: an underscore name is a support
       // file (_profile.yml), merged into every build, never a document.
       if (!isDocumentFile(base)) {
-        throw new Error(`${base} starts with an underscore, which marks a shared `
+        throw badRequest(`${base} starts with an underscore, which marks a shared `
           + `profile rather than a document — rename it to open it here`);
       }
 
       const target = path.resolve(DATA_DIR, base);
       if (path.dirname(target) !== path.resolve(DATA_DIR)) {
-        throw new Error('that filename is not allowed');
+        throw badRequest('that filename is not allowed');
       }
 
       // Write first, exclusively; a taken name is the "already here" case.
       if (!writeNew(target, body.content)) {
+        // Taken by an 8.3 short name, SECRET~1.YML being secret.ymlx: not
+        // a data file to compare with, nor to read; see realYamlFile.
+        if (!realYamlFile(target)) throw badRequest('that filename is not allowed');
+        // Without a byte-order mark on either side: the page reads a
+        // dropped file with file.text(), which drops a UTF-8 BOM, and
+        // readFileSync keeps one, so a BOM-saved file dropped again
+        // was reported as a conflict with itself.
+        const noBom = s => s.replace(/^\uFEFF/, '');
         const onDisk = fs.readFileSync(target, 'utf-8');
-        if (onDisk === body.content) {
+        if (noBom(onDisk) === noBom(body.content)) {
           picked[id] = target;
           return { doc: id, detectedBy: detected.reason, saved: null,
                    existed: true, identical: true, picked: `data/${base}` };
@@ -1655,26 +1974,26 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      * what is already on disk.
      */
     'POST /api/adopt-as': async (body) => {
-      const id = DOCS[body.doc] ? body.doc : 'resume';
-      const base = path.basename(body.name || '');
-      if (!/\.ya?ml$/i.test(base)) throw new Error('only .yml or .yaml files');
+      const id = docId(body.doc, 'resume');
+      const base = path.basename(nameField(body.name || '', 'name'));
+      if (!/\.ya?ml$/i.test(base)) throw badRequest('only .yml or .yaml files');
       const unportable = unportableName(base);
-      if (unportable) throw new Error(unportable);
+      if (unportable) throw badRequest(unportable);
       if (!isDocumentFile(base)) {
-        throw new Error(`${base} starts with an underscore, which marks a shared `
+        throw badRequest(`${base} starts with an underscore, which marks a shared `
           + `profile rather than a document — choose another name`);
       }
 
       const target = path.resolve(DATA_DIR, base);
       if (path.dirname(target) !== path.resolve(DATA_DIR)) {
-        throw new Error('that filename is not allowed');
+        throw badRequest('that filename is not allowed');
       }
       if (typeof body.content !== 'string' || !body.content.trim()) {
-        throw new Error('no YAML content received');
+        throw badRequest('no YAML content received');
       }
 
       if (!writeNew(target, body.content)) {
-        throw new Error(`data/${base} already exists too`);
+        throw badRequest(`data/${base} already exists too`);
       }
       picked[id] = target;
       return { doc: id, saved: `data/${base}`, picked: `data/${base}` };
@@ -1697,8 +2016,10 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      * same-origin check are not enough on their own — a stray tab in
      * an ordinary browser is exactly the thing they are there to stop,
      * and "open any path on the machine" is too useful a primitive to
-     * leave open behind one check. So the resolved path must sit
-     * inside the project and must already exist.
+     * leave open behind one check. So the resolved path must be dist/
+     * or inside it, after every link, and must already exist
+     * (resolveRevealable): the page only ever asks for a built PDF or
+     * for dist/ itself.
      *
      * PLATFORMS
      * ---------
@@ -1715,7 +2036,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      * A double quote cannot appear in a Windows filename, so quoting
      * the path inside the token is safe here in a way it would not be
      * on a POSIX system — which is why macOS and Linux pass argv
-     * entries plainly and need no such flag.
+     * entries plainly and need no such flag. A comma can, and explorer
+     * splits at it even inside the quotes, so a path with one is refused
+     * (revealCommand). explorer.exe is run by its full path (explorerPath).
      *
      * explorer.exe exits 1 even when it succeeds, so nothing here
      * waits on or reads the exit code.
@@ -1737,36 +2060,25 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
      */
     'POST /api/reveal': async (body) => {
       const raw = String(body.path || '').trim();
-      if (!raw) throw new Error('no path given');
+      if (!raw) throw badRequest('no path given');
 
-      const target = resolveInsideRoot(raw);
-      if (!target) throw new Error('that path is outside the project');
+      const target = resolveRevealable(raw);
+      if (!target) throw badRequest('only dist/ or a file in it can be shown, once it exists');
       const root = path.resolve(ROOT);
-      if (!fs.existsSync(target)) {
-        throw new Error(`nothing at ${path.relative(root, target) || '.'}`);
-      }
-      const isDir = fs.statSync(target).isDirectory();
+      const revealed = path.relative(root, target).replace(/\\/g, '/');
+      const command = revealCommand(target, { isDir: fs.statSync(target).isDirectory() });
+      if (!command) throw badRequest(`${revealed}: a path with a comma cannot be shown from here`);
+      if (OPEN_DRY_RUN) return { revealed, command: [command.cmd, ...command.args] };
 
-      let child;
-      if (process.platform === 'win32') {
-        child = spawn('explorer.exe',
-                      [isDir ? `"${target}"` : `/select,"${target}"`],
-                      { windowsVerbatimArguments: true,
-                        detached: true, stdio: 'ignore' });
-      } else if (process.platform === 'darwin') {
-        child = spawn('open', isDir ? [target] : ['-R', target],
-                      { detached: true, stdio: 'ignore' });
-      } else {
-        child = spawn('xdg-open', [isDir ? target : path.dirname(target)],
-                      { detached: true, stdio: 'ignore' });
-      }
+      const child = spawn(command.cmd, command.args,
+        { windowsVerbatimArguments: command.verbatim, detached: true, stdio: 'ignore' });
       // Never let a missing file manager take the server down with it.
       child.on('error', (err) => {
         console.log(`  (could not open a file manager: ${err.message})`);
       });
       child.unref();
 
-      return { revealed: path.relative(root, target).replace(/\\/g, '/') || '.' };
+      return { revealed };
     },
 
     /**
@@ -1787,15 +2099,15 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
     'POST /api/open': async (body) => {
       const raw = String(body.path || '').trim();
-      if (!raw) throw new Error('no path given');
+      if (!raw) throw badRequest('no path given');
       const target = resolveOpenable(raw);
-      if (!target) throw new Error('only an existing .yml, .yaml or .scss file in data/ or styles/ can be opened');
+      if (!target) throw badRequest('only an existing .yml, .yaml or .scss file in data/ or styles/ can be opened');
       const whole = (v) => (Number.isInteger(v) && v >= 1 && v <= 1e7 ? v : 1);
       const command = openCommand(target, {
         line: whole(body.line), col: whole(body.col), vscode: await hasVscodeHandler(),
       });
       const opened = path.relative(path.resolve(ROOT), resolveInsideRoot(raw)).replace(/\\/g, '/');
-      if (!command) throw new Error(`${opened}: a path with a comma cannot be opened from here; open it from your editor`);
+      if (!command) throw badRequest(`${opened}: a path with a comma cannot be opened from here; open it from your editor`);
       if (OPEN_DRY_RUN) {
         return { opened, editor: command.editor, command: [command.cmd, ...command.args] };
       }
@@ -1812,7 +2124,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
 
     'PUT /api/prefs': async (body) => {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new Error('send the settings as a JSON object');
+        throw badRequest('send the settings as a JSON object');
       }
       const ignored = Object.keys(body).filter(k => !(k in sanitizePrefs(body)));
       return { prefs: writePrefs(body), ignored };
@@ -1935,6 +2247,52 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
   // Set once listening; every request is checked against it.
   let listeningPort = null;
 
+  /*
+   * THE LAUNCH TOKEN
+   * ----------------
+   * checkRequest stops web pages, but any program on this computer can
+   * reach 127.0.0.1, under this account or another Windows account, and
+   * send the headers a page would. So every request but a font's must
+   * also carry this token: 32 random bytes, made afresh at every start
+   * and never written to a file. It leaves the process on stdout only —
+   * a pipe only the desktop shell reads, or the terminal of whoever ran
+   * `npm run ui` — in the ready frame and the line saying where the
+   * Studio is, and on the command line of --open's opener; from there:
+   *
+   *   - The shell sends it in TOKEN_HEADER with its own report
+   *     (main.rs, post_visibility).
+   *   - The window, or a browser, opens the URL in the frame, which ends
+   *     in ?t=<token>. That request gets a cookie holding the token and
+   *     a redirect to /, so the token is not left in the address bar
+   *     (checked in Chromium); the page and its requests then carry the
+   *     cookie. A wrong ?t= never sets one, and with this launch's
+   *     cookie already there it is ignored rather than refused.
+   *
+   * The cookie is HttpOnly, so no script reads it, and SameSite=Strict,
+   * which keeps it from requests another *site* starts. That is less
+   * than it sounds: a site is the scheme and host, and the port is no
+   * part of it, so every server on 127.0.0.1 is the same site as this
+   * one. Checked in Chromium, a link from a page on another local port
+   * brought the cookie and opened the whole Studio. So a page load that
+   * the browser says another site or another local port started
+   * (Sec-Fetch-Site same-site or cross-site) gets NOT_OPENED_PAGE,
+   * cookie or not. The window's own loads are not that: the shell's
+   * navigate is the browser's own navigation, like typing an address,
+   * and Chromium sends `none` for it, for the redirect after it and for
+   * a reload; a reload from the page's script is `same-origin`. Its
+   * name has the port in it:
+   * cookies are kept per host, not per port, and two `npm run ui` in one
+   * browser otherwise replaced each other's, and the older tab lost the
+   * Studio. It lasts as long as the browser session; a new launch has
+   * a new token, so a cookie from an earlier one is refused.
+   *
+   * Fonts stay open: they are the repository's own files, and the page
+   * a browser gets without the token (NOT_OPENED_PAGE) needs none.
+   */
+  const token = crypto.randomBytes(32).toString('base64url');
+  liveTokens.add(token);
+  const tokenCookie = () => `${TOKEN_COOKIE}-${listeningPort}`;
+
   async function handle(req, res) {
     // Same server, same page only — see checkRequest. The Host check
     // comes first and applies to every request, the UI page included,
@@ -1948,6 +2306,39 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
     // URL throws on a malformed one. Only the path and query are used.
     const url = new URL(req.url, 'http://127.0.0.1');
     const key = `${req.method} ${url.pathname}`;
+
+    // GET, and HEAD for a client that asks first (Node sends HEAD the
+    // headers alone). Any other method is not a page load, and falls
+    // through to the route table's 404 rather than being handed the UI.
+    const reading = req.method === 'GET' || req.method === 'HEAD';
+    const pageRequest = reading && (url.pathname === '/' || url.pathname === '/index.html');
+    // The UI's own typefaces (fonts/variable/*.woff2). The pattern admits
+    // a file name only: no separators beyond the one folder, so no way
+    // out of fonts/. A device name (CON.woff2) is not a font either; see
+    // unportableName.
+    const fontRequest = reading && /^\/fonts\/variable\/[A-Za-z0-9_-]+\.woff2$/.test(url.pathname)
+      && !unportableName(path.basename(url.pathname));
+
+    // The token, from the ready frame's URL, for a cookie. See above. A
+    // wrong one sets nothing and falls through to the cookie check: an
+    // old link opened again where this launch's cookie is already held.
+    if (pageRequest && tokenMatches(token, url.searchParams.get(TOKEN_PARAM))) {
+      res.writeHead(303, {
+        location: '/',
+        'set-cookie': `${tokenCookie()}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+        'cache-control': 'no-store',
+      });
+      return res.end();
+    }
+    // A page load another site or another local port started gets no
+    // further, whatever cookie it brings. See above.
+    const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+    if (pageRequest && (site === 'same-site' || site === 'cross-site')) return notOpened(res);
+    // Without it: the page says where to open the Studio from, and
+    // everything else gets a 403 that says nothing about why.
+    if (!fontRequest && !carriesToken(req, token, tokenCookie())) {
+      return pageRequest ? notOpened(res) : json(res, 403, { error: 'forbidden' });
+    }
 
     if (key === 'GET /api/events') {
       res.writeHead(200, {
@@ -1971,12 +2362,7 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       return;
     }
 
-    // GET, and HEAD for a client that asks first (Node sends HEAD the
-    // headers alone). Any other method is not a page load, and falls
-    // through to the route table's 404 rather than being handed the UI.
-    const reading = req.method === 'GET' || req.method === 'HEAD';
-
-    if (reading && (url.pathname === '/' || url.pathname === '/index.html')) {
+    if (pageRequest) {
       const file = path.join(UI_DIR, 'index.html');
       if (!fs.existsSync(file)) {
         return json(res, 500, { error: `UI missing at ${path.relative(ROOT, file)}` });
@@ -1988,21 +2374,21 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       // served. Nothing in the app reads it; it is how a test can show
       // that the page does not wait for the engine without timing two
       // requests against each other and hoping the machine cooperates.
+      // Cross-Origin-Opener-Policy: a site that opens the Studio in a
+      // new window (window.open, or a link it targets) is cut off from
+      // it, rather than keeping a handle it can navigate or message.
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         'x-studio-engine': engine ? 'ready' : 'starting',
         'content-security-policy': csp,
+        'cross-origin-opener-policy': 'same-origin',
       });
       return res.end(html);
     }
 
-    // The UI's own typefaces (fonts/variable/*.woff2), so the page needs
-    // nothing from the network. The pattern admits a file name only: no
-    // separators beyond the one folder, so no way out of fonts/.
-    // A device name (CON.woff2) is not a font either; see unportableName.
-    if (reading && /^\/fonts\/variable\/[A-Za-z0-9_-]+\.woff2$/.test(url.pathname)
-        && !unportableName(path.basename(url.pathname))) {
+    // The UI's own typefaces, so the page needs nothing from the network.
+    if (fontRequest) {
       const file = path.join(ROOT, url.pathname);
       let data;
       try {
@@ -2033,7 +2419,9 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
       const result = await handler(body, url);
       json(res, 200, result);
     } catch (err) {
-      json(res, err.status === 413 ? 413 : 500, {
+      // 400, 404 and 413 are the caller's mistake (badRequest, notFound,
+      // readBody); anything else is this server's.
+      json(res, [400, 404, 413].includes(err.status) ? err.status : 500, {
         error: err.message,
         kind: err.kind || 'failed',
         failures: err.failures || undefined,
@@ -2072,101 +2460,189 @@ async function start({ port = 0, host = '127.0.0.1' } = {}) {
    * a worker mid-render), exiting late is better than not exiting.
    */
   let shuttingDown = false;
-  async function shutdown(reason) {
-    if (shuttingDown) return;
-    shuttingDown = true;
+  // Everything start() set going, stopped: the watchers, the event
+  // streams, the listener, and the engine once it is done starting.
+  async function stopAll() {
     clearInterval(pollTimer);
     clearTimeout(watchTimer);
     for (const w of watchers) { try { w.close(); } catch { /* already closed */ } }
     for (const res of clients) { try { res.end(); } catch { /* already gone */ } }
     try { server.close(); } catch { /* not listening */ }
-    const forced = setTimeout(() => process.exit(0), 5000);
-    forced.unref();
     // A shutdown during startup: wait for the engine it is disposing of,
     // so a Chromium or a worker that is still being born is not orphaned.
     try { await engineReady; } catch { /* never started; nothing to dispose */ }
     try { if (engine) await engine.dispose(); } catch { /* best effort */ }
+    liveTokens.delete(token);
+    serverRunning = false;
+  }
+  async function shutdown(reason) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const forced = setTimeout(() => process.exit(0), 5000);
+    forced.unref();
+    await stopAll();
     clearTimeout(forced);
     process.exit(0);
   }
+  // Before the first await: from here on a signal, or the parent's pipe
+  // closing, can stop what has already been launched.
+  if (onShutdown) onShutdown(shutdown);
 
-  await new Promise((resolve) => server.listen(port, host, resolve));
-  const actualPort = server.address().port;
-  listeningPort = actualPort;
-  const url = `http://${host}:${actualPort}/`;
-
-  // Framed so the Tauri shell can find it without parsing log text.
-  // Printed before the engine is up on purpose — see engineReady above.
-  process.stdout.write(`${READY_PREFIX}${JSON.stringify({ url, port: actualPort })}\n`);
-
-  // The engine is still the thing this server exists to drive: if it
-  // cannot start, this is a failed start, exactly as it was when the
-  // listener came up second.
   try {
+    await new Promise((resolve, reject) => {
+      // A port already taken arrives as an 'error' event, not a throw;
+      // with no listener it was an uncaught exception and a stack trace.
+      const failed = (err) => {
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`${host}:${port} is already in use; choose another port with `
+            + '--port or STUDIO_PORT, or 0 for any free one'));
+        } else if (err.code === 'EACCES') {
+          reject(new Error(`not allowed to listen on ${host}:${port}`));
+        } else {
+          reject(err);
+        }
+      };
+      server.once('error', failed);
+      server.listen(port, host, () => {
+        server.off('error', failed);
+        resolve();
+      });
+    });
+    const actualPort = server.address().port;
+    listeningPort = actualPort;
+    // What a browser opens: it trades the token for a cookie (see "The
+    // launch token" above).
+    const url = `http://${host}:${actualPort}/?${TOKEN_PARAM}=${token}`;
+
+    // Framed so the Tauri shell can find it without parsing log text.
+    // Printed before the engine is up on purpose — see engineReady above.
+    // The token is there on its own as well, for a caller that sends it
+    // in TOKEN_HEADER, so none has to take it out of the URL.
+    process.stdout.write(`${READY_PREFIX}${JSON.stringify({ url, port: actualPort, token })}\n`);
+
+    // The engine is still the thing this server exists to drive: if it
+    // cannot start, this is a failed start, exactly as it was when the
+    // listener came up second.
     await engineReady;
+
+    return { server, engine, url, port: actualPort, token, shutdown };
   } catch (err) {
-    try { server.close(); } catch { /* not listening */ }
+    if (shuttingDown) {
+      err.duringShutdown = true;
+      throw err;
+    }
+    // A failed start stops what it started, Python and Chromium
+    // included: they used to be left running, and Node with them. Not
+    // for longer than the shutdown's own backstop.
+    shuttingDown = true;
+    await Promise.race([stopAll(), new Promise(resolve => setTimeout(resolve, 5000).unref())]);
     throw err;
   }
-
-  return { server, engine, url, port: actualPort, shutdown };
 }
 
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
-  const portArg = argv.indexOf('--port');
-  const port = portArg !== -1 ? Number(argv[portArg + 1]) : Number(process.env.STUDIO_PORT || 0);
 
-  start({ port, }).then(({ url, shutdown }) => {
-    /**
-     * --exit-with-parent: stop when stdin closes.
-     *
-     * The desktop shell holds this process's stdin open as a pipe. If
-     * the shell is killed in a way that skips its own cleanup (a force
-     * quit, a crash, a terminated session), the pipe closes and this
-     * fires. Without it, a warm Chromium and a Python worker are left
-     * running with no window attached to them.
-     *
-     * Wired here rather than before start() so it can call the real
-     * shutdown routine — an earlier version exited the process directly
-     * and leaked the worker every time.
-     */
-    if (argv.includes('--exit-with-parent')) {
-      process.stdin.resume();
-      process.stdin.on('end', () => shutdown('parent-exit'));
-      process.stdin.on('close', () => shutdown('parent-exit'));
-    }
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    // The terminal closing (SIGHUP) or Ctrl-Break in a Windows console
-    // (SIGBREAK) would otherwise end Node without the shutdown routine,
-    // leaving Chromium and the Python worker behind.
-    process.on('SIGHUP', () => shutdown('SIGHUP'));
-    if (process.platform === 'win32') process.on('SIGBREAK', () => shutdown('SIGBREAK'));
-
-    console.log(`Resume Studio → ${url}`);
-    // Where the compiled-code cache lives, said once: it is outside the
-    // project by design and a user who wants to clear it should not have
-    // to read the source to find it.
-    const cacheLine = compileCache.describe();
-    if (cacheLine) console.log(`  ${cacheLine}`);
-    if (argv.includes('--open')) {
-      const opener = process.platform === 'win32' ? 'explorer'
-        : process.platform === 'darwin' ? 'open' : 'xdg-open';
-      try {
-        require('child_process').spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
-      } catch { /* the URL is printed above either way */ }
-    }
-  }).catch((err) => {
-    console.error(`Studio failed to start: ${err.message}`);
+  /*
+   * A start that fails says so twice and exits 1: in words on stderr,
+   * and on stdout as one STARTUP_FAILED_PREFIX frame for the desktop
+   * shell, which may already have shown the server's URL (READY comes
+   * before the engine is up). The exit is explicit: a Chromium launched
+   * by an engine that then failed to start can keep Node's event loop
+   * alive, and Playwright closes it on the way out.
+   */
+  const failStart = (err) => {
+    // That shutdown exits the process itself.
+    if (err && err.duringShutdown) return;
+    const message = err && err.message ? err.message : String(err);
+    console.error(`Studio failed to start: ${message}`);
     process.exitCode = 1;
-  });
+    process.stdout.write(`${STARTUP_FAILED_PREFIX}${JSON.stringify({ error: message })}\n`,
+      () => process.exit());
+    // A write that never completes (nobody reading the pipe) must not
+    // keep the process here.
+    setTimeout(() => process.exit(), 2000).unref();
+  };
+
+  let port = null;
+  try {
+    const portArg = argv.indexOf('--port');
+    port = portArg !== -1
+      ? parsePort(argv[portArg + 1], '--port')
+      : parsePort(process.env.STUDIO_PORT || '0', 'STUDIO_PORT');
+  } catch (err) {
+    failStart(err);
+  }
+
+  if (port !== null) {
+    start({
+      port,
+      onShutdown: (shutdown) => {
+        /**
+         * --exit-with-parent: stop when stdin closes.
+         *
+         * The desktop shell holds this process's stdin open as a pipe. If
+         * the shell is killed in a way that skips its own cleanup (a force
+         * quit, a crash, a terminated session), the pipe closes and this
+         * fires. Without it, a warm Chromium and a Python worker are left
+         * running with no window attached to them.
+         *
+         * Wired through start()'s onShutdown so it can call the real
+         * shutdown routine — an earlier version exited the process
+         * directly and leaked the worker every time — and as soon as
+         * that routine exists, before the engine is up: wired once start()
+         * had returned, a shell that went away during start-up, or a
+         * Ctrl-C then, left Python and Chromium running.
+         */
+        if (argv.includes('--exit-with-parent')) {
+          process.stdin.resume();
+          process.stdin.on('end', () => shutdown('parent-exit'));
+          process.stdin.on('close', () => shutdown('parent-exit'));
+        }
+        process.on('SIGINT', () => shutdown('SIGINT'));
+        process.on('SIGTERM', () => shutdown('SIGTERM'));
+        // The terminal closing (SIGHUP) or Ctrl-Break in a Windows console
+        // (SIGBREAK) would otherwise end Node without the shutdown routine,
+        // leaving Chromium and the Python worker behind.
+        process.on('SIGHUP', () => shutdown('SIGHUP'));
+        if (process.platform === 'win32') process.on('SIGBREAK', () => shutdown('SIGBREAK'));
+      },
+    }).then(({ url }) => {
+      // With the token: this terminal is the user's own, and the link is
+      // how a browser of theirs gets into the Studio. The app's log
+      // shows it without the token (withoutTokens).
+      console.log(`Resume Studio → ${url}`);
+      // Where the compiled-code cache lives, said once: it is outside the
+      // project by design and a user who wants to clear it should not have
+      // to read the source to find it. The terminal only: the path is
+      // under the user's home folder, and the app's log, which ends up
+      // in screenshots and pasted bug reports, already has its first
+      // clients by now (the page connects while the engine starts).
+      const cacheLine = compileCache.describe();
+      if (cacheLine) terminalOnly(`  ${cacheLine}`);
+      if (argv.includes('--open')) {
+        // explorer.exe by its full path, as everywhere else (explorerPath).
+        // The URL, token included, is on the opener's command line, and
+        // so on the browser's if this starts it. Windows shows a command
+        // line only to its own account and administrators; Linux and
+        // macOS usually show it to every account (SECURITY.md).
+        const opener = process.platform === 'win32' ? explorerPath()
+          : process.platform === 'darwin' ? 'open' : 'xdg-open';
+        try {
+          require('child_process').spawn(opener, [url], { detached: true, stdio: 'ignore' })
+            .on('error', () => { /* the URL is printed above either way */ })
+            .unref();
+        } catch { /* the URL is printed above either way */ }
+      }
+    }).catch(failStart);
+  }
 }
 
-module.exports = { start, DOCS, READY_PREFIX, detectDoc, isDocumentFile,
+module.exports = { start, DOCS, READY_PREFIX, STARTUP_FAILED_PREFIX, parsePort, detectDoc, isDocumentFile,
+                   isTemplateFile, revealCommand, resolveRevealable, realYamlFile, explorerPath,
                    listDataFiles, resolveInsideRoot, uiContentSecurityPolicy, SECURITY_HEADERS, dataFileInfo, renderEnv,
-                   checkRequest, writeNew, looksHalfWritten, retryIfHalfWritten,
+                   checkRequest, tokenMatches, TOKEN_HEADER, writeNew, looksHalfWritten, retryIfHalfWritten,
                    unportableName, unreadableName, previewScale, previewPages, isWatchedInput,
                    sanitizePrefs, readPrefs, writePrefs, pageWithPrefs, PREFS_FILE,
                    openCommand, vscodeUrl, resolveOpenable,

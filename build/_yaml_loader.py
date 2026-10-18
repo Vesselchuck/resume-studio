@@ -95,6 +95,7 @@ otherwise mark a gap entry while appearing to say the opposite.
 from __future__ import annotations
 
 import re
+import types
 
 import yaml
 
@@ -157,16 +158,34 @@ class ResumeLoader(_BaseLoader):
                 except TypeError:           # unhashable; let PyYAML report it
                     continue
                 if first is not None:
+                    # `1:` and `true:` are two spellings but one key once
+                    # read (True == 1 in Python), and the mapping can hold
+                    # only one of them, so they are refused like any other
+                    # pair — with both spellings named, since the message
+                    # would otherwise call `1:` a duplicate of itself.
+                    first_mark, first_key = first
+                    what = (f"duplicate key {key!r}" if type(first_key) is type(key)
+                            else f"key {key!r}, which is read as the same key "
+                                 f"as {first_key!r}")
                     raise yaml.constructor.ConstructorError(
                         "while constructing a mapping", node.start_mark,
-                        f"found duplicate key {key!r} (first set on line "
-                        f"{first.line + 1}). YAML would keep only the "
-                        f"second one and silently drop the first — "
+                        f"found {what} (first set on line "
+                        f"{self._editor_line(first_mark)}). YAML would keep "
+                        f"only the second one and silently drop the first — "
                         f"merge the two into one {key!r}, or delete one",
                         key_node.start_mark,
                     )
-                seen[key] = key_node.start_mark
+                seen[key] = (key_node.start_mark, key)
         return super().construct_mapping(node, deep=deep)
+
+    #: The text being parsed, when load() was given a string; see load().
+    source_text = None
+
+    def _editor_line(self, mark):
+        """mark's 1-based line as an editor counts it (see editor_position)."""
+        if self.source_text is None:
+            return mark.line + 1
+        return editor_position(self.source_text, mark)[0]
 
 
 def _construct_core_int(loader, node):
@@ -232,7 +251,26 @@ def _rebuild_resolvers():
 _rebuild_resolvers()
 
 
-def load(stream):
+def editor_position(text, mark):
+    """
+    (line, column), 1-based, as an editor counts them, for a YAML mark.
+
+    YAML counts U+0085, U+2028 and U+2029 as line breaks, and editors do
+    not (VS Code, Notepad: CR, LF, CRLF only), so mark.line was one too
+    far down for every one of them above the error — and text pasted
+    from a word processor carries U+2028. Columns are UTF-16 units, as
+    in an editor's goto-line, so an emoji earlier on the line does not
+    shift them. mark.index counts code points after any BOM (libyaml)
+    or including it (the pure-Python reader); stripping the BOM from
+    `text` before composing makes both agree.
+    """
+    head = text[:mark.index]
+    breaks = list(re.finditer(r"\r\n|\r|\n", head))
+    start = breaks[-1].end() if breaks else 0
+    return len(breaks) + 1, len(head[start:].encode("utf-16-le")) // 2 + 1
+
+
+def load(stream, name=None):
     """
     Parse one YAML document. The project's only entry point for that.
 
@@ -240,8 +278,68 @@ def load(stream):
     returns whatever the document contains — callers check that they
     got a mapping, because "the file is empty" and "the file is a list"
     deserve their own error messages rather than an AttributeError.
+
+    `name` is what an error says the text came from, normally the file's
+    path; without it PyYAML says `in "<unicode string>"`. Given a string,
+    an error's line and column are also the ones an editor shows (see
+    editor_position), not YAML's own count; for a character YAML cannot
+    hold, they replace the offset PyYAML gives (see ReaderError).
     """
-    return yaml.load(stream, Loader=ResumeLoader)
+    text = None
+    if isinstance(stream, str):
+        # A leading BOM is not content (YAML skips it), and dropping it
+        # here makes libyaml's marks and the pure-Python reader's count
+        # the same text. See editor_position.
+        stream = text = stream[1:] if stream.startswith("\ufeff") else stream
+    loader = ResumeLoader(stream)
+    loader.source_text = text
+    try:
+        return loader.get_single_data()
+    except yaml.MarkedYAMLError as e:
+        # Replaced rather than edited: libyaml's marks are read-only.
+        for attr in ("context_mark", "problem_mark"):
+            mark = getattr(e, attr)
+            if mark is None:
+                continue
+            line, column = mark.line, mark.column
+            if text is not None and mark.index is not None:
+                line, column = (n - 1 for n in editor_position(text, mark))
+            setattr(e, attr, yaml.error.Mark(
+                mark.name if name is None else name, mark.index, line, column,
+                getattr(mark, "buffer", None), getattr(mark, "pointer", None)))
+        raise
+    except yaml.reader.ReaderError as e:
+        if name is not None:
+            e.name = name
+        if text is None or e.position is None or isinstance(e.character, bytes):
+            raise
+        # A control character. PyYAML gives only an offset into the text,
+        # and libyaml counts it in UTF-8 bytes, so each accented letter
+        # or emoji before it moved it further from anything an editor
+        # shows. Bytes → characters → the editor's line and column.
+        index = e.position
+        if USING_LIBYAML:
+            index = len(text.encode("utf-8", "surrogatepass")[:index]
+                        .decode("utf-8", "ignore"))
+        line, column = editor_position(text, types.SimpleNamespace(index=index))
+        raise ReaderError(e, line, column) from None
+    finally:
+        loader.dispose()
+
+
+class ReaderError(yaml.reader.ReaderError):
+    """A character YAML cannot hold, placed at the line and column an
+    editor shows (see load) rather than at PyYAML's offset."""
+
+    def __init__(self, error, line, column):
+        super().__init__(error.name, error.position, error.character,
+                         error.encoding, error.reason)
+        self.line, self.column = line, column
+
+    def __str__(self):
+        return (f"unacceptable character #x{self.character:04x}: "
+                f"{self.reason}\n  in \"{self.name}\", line {self.line}, "
+                f"column {self.column}")
 
 
 def compose(text):

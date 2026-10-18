@@ -58,16 +58,13 @@ class TestConsoleOnALegacyCodePage(unittest.TestCase):
         self.assertIn(b"OK", result.stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestColorEnvMatchesNode(unittest.TestCase):
     """_color_enabled follows the same NO_COLOR / FORCE_COLOR rules as
     colorEnabled() in build/_console.js, so one setting means the same
     thing to every step of a build."""
 
-    def color(self, **env):
+    def color(self, tty=False, **env):
         sys.path.insert(0, str(ROOT / "build"))
         import _console
         saved = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
@@ -76,10 +73,10 @@ class TestColorEnvMatchesNode(unittest.TestCase):
                 os.environ.pop(k, None)
             os.environ.update(env)
 
-            class NotATty:
+            class Stream:
                 def isatty(self):
-                    return False
-            return _console._color_enabled(NotATty())
+                    return tty
+            return _console._color_enabled(Stream())
         finally:
             for k, v in saved.items():
                 if v is None:
@@ -91,6 +88,11 @@ class TestColorEnvMatchesNode(unittest.TestCase):
         self.assertFalse(self.color(FORCE_COLOR="0"))
         self.assertFalse(self.color(FORCE_COLOR=" False "))
 
+    def test_force_color_zero_is_off_even_on_a_tty(self):
+        self.assertTrue(self.color(tty=True))
+        self.assertFalse(self.color(tty=True, FORCE_COLOR="0"))
+        self.assertFalse(self.color(tty=True, FORCE_COLOR="false"))
+
     def test_force_color_on_values(self):
         for v in ("", "1", "2", "3", "true"):
             with self.subTest(v=v):
@@ -101,3 +103,7 @@ class TestColorEnvMatchesNode(unittest.TestCase):
 
     def test_no_color_wins(self):
         self.assertFalse(self.color(NO_COLOR="1", FORCE_COLOR="1"))
+
+
+if __name__ == "__main__":
+    unittest.main()

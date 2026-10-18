@@ -36,14 +36,14 @@
  * ------------------
  * The two drivers reach Python differently — the CLI spawns
  * `python -B build/build.py --mode=…` per call, the engine sends a
- * request to a warm worker — so the caller injects an adapter with two
+ * request to a warm worker — so the caller injects an adapter with three
  * named operations rather than a generic "run this command" function:
  *
  *     python.buildHtml(mode)                       -> void | Promise
  *     python.buildLetter()                         -> void | Promise
  *     python.cropPdf({input, output, meta, quiet}) -> void | Promise
  *
- * Both are awaited, so an adapter may be synchronous (the CLI's
+ * All are awaited, so an adapter may be synchronous (the CLI's
  * execFileSync) or asynchronous (the engine's request/response to a
  * warm worker) without the phases caring which.
  *
@@ -87,13 +87,26 @@ function reported(err) {
   return err;
 }
 
+/**
+ * Mark `err` as a layout check's verdict on the document (`kind:
+ * 'layout'`): the page was checked and does not pass, as opposed to the
+ * check being unable to run. The CLI fails on either. The engine's live
+ * preview shows a verdict with the render ("Layout check failed") and
+ * fails the render on anything else, so a closed page or a broken
+ * check is never presented, or remembered, as a fact about the layout.
+ */
+function layoutVerdict(err) {
+  err.kind = 'layout';
+  return err;
+}
+
 
 /**
  * Build the phase set for one project root.
  *
  * @param {object}   opts
  * @param {string}   opts.root   — project root (the directory holding package.json)
- * @param {object}   opts.python — adapter: { buildHtml(mode), cropPdf({...}) }
+ * @param {object}   opts.python — adapter: { buildHtml(mode), buildLetter(), cropPdf({...}) }
  * @param {string}   opts.variant — 'resume' (default) or 'letter'; selects
  *   the document's paths and which build phase applies.
  * @param {string}   opts.navWait — how openDocument() decides the page is
@@ -479,11 +492,15 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
   }
 
   /**
-   * Phases 6-7: Reload the final HTML and check layout invariants.
+   * Phases 6-7: Reload the final HTML and check layout invariants:
+   * page count, divider, rhythm, vertical and horizontal overflow, and
+   * content conservation (check_layout.js lists them).
    *
-   * Throws on invariant violation. The `Layout invariants: clean (N
-   * pages)` success line uses the solver's expected page count for the
-   * value text; on failure, prints actionable likely-causes.
+   * Throws on invariant violation, marked with layoutVerdict() so a
+   * caller can tell it from the check failing to run. The `Layout
+   * invariants: clean (N pages)` success line uses the solver's expected
+   * page count for the value text; on failure, prints actionable
+   * likely-causes.
    *
    * Honors DEBUG_MEASUREMENTS=1 for a per-page rendered-height dump
    * (useful when invariants fire and you want to compare against what
@@ -492,7 +509,8 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
   // Set by each clean verifyInvariants; read through the `lastFill` getter.
   let lastFill = null;
 
-  async function verifyInvariants(page, expectedPageCount, navOptions = {}, { loaded: already = null } = {}) {
+  async function verifyInvariants(page, expectedPageCount, navOptions = {},
+    { loaded: already = null, measurements = null } = {}) {
     lastFill = null;
     // Reload the page so the invariant check runs against the FINAL
     // HTML (not the measurement HTML still loaded from phase 3).
@@ -504,7 +522,10 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
     // on the page that is about to be printed.
     const loaded = already || await openDocument(page, navOptions);
 
-    const result = await checkLayoutInvariants(page, { expectedPageCount });
+    // `measurements` (phase 3's, which the solver placed) lets the check
+    // count what the source holds, not only what the HTML repeats; see
+    // invariant 5 in check_layout.js. Without them it checks the HTML alone.
+    const result = await checkLayoutInvariants(page, { expectedPageCount, measurements });
 
     if (process.env.DEBUG_MEASUREMENTS === '1') {
       await dumpFinalLayoutDebug(page);
@@ -517,13 +538,27 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
         c.detail(`Rhythm measurements: ${JSON.stringify(result.rhythmMeasurements, null, 2)}`);
       }
       c.detail('');
+      // The two content checks have causes of their own, unrelated to
+      // the stylesheet ones below; name them first when they fired.
+      const kinds = new Set(result.violations.map(v => v.invariant));
+      if (kinds.has('content-conservation')) {
+        c.detail('Something the data holds is missing from the pages, or printed twice.');
+        c.detail('That is a solver bug, not your data: report it with the violation above.');
+        c.detail('');
+      }
+      if (kinds.has('horizontal-overflow')) {
+        c.detail('Text runs past the side of its column, or the header or footer past the');
+        c.detail('page margin: usually one word, address or contact row too long for it.');
+        c.detail('Break it, shorten it, or give it link text.');
+        c.detail('');
+      }
       c.detail('Likely causes:');
       c.detail('  • .body-grid lost its `flex: 1 1 auto`');
       c.detail('  • A new flex-grow sibling was added inside .page');
       c.detail('  • .page padding changed without updating --page-margin');
       c.detail('  • --section-rhythm or its derived margins were changed');
-      c.detail('  • A .page was added or removed without updating EXPECTED_PAGE_COUNT');
-      throw reported(new Error('Layout invariant violated'));
+      c.detail('  • The template drew a different number of .page elements than the placement has');
+      throw reported(layoutVerdict(new Error('Layout invariant violated')));
     }
 
     const pagesWord = expectedPageCount === 1 ? 'page' : 'pages';
@@ -626,7 +661,7 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
         + 'have produced a one-page letter with the end missing.');
       c.detail('');
       c.detail('Shorten letter.body in your data file, then rebuild.');
-      throw reported(new Error('Cover letter overflows its page'));
+      throw reported(layoutVerdict(new Error('Cover letter overflows its page')));
     }
 
     const room = Math.round(-fit.overflowPx);
@@ -644,7 +679,8 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
    * Uses a tmpdir-based intermediate so a partially-written cropped PDF
    * never overwrites a known-good output if the crop step fails. The
    * temp file is unconditionally removed in the finally block — even
-   * when the crop step throws.
+   * when the print fails part-way through writing it, or the crop step
+   * throws.
    *
    * ONE PDF. There used to be two prints here, the second with a
    * `force-grayscale` class on <html> for a black-and-white variant,
@@ -681,8 +717,8 @@ function createPipeline({ root, python, navWait = 'fonts', variant = 'resume', w
     const tmp = path.join(
       os.tmpdir(), `resume-print-${process.pid}-${Date.now()}.tmp.pdf`);
 
-    await page.pdf({ path: tmp, ...PDF_OPTIONS, tagged: true });
     try {
+      await page.pdf({ path: tmp, ...PDF_OPTIONS, tagged: true });
       await python.cropPdf({
         input: tmp, output: targets.output, meta: paths.pdfMeta, quiet: targets.quiet,
       });

@@ -22,7 +22,7 @@
 #   templates) simply by being there, and the build log says so on
 #   every run:
 #
-#     Shared profile  data/_profile.yml -> name, contact, meta.lang
+#     ✅ Shared profile:        data/_profile.yml → contact, meta.lang, meta.maxPages, name
 #
 # WHAT BELONGS HERE
 #   Only what is identical across every application.

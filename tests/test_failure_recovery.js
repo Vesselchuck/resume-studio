@@ -14,7 +14,8 @@
  *     resolves) or a renderer spinning in a loop: the render fails at
  *     its deadline, Chromium is closed, and the next render works. It
  *     used to block the engine's queue, and every render behind it,
- *     forever. A build that never ends likewise.
+ *     forever. A build that never ends likewise, and a Chromium that
+ *     never opens a page for the render.
  *   • A renderer that crashes while Chromium lives on: the next render
  *     opens a new page in the same Chromium. The crashed page used to
  *     stay cached, and every render failed with "Page crashed".
@@ -30,6 +31,19 @@
  *   • A failed render ends with a render event on /api/events, so every
  *     other window that saw it start stops showing "Rendering". Only a
  *     successful render used to send one.
+ *   • A warm start whose Python fails: createEngine rejects and no
+ *     Chromium is left running. The launch it had started used to
+ *     finish with nothing left to close it. With no Python to detect at
+ *     all, createEngine rejects too: detection used to exit the process.
+ *   • A Build or a preview still queued when dispose() runs: it fails
+ *     saying the engine is shut down. The Build used to run `node
+ *     resume.js` anyway, and a restyling preview to start the Sass
+ *     compiler dispose() had just stopped.
+ *   • A cover letter that runs off its page: the preview's layout check
+ *     fails, as `node letter.js` does. It used to pass.
+ *   • The layout check itself throwing (anything but a violation): the
+ *     render fails, and nothing is reused from it. It used to be shown
+ *     as a layout violation, and that verdict was cached.
  *
  * Runs in a throwaway copy of the project (tests/_project.js). Needs
  * Chromium; without it this prints the runner's SKIP marker. The
@@ -216,6 +230,136 @@ async function disposeWithRenderInFlight(createEngine, root) {
   assertEq(left, [], 'N4: dispose() with renders in flight and queued leaves no Chromium running');
 }
 
+async function failedStart(createEngine, root) {
+  // A warm start launches Chromium first and then waits for Python. Here
+  // Python exits at once (Node standing in for it: `node -B worker.py`
+  // is a bad option), so createEngine fails while Chromium is launching.
+  const err = await rejectsWithin(createEngine({ root, warm: true, python: process.execPath }));
+  assertTrue(Boolean(err) && !/still pending/.test(err.message),
+    `S1: an engine whose Python exits at once fails to start (${err && err.message})`);
+  await sleep(1000);
+  const left = chromiumChildren();
+  for (const pid of left) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+  assertEq(left, [], 'S1: ...and leaves no Chromium running');
+}
+
+async function noPython(createEngine, root) {
+  // No interpreter to detect: PYTHON names a program that does not
+  // exist. Detection used to exit the process, so the Studio's server
+  // ended without the failure frame the desktop window waits for. Now
+  // createEngine rejects, and the server reports it like any failed start.
+  const before = process.env.PYTHON;
+  process.env.PYTHON = path.join(root, 'no-such-python');
+  let err;
+  try {
+    err = await rejectsWithin(createEngine({ root, warm: false }));
+  } finally {
+    if (before === undefined) delete process.env.PYTHON;
+    else process.env.PYTHON = before;
+  }
+  assertTrue(Boolean(err) && /No Python interpreter/.test(err.message),
+    `S2: with no usable Python, createEngine rejects instead of exiting (${err && err.message})`);
+}
+
+async function queuedAfterDispose(createEngine, root) {
+  const marker = path.join(root, 'build-ran.txt');
+  fs.writeFileSync(path.join(root, 'mark.js'),
+    `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+  const engine = await createEngine({ root, warm: true });
+  try {
+    await engine.renderPreview({ doc: 'letter', scale: 1 });
+    await engine.exclusive(async () => {});   // the Sass warm-up queued after the first preview
+    // A Build and a restyling preview queued behind a job still running
+    // when dispose() is called.
+    let open;
+    let running;
+    const gate = new Promise(res => { open = res; });
+    const started = new Promise(res => { running = res; });
+    const held = engine.exclusive(() => { running(); return gate; });
+    await started;
+    const settle = p => p.then(() => null, e => e);
+    const built = settle(engine.build({ script: 'mark.js' }));
+    const restyled = settle(engine.renderPreview({ doc: 'letter', scale: 1, recompileStyles: true }));
+    const disposing = engine.dispose();
+    open();
+    await held;
+    await disposing;
+    const [b, p] = await Promise.all([built, restyled]);
+    assertTrue(Boolean(b) && /shut down/.test(b.message),
+      `D1: a Build queued when dispose() ran fails saying the engine is shut down (${b && b.message})`);
+    assertTrue(!fs.existsSync(marker), 'D1: ...and runs nothing');
+    assertTrue(Boolean(p) && /shut down/.test(p.message),
+      `D1: a preview queued when dispose() ran fails the same way (${p && p.message})`);
+    assertEq(engine.status().sassWarm, false, 'D1: ...and does not start the Sass compiler again');
+  } finally {
+    await engine.dispose();
+    fs.rmSync(path.join(root, 'mark.js'), { force: true });
+    fs.rmSync(marker, { force: true });
+  }
+}
+
+async function letterOverflow(createEngine, root) {
+  const base = fs.readFileSync(path.join(root, 'data', 'letter_default.yml'), 'utf-8');
+  if (!base.includes('    Vale,')) throw new Error('fixture: no "Vale," in letter_default.yml');
+  const para = `    ${'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod. '.repeat(5).trim()}\n\n`;
+  const file = path.join(root, 'data', 'long_letter.yml');
+  fs.writeFileSync(file, base.replace('    Vale,', para.repeat(12) + '    Vale,'));
+  const engine = await createEngine({ root, warm: true });
+  try {
+    const env = { LETTER_DATA_FILE: file };
+    const long = await engine.renderPreview({ doc: 'letter', scale: 1, env });
+    assertEq(long.invariants && long.invariants.ok, false,
+      'L1: the preview of a letter that runs off its page fails the layout check');
+    assertTrue(/does not fit|overflows/.test((long.invariants && long.invariants.message) || ''),
+      `L1: ...and says so (${long.invariants && long.invariants.message})`);
+    const again = await engine.renderPreview({ doc: 'letter', scale: 1, env });
+    assertEq(again.invariants && again.invariants.ok, false, 'L1: ...also when the render is reused');
+    const fits = await engine.renderPreview({ doc: 'letter', scale: 1 });
+    assertEq(fits.invariants && fits.invariants.ok, true, 'L1: the shipped letter passes it');
+  } finally {
+    await engine.dispose();
+    fs.rmSync(file, { force: true });
+  }
+}
+
+async function checkThatErrs(createEngine, root) {
+  // No speculation: the check then always loads the final HTML itself.
+  const engine = await createEngine({ root, warm: true, speculative: false });
+  try {
+    await engine.renderPreview({ doc: 'resume' });
+    const pl = engine.pipelines.resume;
+    const verify = pl.verifyInvariants;
+
+    // A real violation, from the real check: one page more than the
+    // placement has.
+    pl.verifyInvariants = (page, pages, ...rest) => verify(page, pages + 1, ...rest);
+    let r = null;
+    let violated = null;
+    try {
+      r = await engine.renderPreview({ doc: 'resume', recompileStyles: true });
+    } catch (e) {
+      violated = e;
+    } finally {
+      pl.verifyInvariants = verify;
+    }
+    assertEq(r && r.invariants && r.invariants.ok, false,
+      `V1: a layout violation is reported with the render, not as a failure (${violated && violated.message})`);
+
+    // The check itself failing is not a layout verdict.
+    pl.verifyInvariants = async () => { throw new Error('the check itself broke'); };
+    const err = await rejectsWithin(engine.renderPreview({ doc: 'resume', recompileStyles: true }));
+    pl.verifyInvariants = verify;
+    assertTrue(Boolean(err) && /check itself broke/.test(err.message),
+      `V1: an error inside the layout check fails the render (${err && err.message})`);
+    const next = await engine.renderPreview({ doc: 'resume' });
+    assertTrue(next.timings.cached !== 'render',
+      'V1: ...and nothing from that render is reused by the next one');
+    assertEq(next.invariants && next.invariants.ok, true, 'V1: ...which checks the layout again and passes');
+  } finally {
+    await engine.dispose();
+  }
+}
+
 async function chromiumKilledWhileLaunching(createEngine, root) {
   const engine = await createEngine({ root, warm: false });
   const said = [];
@@ -291,6 +435,48 @@ async function stuckPage(createEngine, root) {
   }
 }
 
+async function stuckOpen(createEngine, root) {
+  const engine = await createEngine({ root, warm: true, hiddenReleaseMs: 50, timeouts: { pageMs: 1500 } });
+  let proto = null;
+  let newContext = null;
+  try {
+    // The engine's Browser class, from the page it hands the pipeline.
+    const pl = engine.pipelines.letter;
+    const load = pl.openDocument;
+    pl.openDocument = (page, opts) => {
+      proto = Object.getPrototypeOf(page.context().browser());
+      return load(page, opts);
+    };
+    try {
+      await engine.renderPreview({ doc: 'letter', scale: 1 });
+    } finally {
+      pl.openDocument = load;
+    }
+    // Hidden, Chromium is closed; the next render launches a new one,
+    // whose newContext() here never answers.
+    engine.setWindowHidden(true);
+    assertTrue(await waitFor(() => !engine.status().browserOpen, 5000),
+      'T2: hidden, Chromium is closed');
+    newContext = proto.newContext;
+    let asked = 0;
+    proto.newContext = function () { asked += 1; return new Promise(() => {}); };
+    const t0 = Date.now();
+    const err = await rejectsWithin(engine.renderPreview({ doc: 'letter', scale: 1, recompileStyles: true }));
+    proto.newContext = newContext;
+    newContext = null;
+    assertEq(asked, 1, 'T2: the render asked the new Chromium for a page');
+    assertEq(err && err.kind, 'timeout',
+      `T2: a Chromium that never opens a page fails the render (${err && err.message})`);
+    assertTrue(Date.now() - t0 < 10000, `T2: ...at its deadline (${Date.now() - t0} ms)`);
+    engine.setWindowHidden(false);
+    const next = await rejectsWithin(engine.renderPreview({ doc: 'letter', scale: 1, recompileStyles: true }));
+    assertEq(next ? next.message.split('\n')[0] : null, null, 'T2: the next render works');
+  } finally {
+    if (newContext) proto.newContext = newContext;
+    await engine.dispose();
+  }
+}
+
 async function crashedPage(createEngine, root) {
   const engine = await createEngine({ root, warm: true });
   try {
@@ -347,6 +533,10 @@ async function stuckBuild(createEngine, root) {
 
 /* ─── Server ──────────────────────────────────────────────────── */
 
+// Each server's launch token, by port, from its ready frame; every
+// request here sends it, as the desktop shell and the page do.
+const tokens = new Map();
+
 function startServer(root) {
   const env = { ...process.env };
   for (const k of ['RESUME_DATA_SOURCE', 'RESUME_DATA_FILE', 'LETTER_DATA_FILE', 'STUDIO_PORT']) {
@@ -368,7 +558,9 @@ function startServer(root) {
       const line = buf.split('\n').find(l => l.startsWith(READY_PREFIX));
       if (line) {
         clearTimeout(timer);
-        resolve({ child, log, port: JSON.parse(line.slice(READY_PREFIX.length)).port });
+        const { port, token } = JSON.parse(line.slice(READY_PREFIX.length));
+        tokens.set(port, token);
+        resolve({ child, log, port });
       }
     });
     child.once('exit', () => reject(new Error('server exited before it was ready')));
@@ -382,6 +574,7 @@ function request(port, method, route, body) {
       host: '127.0.0.1', port, method, path: route,
       headers: {
         host: `127.0.0.1:${port}`,
+        'x-studio-token': tokens.get(port),
         ...(payload !== null ? { 'content-type': 'application/json',
                                  'content-length': Buffer.byteLength(payload) } : {}),
       },
@@ -406,7 +599,7 @@ function request(port, method, route, body) {
 function events(port, onEvent) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/events',
-      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      headers: { host: `127.0.0.1:${port}`, 'x-studio-token': tokens.get(port) } }, (res) => {
       let buf = '';
       res.setEncoding('utf-8');
       res.on('data', (chunk) => {
@@ -530,7 +723,13 @@ async function serverTests(root) {
     await run('N3 run', () => shownWhileReleaseQueued(createEngine, project.root));
     await run('N4 run', () => disposeWithRenderInFlight(createEngine, project.root));
     await run('N5 run', () => chromiumKilledWhileLaunching(createEngine, project.root));
+    await run('S1 run', () => failedStart(createEngine, project.root));
+    await run('S2 run', () => noPython(createEngine, project.root));
+    await run('D1 run', () => queuedAfterDispose(createEngine, project.root));
+    await run('L1 run', () => letterOverflow(createEngine, project.root));
+    await run('V1 run', () => checkThatErrs(createEngine, project.root));
     await run('T1 run', () => stuckPage(createEngine, project.root));
+    await run('T2 run', () => stuckOpen(createEngine, project.root));
     await run('C1 run', () => crashedPage(createEngine, project.root));
     await run('B1 run', () => stuckBuild(createEngine, project.root));
     await run('server run', () => serverTests(project.root));

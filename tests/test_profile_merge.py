@@ -131,6 +131,20 @@ class TestResolveLang(unittest.TestCase):
     def test_null_lang(self):
         self.assertEqual(build.resolve_lang({"meta": {"lang": None}}), "en-US")
 
+    def test_underscore_is_written_as_a_hyphen(self):
+        """en_GB went into <html lang>, /Lang and the XMP as written."""
+        for lang, tag in (("en_GB", "en-GB"), ("zh_Hant_TW", "zh-Hant-TW"),
+                          ("de-CH_1996", "de-CH-1996")):
+            with self.subTest(lang=lang):
+                self.assertEqual(build.resolve_lang({"meta": {"lang": lang}}), tag)
+
+    def test_text_that_is_not_a_tag_falls_back(self):
+        """validate_data warns about it; the documents say en-US."""
+        for lang in ("en_US.UTF-8", "C", "en US", "en" + chr(0x2011) + "US",
+                     "en" + chr(1) + "US"):
+            with self.subTest(lang=ascii(lang)):
+                self.assertEqual(build.resolve_lang({"meta": {"lang": lang}}), "en-US")
+
     def test_document_meta_null_keeps_profile_lang(self):
         merged = build.deep_merge({"meta": {"lang": "fr-FR"}}, {"meta": None})
         self.assertEqual(build.resolve_lang(merged), "fr-FR")

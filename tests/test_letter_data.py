@@ -331,6 +331,71 @@ class TestValidateData(unittest.TestCase):
         self.assertIn("not allowed", str(ctx.exception))
 
 
+class TestHeaderRulesMatchTheResume(unittest.TestCase):
+    """The letter checks name, role and contact with the résumé's own
+    functions, so the same profile cannot pass for one and fail the
+    other. Each rule the résumé gained is pinned here too."""
+
+    def rejects(self, d, *needles):
+        with self.assertRaises(SchemaError) as ctx:
+            clb.validate_data(d)
+        for needle in needles:
+            self.assertIn(needle, str(ctx.exception))
+
+    def test_empty_optional_header_fields_pass(self):
+        # `role:` left empty with no profile role to fill it used to fail.
+        cases = {
+            "role": lambda d: d.update(role=None),
+            "contact.address": lambda d: d["contact"].update(address=None),
+            "contact row href": lambda d: d["contact"]["rows"][0].update(href=None),
+            "meta.description": lambda d: d["meta"].update(description=None),
+            "meta": lambda d: d.update(meta=None),
+            "recipient": lambda d: d["letter"].update(recipient=None),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(case=label):
+                d = good_data()
+                mutate(d)
+                self.assertEqual(clb.validate_data(d), [])
+
+    def test_blank_header_text_is_warned_about(self):
+        # Warned about, not refused, as in the résumé: each built in 1.0.0.
+        cases = {
+            "both name parts": (lambda d: d.update(name={"first": " ", "last": ""}),
+                                "both blank"),
+            "role": (lambda d: d.update(role=" "), "'role' is blank"),
+            "contact.address": (lambda d: d["contact"].update(address="  "),
+                                "'contact.address' is blank"),
+            "contact row value": (lambda d: d["contact"]["rows"][0].update(value=" "),
+                                  "contact.rows[0]: 'value' is blank"),
+        }
+        for label, (mutate, needle) in cases.items():
+            with self.subTest(case=label):
+                d = good_data()
+                mutate(d)
+                warnings = clb.validate_data(d)
+                self.assertEqual(len(warnings), 1, warnings)
+                self.assertIn(needle, warnings[0])
+
+    def test_href_with_leading_unicode_space_is_stripped(self):
+        d = good_data()
+        d["contact"]["rows"][0]["href"] = "\u00a0mailto:gaius@example.com"
+        warnings = clb.validate_data(d)
+        self.assertEqual(d["contact"]["rows"][0]["href"], "mailto:gaius@example.com")
+        self.assertIn("U+00A0", warnings[0])
+
+    def test_lang_that_is_not_a_language_tag_is_warned_about(self):
+        d = good_data()
+        d["meta"]["lang"] = "en\x01US"
+        warnings = clb.validate_data(d)
+        self.assertIn("'meta.lang'", warnings[0])
+        self.assertIn("is not a language tag", warnings[0])
+        self.assertEqual(clb.build.resolve_lang(d), "en-US")
+        d["meta"]["lang"] = "en_GB"     # written as en-GB
+        self.assertEqual(clb.validate_data(d), [])
+        self.assertEqual(clb.build.resolve_lang(d), "en-GB")
+
+
 class TestResolveLetter(unittest.TestCase):
     def test_the_signature_comes_from_the_name(self):
         # Which the shared profile supplies, so it is right on every

@@ -232,8 +232,8 @@ svg{flex:none}
 .btn.ghost:active{background:var(--panel-3)}
 .btn.ghost[aria-pressed="true"]{background:var(--panel);border-color:var(--rule);color:var(--ink);box-shadow:var(--sh-1)}
 .btn.ghost[aria-disabled="true"]{opacity:.4;cursor:default;background:transparent}
-/* A build in progress: a spinner beside the label, which keeps its words
-   (focus is restored by label, and the label is what a reader hears). */
+/* A build in progress, or queued behind a preview: a spinner beside the
+   label, which keeps its words (the label is what a reader hears). */
 .btn.is-busy::before{
   content:"";width:12px;height:12px;border-radius:50%;
   border:2px solid currentColor;border-right-color:transparent;
@@ -287,6 +287,12 @@ svg{flex:none}
 .seg button:hover{color:var(--ink)}
 .seg button[aria-checked="true"]{background:var(--panel);color:var(--ink);box-shadow:var(--sh-1)}
 .seg button:focus-visible{outline-offset:0}
+
+/* This Studio run has ended (see endSession): one line under the app
+   bar, for as long as the page stays open. Empty, it takes no room. */
+.ended{flex:none;padding:10px var(--s-4);font-size:var(--fs-sm);font-weight:600;color:var(--ink);
+  background:var(--err-wash);border-bottom:1px solid color-mix(in srgb,var(--err) 40%, transparent)}
+.ended:empty{display:none}
 
 /* ---------- 3-pane grid ---------- */
 .panes{
@@ -710,9 +716,14 @@ details.diag>summary .lg-badge{margin-left:var(--s-2);letter-spacing:0;text-tran
 .errcard.notice{background:var(--warn-wash);border-color:color-mix(in srgb,var(--warn) 30%, transparent);border-left-color:var(--warn)}
 .errcard.notice .loc{color:var(--warn)}
 
-/* ---------- drop overlay ---------- */
+/* ---------- drop overlay ----------
+   Above the modals' scrim (70): a file can be dropped while a dialog is
+   open (Data files, say), and the prompt, or the "Which document is
+   this?" question that may follow, is then the top layer. Under the
+   scrim it was drawn behind the backdrop, and the question was a dialog
+   no one could see. Below the toasts (80). */
 .drop{
-  position:fixed;inset:0;z-index:60;
+  position:fixed;inset:0;z-index:75;
   background:color-mix(in srgb,var(--ground) 88%, transparent);
   display:grid;place-items:center;padding:var(--s-6);
   animation:fade var(--dur-2) var(--ease-out);
@@ -931,6 +942,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span class="lbl">Shortcuts</span><kbd class="kbd-hint" aria-hidden="true">F1</kbd>
     </button>
   </header>
+  <div class="ended" id="endedBanner" role="alert"></div>
 
   <div class="panes">
 
@@ -960,7 +972,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         <div class="canvas-tools">
           <div class="tgroup" role="group" aria-label="Zoom">
             <button class="btn ghost tiny" id="zoomOut" aria-label="Zoom out" title="Zoom out (− with the preview focused, or Ctrl+wheel over the pages)">−</button>
-            <span class="zoom" id="zoomVal" role="status">100%</span>
+            <span class="zoom" id="zoomVal">100%</span>
             <button class="btn ghost tiny" id="zoomIn" aria-label="Zoom in" title="Zoom in (+ with the preview focused, or Ctrl+wheel over the pages)">+</button>
           </div>
           <div class="tgroup" role="group" aria-label="Page size">
@@ -990,8 +1002,8 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
 </div>
 
 <div class="toasts" id="toasts" role="status"></div>
-<!-- Read by screen readers only. `say` is for news that has no visible
-     text of its own (a theme change, a copied location); `alertSay`
+<!-- Read by screen readers only. `say` is for news that is not otherwise
+     announced (a theme change, a copied location, a zoom step); `alertSay`
      carries a render failure, set only when the failure changes. -->
 <div class="sr-only" id="say" role="status" aria-live="polite"></div>
 <div class="sr-only" id="alertSay" role="alert"></div>
@@ -1052,10 +1064,13 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     return 'info';
   }
   var TOAST_MAX = 3;   // older ones go, so a burst never covers the page
-  function toast(main, sub) {
+  // `quiet`: shown but not read out (the toasts are a status region),
+  // for news the caller has already given a screen reader through say().
+  function toast(main, sub, quiet) {
     var kind = toastKind(main, sub);
     var t = el('div', 'toast ' + kind, '<span class="tk" aria-hidden="true"></span><span>' + esc(main) + '</span>' +
       (sub ? '<span class="sub">' + esc(sub) + '</span>' : ''));
+    if (quiet) t.setAttribute('aria-hidden', 'true');
     $('toasts').appendChild(t);
     var shown = $('toasts').children;
     while (shown.length > TOAST_MAX) shown[0].remove();
@@ -1070,12 +1085,24 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // content type, which is what keeps a form on some other web page
     // from posting to it.
     if ((method === 'POST' || method === 'PUT') && !body) body = {};
-    var res = await fetch(route, {
-      method: method,
-      headers: body ? { 'content-type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    var res;
+    try {
+      res = await fetch(route, {
+        method: method,
+        headers: body ? { 'content-type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      // No connection at all while the event stream is down too: the
+      // server has stopped. See endSession.
+      if (events && events.readyState !== EventSource.OPEN) throw runEnded();
+      throw err;
+    }
     var data = await res.json().catch(function () { return {}; });
+    // The server refuses this page's cookie: it is a new run, with a new
+    // launch token (studio_server.js answers exactly this, and only for
+    // that). See endSession.
+    if (res.status === 403 && data.error === 'forbidden') throw runEnded();
     if (!res.ok) {
       var e = new Error(data.error || (method + ' ' + route + ' failed'));
       e.failures = data.failures || [];
@@ -1137,25 +1164,51 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     return p;
   })();
 
+  // One PUT at a time. Fast zoom steps sent one each, overlapping, could
+  // land out of order and leave an older zoom saved; changes made while
+  // one is in flight are merged and sent, latest values only, after it.
+  var prefsUnsent = null, prefsSending = false;
   function savePrefs(patch) {
     Object.assign(prefs, patch);
     try { localStorage.setItem('studio.prefs', JSON.stringify(prefs)); } catch { /* ignore */ }
-    api('PUT', '/api/prefs', patch).catch(function () { /* the local copy stands */ });
+    prefsUnsent = Object.assign(prefsUnsent || {}, patch);
+    if (!prefsSending) sendPrefs();
   }
+  function sendPrefs() {
+    if (!prefsUnsent) return;
+    var body = prefsUnsent;
+    prefsUnsent = null;
+    prefsSending = true;
+    api('PUT', '/api/prefs', body)
+      .catch(function () { /* the local copy stands */ })
+      .then(function () { prefsSending = false; sendPrefs(); });
+  }
+  // The saved zoom and fit as this page can use them, whichever way they
+  // arrived (the page's meta, localStorage, or GET /api/prefs).
+  function prefZoom(z) { return Math.min(200, Math.max(25, Math.round(Number(z)) || 100)); }
+  function prefFit(f) { return ['none', 'width', 'page'].indexOf(f) === -1 ? 'width' : f; }
 
   var state = {
     active: 'resume',
     // Percent of the page's true size, 8.5in = 816 CSS px, used when
     // `fit` is 'none'; 'width' and 'page' size the page to the pane.
-    zoom: Math.min(200, Math.max(25, Math.round(Number(prefs.zoom)) || 100)),
-    fit: ['none', 'width', 'page'].indexOf(prefs.fit) === -1 ? 'width' : prefs.fit,
+    zoom: prefZoom(prefs.zoom),
+    fit: prefFit(prefs.fit),
     paused: false,
+    // How many `changed` events (saves) this page has seen, and for each
+    // document, the count its render in state.render was started at. A
+    // document whose count is behind is stale: a save it has not been
+    // rendered since. Only the document on screen renders on a save, so
+    // this is what makes switching to the other one render it.
+    changes: 0,
+    renderedChanges: {},
     status: null,
     files: [],
     dataSource: null,
     log: [],
     render: {},   // per doc: {images, pages, meta, timings, totalMs, invariants, mode, note}
     busy: {},     // per doc: 'render' | 'build' | null
+    busyTheirs: {}, // per doc: that busy is another window's, seen on the event stream
     error: {},      // per doc: the render failed — YAML is not valid
     buildError: {}, // per doc: the render is fine, the CLI build failed
     renderedAt: {}, // per doc: when the render in state.render arrived
@@ -1165,6 +1218,8 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // Diagnostics opened by a failure (not by the user): open for the
     // rest of the session, but not saved as the user's choice.
     diagAuto: false,
+    // This Studio run has ended: see endSession.
+    ended: false,
     editor: 'default',  // what Open in editor uses: 'vscode' | 'default'
   };
 
@@ -1225,8 +1280,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     if (b === 'build') return b;
     return Date.now() - (state.busySince[id] || 0) >= BUSY_SHOW_MS ? b : null;
   }
-  function setBusy(id, what) {
+  // `theirs`: another window's render, known only from the event stream.
+  function setBusy(id, what, theirs) {
     state.busy[id] = what;
+    state.busyTheirs[id] = Boolean(what && theirs);
     state.busySince[id] = what ? Date.now() : 0;
     if (what === 'render') {
       var since = state.busySince[id];
@@ -1234,6 +1291,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         if (state.busy[id] === 'render' && state.busySince[id] === since) renderAll();
       }, BUSY_SHOW_MS + 10);
     }
+  }
+  /** A save has landed since this document's render was started. */
+  function isStale(id) {
+    return (state.renderedChanges[id] || 0) !== state.changes;
   }
 
   function statusFor(id) {
@@ -1338,7 +1399,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       var meta = el('div', 'doc-meta');
       meta.appendChild(el('span', 'status ' + st.c, '<i></i>'
         + (st.at ? agoSpan(st.prefix, st.at) : esc(st.t))));
-      if (r && r.pages) meta.appendChild(el('span', 'chip', r.pages + (r.pages === 1 ? ' page' : ' pages')));
+      if (r && r.pages) meta.appendChild(el('span', 'chip', esc(r.pages + (r.pages === 1 ? ' page' : ' pages'))));
       var fill = lastPageFill(r);
       if (fill !== null && r.pages) {
         var fc = el('span', 'chip fill', esc('last page ' + fill + '% full'));
@@ -1350,7 +1411,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         meta.appendChild(fc);
       }
       if (r && r.totalMs) {
-        var msChip = el('span', 'chip quiet', r.totalMs + ' ms');
+        var msChip = el('span', 'chip quiet', esc(r.totalMs + ' ms'));
         msChip.title = 'How long the last render took';
         meta.appendChild(msChip);
       }
@@ -1367,14 +1428,23 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       var load = el('button', 'btn tiny', 'Load…');
       load.title = 'Choose a .yml file for ' + m.label;
       load.addEventListener('click', function (e) { e.stopPropagation(); pickFile(id); });
-      var build = el('button', 'btn primary', 'Build ' + m.label + ' PDF');
+      // Queued: pressed during a preview, and waiting for it (see
+      // requestBuild). Said on the button, not only to a screen reader:
+      // with nothing to see, a second press looked needed.
+      var queued = pendingBuilds.indexOf(id) !== -1;
+      var build = el('button', 'btn primary', 'Build ' + esc(m.label) + ' PDF' + (queued ? ' · queued' : ''));
+      build.dataset.key = 'build:' + id;
       // aria-disabled, not disabled: a disabled button cannot hold focus,
       // so the render that follows a press would drop a keyboard user's
       // focus to <body>, and it would stay there after the build. This
       // one keeps focus and says it is unavailable; the click is ignored.
-      var buildBusy = Boolean(state.busy.resume || state.busy.letter);
-      build.setAttribute('aria-disabled', String(buildBusy));
-      if (state.busy[id] === 'build') build.classList.add('is-busy');
+      // Only while a build runs, or this one is queued: any other press
+      // during a preview is queued, so the button is not unavailable
+      // then, and greying it for the 100–300 ms of every save's render
+      // was a flicker.
+      var buildBusy = Boolean(state.busy.resume === 'build' || state.busy.letter === 'build');
+      build.setAttribute('aria-disabled', String(buildBusy || queued));
+      if (state.busy[id] === 'build' || queued) build.classList.add('is-busy');
       if (state.active === id) {
         build.title = 'Build the PDF into dist/ (Ctrl+Shift+B)';
         build.setAttribute('aria-keyshortcuts', 'Control+Shift+B');
@@ -1383,7 +1453,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       }
       build.addEventListener('click', function (e) {
         e.stopPropagation();
-        if (!buildBusy) doBuild(id);
+        requestBuild(id);
       });
       acts.appendChild(build);
       fileRow.appendChild(load);
@@ -1443,8 +1513,12 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
           be.appendChild(el('div', 'fix', esc(state.buildError[id].hint)));
         }
         var dismiss = el('button', 'btn tiny', 'Dismiss');
+        // The button goes with its card, so focus goes to the card's
+        // Build button rather than to <body>.
         dismiss.addEventListener('click', function (e) {
-          e.stopPropagation(); delete state.buildError[id]; renderRail();
+          e.stopPropagation(); delete state.buildError[id]; renderAll();
+          var again = $('docList').querySelector('[data-key="build:' + id + '"]');
+          if (again) again.focus();
         });
         be.appendChild(dismiss);
         card.appendChild(be);
@@ -1600,7 +1674,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     var text = locText(overlayLoc);
     var ok = await copyText(text);
     say(ok ? 'Copied ' + text : 'Could not copy ' + text);
-    toast(ok ? 'Copied' : 'Could not copy', text);
+    toast(ok ? 'Copied' : 'Could not copy', text, true);
   });
   $('eoOpen').addEventListener('click', function () {
     if (overlayLoc) openSource(overlayLoc.file, overlayLoc.line, overlayLoc.col);
@@ -1706,6 +1780,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     if (zoom != null) state.zoom = Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], Math.max(ZOOM_STEPS[0], zoom));
     if (sheetWidthPx() !== before) clearHighlights();
     sizeSheets();
+    // The readout is not a live region: under a fit it changes with every
+    // step of a window resize, and each would be read out. A zoom asked
+    // for here is said once.
+    say('Zoom ' + $('zoomVal').textContent);
     s.scrollLeft = fx * s.scrollWidth - ax;
     s.scrollTop = fy * s.scrollHeight - ay;
     savePrefs({ fit: state.fit, zoom: state.zoom });
@@ -1777,9 +1855,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // save, only a change of outcome. A failure is the overlay's to
     // announce, so it just clears this; the recovery is then news.
     // Pausing is announced by its toast and the button's pressed state.
+    // Not "up to date" either while a save is waiting to be rendered.
     if (!state.busy[id]) {
       var n = r && r.images ? r.images.length : 0;
-      var sayText = state.error[id] || !r ? ''
+      var sayText = state.error[id] || !r || isStale(id) ? ''
         : 'Preview up to date' + (n ? ', ' + n + (n === 1 ? ' page' : ' pages') : '');
       if ($('liveSay').textContent !== sayText) $('liveSay').textContent = sayText;
     }
@@ -2167,6 +2246,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
    * time, for the duration. None of this is sent anywhere.
    */
   var logSeq = 0, logClock = [], logRuns = [];
+  /** The lines received since logSeq was `mark`, as many as are still kept. */
+  function logSince(mark) {
+    return state.log.slice(Math.max(0, state.log.length - (logSeq - mark)));
+  }
   function markLogRun(kind, doc) {
     var run = { seq: logSeq, kind: kind, doc: doc, at: Date.now(), done: false };
     // A run that wrote nothing is replaced by the next, not listed.
@@ -2303,10 +2386,15 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     }
     // Runs: the header of each preview or build this page started, at
     // the first line it wrote. Lines before any run are the server's own.
+    // The first line shown may be partway through a run whose first line
+    // is above it (a long build): that run heads the view, not "Studio".
     var base = logSeq - state.log.length;              // absolute number of state.log[0]
     var first = base + (state.log.length - lines.length);
     var runAt = {};
-    logRuns.forEach(function (r) { if (r.seq >= first && r.seq < logSeq) runAt[r.seq - first] = r; });
+    logRuns.forEach(function (r) {
+      if (r.seq >= first && r.seq < logSeq) runAt[r.seq - first] = r;
+      else if (r.seq < first) runAt[0] = r;
+    });
     var runs = [], run = null, sec = null, lastRow = null;
     function newRun(r) {
       finishSection();
@@ -2449,6 +2537,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       var b = el('button', 'btn ghost tiny', esc(f[1]) + ' <span class="lg-n' + (f[0] === 'problems' && counts.err ? ' err' : '') + '">' + f[2] + '</span>');
       b.type = 'button';
       b.dataset.logFilter = f[0];
+      b.dataset.key = 'filter:' + f[0];   // its count changes; see focusKey
       b.setAttribute('aria-pressed', String(logView.filter === f[0]));
       b.addEventListener('click', function () { logView.filter = f[0]; refreshConsoles(); });
       seg.appendChild(b);
@@ -2671,7 +2760,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       sel.appendChild(group);
     }
 
-    sel.value = m.picked ? 'file:' + m.picked : 'mode:' + (state.dataSource || 'auto');
+    // The data-source setting is the resume's alone; the letter has only
+    // mode:auto, and naming the resume's mode there selected nothing.
+    sel.value = m.picked ? 'file:' + m.picked
+      : id === 'resume' ? 'mode:' + (state.dataSource || 'auto') : 'mode:auto';
     sel.addEventListener('change', function () { chooseData(id, sel.value); });
     src.appendChild(sel);
 
@@ -2738,6 +2830,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     det.open = Boolean(prefs.diagnostics || state.diagAuto);
     var initialOpen = det.open;
     var sum = el('summary', null, 'Diagnostics');
+    sum.dataset.key = 'diagnostics';   // its badge and time change; see focusKey
     // What is inside, while it is closed: problems in the console, and how
     // long the last render took, so a closed Diagnostics still says
     // whether it is worth opening.
@@ -2843,10 +2936,15 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   // back on its replacement: the same control (id, kind and label), or,
   // when none matches, whatever now stands at its position. Position
   // alone is not enough: a "Show" button appears once a PDF is built,
-  // and every control after it would shift by one.
+  // and every control after it would shift by one. A control whose words
+  // change from one render to the next (the Diagnostics summary's badge
+  // and time, a console count, a run's header, a queued Build) carries a
+  // data-key that does not, and that is its label here. A text field
+  // gets its caret and selection back too.
   var FOCUSABLE = 'button, select, input, textarea, a[href], summary, [tabindex]:not([tabindex="-1"])';
   function focusKey(n) {
-    return n.tagName + '|' + n.id + '|' + (n.getAttribute('aria-label') || n.textContent.trim());
+    return n.tagName + '|' + n.id + '|'
+      + (n.dataset.key || n.getAttribute('aria-label') || n.textContent.trim());
   }
   function renderAll() {
     var a = document.activeElement;
@@ -2855,6 +2953,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     var at = before.indexOf(a);
     var key = at >= 0 ? focusKey(a) : null;
     var nth = before.slice(0, at).filter(function (n) { return focusKey(n) === key; }).length;
+    var sel = null;
+    try {
+      if (at >= 0 && a.selectionStart != null) sel = [a.selectionStart, a.selectionEnd, a.selectionDirection];
+    } catch { /* a field with no selection (a checkbox) */ }
     renderRail(); renderCanvas(); renderInspector();
     if (at >= 0 && !document.body.contains(a)) {
       var after = Array.prototype.slice.call(
@@ -2862,6 +2964,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       var same = after.filter(function (n) { return focusKey(n) === key; });
       var again = same[nth] || same[0] || after[at];
       if (again) again.focus({ preventScroll: true });
+      if (again && sel && focusKey(again) === key) {
+        try { again.setSelectionRange(sel[0], sel[1], sel[2]); } catch { /* not a text field */ }
+      }
     }
   }
 
@@ -2871,7 +2976,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     if (state.active === id) return;
     state.active = id;
     renderAll();
-    if (!state.render[id]) preview(id);
+    // Rendered once and not since a save (of its data, the profile or a
+    // stylesheet) is as good as never: render it. Not while paused — the
+    // pause holds both documents, and resuming renders the one on screen.
+    if (!state.render[id] || (isStale(id) && !state.paused)) preview(id);
   }
 
   // A preview asked for while the engine was busy. Rendering right then
@@ -2883,6 +2991,36 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   //   { id, fromChange }   fromChange: a file save, which renders
   //                        whichever document is active by then
   var pendingPreview = null;
+  // Builds pressed while a preview ran, the same way: each starts as soon
+  // as the engine is free, ahead of any pending preview, in the order
+  // pressed. Pressing Build during a preview used to do nothing at all,
+  // and say nothing. One entry per document, not one slot: a second
+  // document's press used to replace the first's, and only it was built.
+  // doBuild takes its document off the list as it starts, so a press in
+  // the moment after a preview ends (busy cleared, the status still
+  // being read) cannot run the same build a second time.
+  var pendingBuilds = [];
+
+  function requestBuild(id) {
+    if (state.ended) { say(ENDED_TEXT); return; }
+    if (state.busy.resume === 'build' || state.busy.letter === 'build') {
+      say('A build is already running');
+      return;
+    }
+    if (pendingBuilds.indexOf(id) !== -1) {
+      say('This build is already queued');
+      return;
+    }
+    pendingBuilds.push(id);
+    if (state.busy.resume || state.busy.letter) {
+      say('The build starts when the preview finishes');
+      renderAll();   // the button says it is queued
+      return;
+    }
+    // Nothing running: the queue's first entry starts now, which is this
+    // one unless others are waiting for runPendingPreview.
+    runPendingPreview();
+  }
 
   // The page images a render holds, by page and by pixel hash, so the
   // next preview can ask the server to skip pages that did not change.
@@ -2976,7 +3114,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     id = id || state.active;
     opts = opts || {};
     var m = docMeta(id);
-    if (!m) return;
+    if (!m || state.ended) return;
     if (state.busy.resume || state.busy.letter) {
       pendingPreview = {
         id: id, fromChange: Boolean(opts.fromChange),
@@ -2988,6 +3126,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // the busy state — the answer is about what the user is looking at
     // now, not about the elements that are about to replace it.
     var order = visiblePages(id);
+    // The saves this render will read; one that lands while it runs makes
+    // the document stale again (see isStale).
+    var seenChanges = state.changes;
     setBusy(id, 'render');
     var logRun = markLogRun('Preview', id);
     renderAll();
@@ -3029,12 +3170,17 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       if (missing) r = await api('POST', '/api/preview', { doc: id, scale: RASTER_SCALE });
       state.render[id] = r;
       state.renderedAt[id] = Date.now();
+      state.renderedChanges[id] = seenChanges;
       delete state.error[id];
       highlightChanges(id, before, r);
     } catch (err) {
-      // A new failure opens Diagnostics, where the console has the rest.
-      if (state.error[id] !== err.message) state.diagAuto = true;
-      state.error[id] = err.message;
+      // A run that has ended is not a render that failed: the banner says
+      // it (endSession), and the last good render stays as it was.
+      if (!err.ended) {
+        // A new failure opens Diagnostics, where the console has the rest.
+        if (state.error[id] !== err.message) state.diagAuto = true;
+        state.error[id] = err.message;
+      }
     } finally {
       // This render is over: its streamed pages are either in
       // state.render now or belong to a render that failed, and either
@@ -3049,8 +3195,14 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   }
 
   function runPendingPreview() {
-    if (!pendingPreview) return;
     if (state.busy.resume || state.busy.letter) return;
+    if (pendingBuilds.length) {
+      // The build ends by calling this again, for the next build or the
+      // preview.
+      doBuild(pendingBuilds[0]);
+      return;
+    }
+    if (!pendingPreview) return;
     var next = pendingPreview;
     pendingPreview = null;
     if (next.fromChange) {
@@ -3065,17 +3217,23 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
 
   async function doBuild(id) {
     var shownAtStart = state.active;
+    var queuedAt = pendingBuilds.indexOf(id);
+    if (queuedAt !== -1) pendingBuilds.splice(queuedAt, 1);
     setBusy(id, 'build');
     var logRun = markLogRun('Build', id);
     delete state.buildError[id];
-    var mark = state.log.length;   // where this build's output starts
+    // Where this build's output starts, as a line count (logSeq), not an
+    // index into state.log: the log is cut from 500 lines to 400 as lines
+    // arrive, which moved an index and dropped this build's lines.
+    var mark = logSeq;
+    var seenChanges = state.changes;
     renderAll();
     try {
       var r = await api('POST', '/api/build',
         { doc: id, snapshot: state.snapshot,
           tests: state.tests, scale: RASTER_SCALE });
 
-      var drift = state.log.slice(mark)
+      var drift = logSince(mark)
         .filter(function (l) { return /% difference \(limit/.test(l); })
         .map(function (l) { return l.replace(/^\s*[❌⚠️]\s*/, '').trim(); });
       if (drift.length) {
@@ -3100,7 +3258,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       setBusy(id, null);
       endLogRun(logRun);
       if (switchTo) state.active = id;
-      await refreshStatus();
+      // Quietly: the build succeeded, and a status that could not be read
+      // afterwards must not turn it into "Build failed".
+      await refreshStatusQuietly();
 
       // Show the file the build just wrote, not a re-render of it.
       //
@@ -3127,17 +3287,25 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         }
         state.render[id] = r.render;
         state.renderedAt[id] = Date.now();
+        state.renderedChanges[id] = seenChanges;
         delete state.error[id];
         renderAll();
       } else {
         await preview(id);
       }
     } catch (err) {
+      if (err.ended) {
+        // Not a build that failed: this run has ended (endSession).
+        setBusy(id, null);
+        endLogRun(logRun);
+        renderAll();
+        return;
+      }
       // The preview is still valid — it was the CLI build that failed,
       // so this must not masquerade as a YAML error. `resume.js failed`
       // is also not a reason; the reason is in the log the build just
       // streamed, so pull the failure lines out of it.
-      var since = state.log.slice(mark);
+      var since = logSince(mark);
       var reasons = (err.failures || [])
         .concat(since)
         .filter(function (l) { return l.indexOf('❌') !== -1; })
@@ -3179,7 +3347,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         }
         toast('Data source: ' + mode, 're-rendering');
       }
-      await refreshStatus();
+      // Quietly here and below: the choice was made, and a status read
+      // that fails after it must not report the choice as failed.
+      await refreshStatusQuietly();
       renderAll();
       preview(id);
     } catch (err) {
@@ -3187,8 +3357,13 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     }
   }
 
-  /** For cleanup paths: an unreachable engine must not stop the redraw. */
+  /**
+   * For cleanup paths, and after an action that has already succeeded:
+   * an unreachable engine must not stop the redraw, or turn the success
+   * into a reported failure.
+   */
   async function refreshStatusQuietly() {
+    if (state.ended) return;   // nothing to ask; see endSession
     try {
       await refreshStatus();
     } catch (err) {
@@ -3216,15 +3391,20 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     renderCanvas();
     toast(state.paused ? 'Auto-render paused' : 'Auto-render resumed',
       state.paused ? 'saving a file will not re-render' : 'watching data/ and styles/');
-    // Saves made while paused: render them now, or "Live" shows stale pages.
-    if (!state.paused && state.missedChange) {
-      state.missedChange = false;
+    // Saves made while paused: render them now, or "Live" shows stale
+    // pages. The other document renders when it is shown (select).
+    if (!state.paused && isStale(state.active)) {
       var m = docMeta(state.active);
       if (m && m.live) preview(null, { fromChange: true });
     }
   });
 
-  function rerender() { preview(null, { retry: true }); }
+  // Once this run has ended, a re-render cannot happen; reloading shows
+  // the server's own page, which says where to open the Studio now.
+  function rerender() {
+    if (state.ended) { location.reload(); return; }
+    preview(null, { retry: true });
+  }
   $('menuRefresh').addEventListener('click', rerender);
   async function reveal(target) {
     try {
@@ -3265,6 +3445,31 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   var dialogs = [], dialogSeq = 0;
   function openDialog(scrim, box, title) {
     var opener = document.activeElement;
+    // The panes are rebuilt on every render (see renderAll), so the
+    // opener may be gone by the time the dialog closes. It is found again
+    // the way renderAll finds a control: by its focusKey, the nth with
+    // that key in its pane; failing that, the pane itself.
+    var home = null, homePane = null, openerKey = null, openerNth = 0;
+    if (opener && opener !== document.body && opener.closest) {
+      home = opener.closest('#docList, #inspector');
+      homePane = opener.closest('#rail, #inspector, #scroller');
+      openerKey = focusKey(opener);
+      if (home) {
+        var all = Array.prototype.slice.call(home.querySelectorAll(FOCUSABLE));
+        openerNth = all.slice(0, Math.max(0, all.indexOf(opener)))
+          .filter(function (n) { return focusKey(n) === openerKey; }).length;
+      }
+    }
+    function refocus() {
+      if (!opener || opener === document.body) return;
+      if (opener.isConnected) { opener.focus(); return; }
+      var same = home && home.isConnected
+        ? Array.prototype.filter.call(home.querySelectorAll(FOCUSABLE),
+            function (n) { return focusKey(n) === openerKey; })
+        : [];
+      var again = same[openerNth] || same[0] || (homePane && homePane.isConnected ? homePane : null);
+      if (again) again.focus({ preventScroll: true });
+    }
     if (!title.id) title.id = 'dlg-title-' + (++dialogSeq);
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
@@ -3294,7 +3499,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       scrim.remove();
       document.removeEventListener('keydown', onKey);
       dialogs.splice(dialogs.indexOf(close), 1);
-      if (opener && opener !== document.body && opener.isConnected) opener.focus();
+      refocus();
     }
     dialogs.push(close);
     return close;
@@ -3306,12 +3511,26 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
 
   $('openDlg').addEventListener('click', openFiles);
 
+  // Set while the listing is being fetched: a second click (or Ctrl+O)
+  // in that moment opened a second dialog on top of the first.
+  var filesOpening = false;
   async function openFiles() {
-    var data = await api('GET', '/api/datafiles');
-    state.files = data.files;
+    if (filesOpening || $('filesDlg')) return;
+    filesOpening = true;
+    var data;
+    try {
+      data = await api('GET', '/api/datafiles');
+    } catch (err) {
+      toast('Could not list data/', err.message.slice(0, 80));
+      return;
+    } finally {
+      filesOpening = false;
+    }
+    state.files = data.files || [];
 
     var scrim = el('div', 'scrim');
     var modal = el('div', 'modal');
+    modal.id = 'filesDlg';
     var h = el('div', 'modal-h');
     var title = el('h3', null, 'Data files');
     h.appendChild(title);
@@ -3326,21 +3545,17 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     state.files.forEach(function (f) {
       var r = el('button', 'filerow' + (f.isTemplate ? '' : ' cur'));
       // Which card it will open under — decided by the file's contents,
-      // the same way a drop is.
-      r.dataset.doc = f.doc;
-      r.title = 'Load ' + f.name + ' into ' + (DOC_LABEL[f.doc] || f.doc);
-      r.addEventListener('click', async function () {
+      // the same way a drop is. `doc: null`: the contents could not
+      // decide, and the question is asked as it is for a drop.
+      var known = Boolean(DOC_LABEL[f.doc]);
+      r.dataset.doc = known ? f.doc : '';
+      r.title = known ? 'Load ' + f.name + ' into ' + DOC_LABEL[f.doc]
+        : 'Load ' + f.name + ' (Studio will ask which document it is)';
+      r.addEventListener('click', function () {
         close();
-        try {
-          await api('POST', '/api/pick', { doc: f.doc, name: f.name });
-          state.active = f.doc;
-          await refreshStatus();
-          renderAll();
-          preview(f.doc);
-          toast('Reading ' + f.name, 'nothing was copied or modified');
-        } catch (err) {
-          toast('Could not use it', err.message.slice(0, 80));
-        }
+        if (known) { readDataFile(f.doc, f.name); return; }
+        showDrop({ name: f.name }, 'Studio could not tell from its contents whether it is a resume or a cover letter.',
+          function (doc) { hideDrop(); readDataFile(doc, f.name); });
       });
       r.appendChild(el('div', null,
         '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted-2)"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>'));
@@ -3366,6 +3581,20 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     close = openDialog(scrim, modal, title);
   }
 
+  /** Read a file that is already in data/, under one document. */
+  async function readDataFile(doc, name) {
+    try {
+      await api('POST', '/api/pick', { doc: doc, name: name });
+      state.active = doc;
+      await refreshStatusQuietly();
+      renderAll();
+      preview(doc);
+      toast('Reading ' + name, 'nothing was copied or modified');
+    } catch (err) {
+      toast('Could not use it', err.message.slice(0, 80));
+    }
+  }
+
   /**
    * Open the system file chooser for one document.
    *
@@ -3375,15 +3604,25 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
    * HTML drag-and-drop depends on the host webview not intercepting the
    * drop first. Dropping is the nicety; this is the path that works.
    */
+  // The input stays in the page only while its chooser is open: a
+  // cancelled chooser fires `cancel` (no `change`), and where a webview
+  // fires neither, the next Load… removes the one before it.
+  var pickInput = null;
   function pickFile(doc) {
-    var input = el('input');
+    if (pickInput) pickInput.remove();
+    var input = pickInput = el('input');
     input.type = 'file';
     input.accept = '.yml,.yaml,text/yaml';
     input.style.display = 'none';
     document.body.appendChild(input);
+    function done() {
+      input.remove();
+      if (pickInput === input) pickInput = null;
+    }
+    input.addEventListener('cancel', done);
     input.addEventListener('change', function () {
       var file = input.files && input.files[0];
-      input.remove();
+      done();
       // Same rule as a drop: what the file IS beats which card
       // you opened the dialog from.
       if (file) adoptFile(file, doc);
@@ -3406,8 +3645,12 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
    *                  and asking you to confirm the guess; the server
    *                  now reads the file instead, so this appears for
    *                  the genuinely undecidable case and nothing else.
+   *
+   * `pick(doc)`, when given, is what choosing a document does instead of
+   * adopting `file`: the Data files dialog asks the same question about
+   * a file already in data/ (`file` is then just {name}).
    */
-  function showDrop(file, why) {
+  function showDrop(file, why, pick) {
     if (dropEl) return;
     dropEl = el('div', 'drop');
     var inner = el('div', 'drop-in');
@@ -3424,7 +3667,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       b.appendChild(el('div', 'tn', t[1]));
       b.appendChild(el('div', 'td', t[2]));
       b.disabled = !file;
-      b.addEventListener('click', function () { adoptFile(file, t[0], true); });
+      b.addEventListener('click', function () {
+        if (pick) pick(t[0]); else adoptFile(file, t[0], true);
+      });
       tg.appendChild(b);
     });
     inner.appendChild(tg);
@@ -3484,7 +3729,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
             forced ? label
                    : label + (r.detectedBy ? ' — ' + r.detectedBy : ''));
       state.active = doc;
-      await refreshStatus();
+      await refreshStatusQuietly();
       renderAll();
       preview(doc);
     } catch (err) {
@@ -3522,7 +3767,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       try {
         await api('POST', '/api/pick', { doc: doc, name: name });
         state.active = doc;
-        await refreshStatus(); renderAll(); preview(doc);
+        await refreshStatusQuietly(); renderAll(); preview(doc);
         toast('Reading data/' + name, 'the dropped copy was discarded');
       } catch (err) { toast('Could not read it', err.message.slice(0, 80)); }
     });
@@ -3533,7 +3778,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         var r = await api('POST', '/api/adopt-as',
           { doc: doc, name: suggestion, content: content });
         state.active = doc;
-        await refreshStatus(); renderAll(); preview(doc);
+        await refreshStatusQuietly(); renderAll(); preview(doc);
         toast('Saved ' + r.saved, 'now reading it');
       } catch (err) { toast('Could not save it', err.message.slice(0, 80)); }
     });
@@ -3547,15 +3792,33 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     close = openDialog(scrim, modal, title);
   }
 
+  // Only a drag that carries files shows "Drop a .yml file"; text dragged
+  // out of the console, say, does not. Every drop is still taken (the
+  // preventDefaults), so nothing dropped on the window navigates it away.
+  function dragsFiles(e) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    return Boolean(types) && Array.prototype.indexOf.call(types, 'Files') !== -1;
+  }
   window.addEventListener('dragenter', function (e) {
-    e.preventDefault(); dragDepth++; showDrop(null);
+    e.preventDefault();
+    if (!dragsFiles(e)) return;
+    dragDepth++; showDrop(null);
   });
   window.addEventListener('dragover', function (e) { e.preventDefault(); });
-  window.addEventListener('dragleave', function () {
-    dragDepth--; if (dragDepth <= 0) { dragDepth = 0; hideDrop(); }
+  window.addEventListener('dragleave', function (e) {
+    if (!dragsFiles(e)) return;
+    dragDepth--;
+    if (dragDepth <= 0) {
+      dragDepth = 0;
+      // The prompt goes; the "Which document is this?" chooser is a
+      // question still waiting for its answer, and stays.
+      if (!dropClose) hideDrop();
+    }
   });
   window.addEventListener('drop', function (e) {
-    e.preventDefault(); dragDepth = 0; hideDrop();
+    e.preventDefault();
+    if (!dragsFiles(e)) return;
+    dragDepth = 0; hideDrop();
     var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return;
     if (!/\.ya?ml$/i.test(file.name)) {
@@ -3589,7 +3852,9 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
    * browser accelerator keys are on, and turning them off from the shell
    * needs the webview2-com crate as a direct dependency (see main.rs) —
    * and a reload throws away the preview and every render in memory.
-   * Here they re-render, which is what a user pressing them wants.
+   * Here they re-render, which is what a user pressing them wants;
+   * once this Studio run has ended there is nothing to render, and they
+   * reload after all (see rerender).
    *
    * Documents are Ctrl+1 / Ctrl+2 first and Ctrl+Tab second: Chrome
    * keeps Ctrl+Tab for its own tab strip and never passes it to a page,
@@ -3604,7 +3869,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       run: rerender },
     { keys: ['Ctrl+Shift+B'], what: 'Build the PDF of the document on screen',
       match: function (e, mod) { return mod && e.shiftKey && e.code === 'KeyB'; },
-      run: function () { if (!(state.busy.resume || state.busy.letter)) doBuild(state.active); else say('A build or render is already running'); } },
+      run: function () { requestBuild(state.active); } },
     { keys: ['Ctrl+1', 'Ctrl+2'], what: 'Show the Resume, the Cover Letter',
       match: function (e, mod) {
         return mod && !e.shiftKey && (e.code === 'Digit1' || e.code === 'Digit2');
@@ -3675,12 +3940,17 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
   function toggleDiagnostics() {
     var det = $('diagDet');
     var open = !(det && det.open);
+    // Closed from inside (the Find box, say): the control that had focus
+    // is hidden now, so focus goes to the summary, not to <body>.
+    var inside = Boolean(det && det.contains(document.activeElement));
     state.diagAuto = false;
     savePrefs({ diagnostics: open });
-    renderInspector();
+    renderAll();
     var again = $('diagDet');
     if (again && open) {
       again.scrollIntoView({ block: 'nearest' });
+      again.querySelector('summary').focus();
+    } else if (again && inside) {
       again.querySelector('summary').focus();
     }
     say(open ? 'Diagnostics shown' : 'Diagnostics hidden');
@@ -3745,8 +4015,12 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     // Never a reload: see above.
     var reload = e.key === 'F5' || (mod && e.code === 'KeyR');
     if (reload) e.preventDefault();
-    // A dialog is open: it has the keyboard (Tab, Escape, its buttons).
-    if (dialogs.length || dropEl) return;
+    // A dialog is open: it has the keyboard (Tab, Escape, its buttons),
+    // except for F5 / Ctrl+R, which re-render behind it as they do anywhere.
+    if (dialogs.length || dropEl) {
+      if (reload && !e.repeat) rerender();
+      return;
+    }
     for (var i = 0; i < SHORTCUTS.length; i++) {
       var sc = SHORTCUTS[i];
       if (!sc.match || !sc.match(e, mod, typing)) continue;
@@ -3756,10 +4030,51 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
     }
   });
 
+  /* ─── the end of this Studio run ───────────────────────────────
+   *
+   * The page belongs to one run of the server: its cookie holds that
+   * run's launch token. A server started again has a new token and
+   * answers every request of this page with 403 {error:'forbidden'}, and
+   * the event stream's reconnect too, after which EventSource gives up
+   * for good (CLOSED). A server that has stopped answers nothing, and
+   * its event stream is down. Each of those used to read as a failure of
+   * whatever was asked at the time — "Render failed: forbidden", "Build
+   * failed", "Failed to fetch" — with Diagnostics opened on it, and the
+   * next save or press failed again the same way.
+   *
+   * Now it is said once, by the banner, and nothing more is tried: no
+   * render, no build, no status read. F5 and Ctrl+R reload the page,
+   * which shows the server's page saying where to open the Studio.
+   */
+  var ENDED_TEXT = 'This Studio run has ended — open the new link from the terminal, or restart the app.';
+  var events = null;   // the EventSource, for its state
+
+  function endSession() {
+    if (state.ended) return;
+    state.ended = true;
+    pendingBuilds = [];
+    pendingPreview = null;
+    if (events) events.close();
+    ['resume', 'letter'].forEach(function (d) {
+      if (state.busy[d] && state.busyTheirs[d]) setBusy(d, null);
+    });
+    $('endedBanner').textContent = ENDED_TEXT;
+    $('envLine').textContent = 'this Studio run has ended';
+    renderAll();
+  }
+  /** End the run, and the error its caller throws: `ended` set, not a failure. */
+  function runEnded() {
+    endSession();
+    var e = new Error(ENDED_TEXT);
+    e.ended = true;
+    e.failures = [];
+    return e;
+  }
+
   /* ─── server events ────────────────────────────────────────── */
 
   function connectEvents() {
-    var es = new EventSource('/api/events');
+    var es = events = new EventSource('/api/events');
 
     es.addEventListener('hello', function (ev) {
       clientId = JSON.parse(ev.data).client;
@@ -3780,8 +4095,14 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
 
     // A save in data/ or styles/ is the live-preview trigger. There is
     // no editor in this app on purpose — you keep using your own.
+    //
+    // Only the document on screen renders; the save makes both stale,
+    // whichever file it was. A stylesheet or the shared profile is read
+    // by both, and the event's `file` is only the last of the saves the
+    // server's debounce gathered into it, so it cannot clear either one.
     es.addEventListener('changed', function () {
-      if (state.paused) { state.missedChange = true; return; }
+      state.changes++;
+      if (state.paused) return;
       var m = docMeta(state.active);
       if (!m || !m.live) return;
       preview(null, { fromChange: true });
@@ -3799,28 +4120,64 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
       // This window's own render: preview() owns the busy state, and
       // ends it only once the reply is in state.render. Clearing it on
       // the event (which precedes the reply) redrew the previous render
-      // over the streamed pages until the reply landed.
+      // over the streamed pages until the reply landed. Nor is this
+      // window's build its to end: another window's render finishing
+      // used to clear it.
       if (streamRender[d.doc]) return;
-      setBusy(d.doc, d.state === 'start' ? 'render' : null);
+      if (state.busy[d.doc] && !state.busyTheirs[d.doc]) return;
+      setBusy(d.doc, d.state === 'start' ? 'render' : null, true);
       renderCanvas();
       // A save seen while another window's render ran was deferred.
       if (d.state !== 'start') runPendingPreview();
     });
 
+    // A build, by this window or another. This window's own is doBuild's
+    // to show, from its request to its reply, as with a render above.
+    // Another window's shows as running here (and holds this window's
+    // renders and builds back, as the engine would), and when it ends the
+    // status is read again, so the card says "Built · …" with the new
+    // file rather than what it said before.
+    es.addEventListener('build', function (ev) {
+      var d = JSON.parse(ev.data);
+      if (state.busy[d.doc] && !state.busyTheirs[d.doc]) return;
+      if (d.state === 'start') {
+        setBusy(d.doc, 'build', true);
+        renderAll();
+        return;
+      }
+      if (state.busy[d.doc] === 'build') setBusy(d.doc, null);
+      refreshStatusQuietly().then(function () {
+        renderAll();
+        runPendingPreview();
+      });
+    });
+
     var dropped = false;
     es.onerror = function () {
+      // Refused (a new run of the server, with a new token): EventSource
+      // does not try again. See endSession.
+      if (es.readyState === EventSource.CLOSED) { endSession(); return; }
       dropped = true;
       $('envLine').textContent = 'disconnected from the engine';
     };
     // EventSource reconnects by itself. Saves made while it was down were
     // never announced, and the engine may be a new one: refresh and
     // render once, so neither the status line nor the pane stays stale.
+    // Both documents count as changed, as for a save. Another window's
+    // render seen starting before the drop may have ended unseen, so
+    // that busy flag is dropped; this window's own stay, as their
+    // requests are still running.
     es.onopen = function () {
       if (!dropped) return;
       dropped = false;
+      state.changes++;
+      ['resume', 'letter'].forEach(function (d) {
+        if (state.busy[d] && state.busyTheirs[d]) setBusy(d, null);
+      });
       refreshStatusQuietly().then(function () {
         renderAll();
-        if (state.paused) state.missedChange = true; else preview();
+        // A Build pressed meanwhile was waiting on that flag.
+        if (!state.paused) preview(); else runPendingPreview();
       });
     };
   }
@@ -3842,7 +4199,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-xs);padding:1px 6px;border:1px so
         prefsFromServer = true;
         applyTheme(prefs.theme);
         state.snapshot = prefs.snapshot; state.tests = prefs.tests;
-        state.zoom = prefs.zoom; state.fit = prefs.fit;
+        state.zoom = prefZoom(prefs.zoom); state.fit = prefFit(prefs.fit);
         $('hlBtn').setAttribute('aria-pressed', String(prefs.highlight));
         renderAll();
       }).catch(function () { /* localStorage stands */ });

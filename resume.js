@@ -21,12 +21,15 @@
  *   7. Assert layout invariants (column divider terminates at the
  *      page bottom margin; section-rhythm equal across sidebar
  *      and main column; expected page count = solver's count;
- *      no descendant overflows its page's content area).
+ *      no descendant overflows its page's content area, vertically
+ *      or sideways; everything phase 3 measured renders exactly
+ *      once — content conservation).
  *   8. Generate the PDF via Playwright.
  *   9. Crop it to exact US Letter (8.5×11 in) and stamp
  *      authoritative metadata from dist/pdf_meta.json.
  *  10. Snapshot test: pixel-diff the built PDF against the committed
- *      fixture. Auto-bootstraps on first build.
+ *      fixture. Off unless RESUME_SNAPSHOT asks for it; when on, a
+ *      missing fixture is created from this build (--auto-bootstrap).
  *
  * The PDF is named after you, from `name.first` / `name.last` in the
  * profile — dist/Gaius_Caesar_Resume.pdf. See build/_output_name.py.
@@ -83,11 +86,12 @@ require('./build/_compile_cache').enable();
 const { chromium } = require('playwright');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { detectPython } = require('./build/detect_python');
+const { detectPythonInfo } = require('./build/detect_python');
 const { createPipeline, reported } = require('./build/pipeline');
 const { recordBuilt, seedRecord, readRecord } = require('./build/_output_name');
-const { subprocessEnv, pythonRunner, pruneStaleOutputs, readDataSource } = require('./build/_cli');
-const distLock = require('./build/_dist_lock');
+const {
+  subprocessEnv, pythonRunner, pruneStaleOutputs, readDataSource, acquireDist,
+} = require('./build/_cli');
 const {
   ENV_SKIP_SNAPSHOT,
   ENV_RESUME_SNAPSHOT,
@@ -105,8 +109,12 @@ const c = require('./build/_console');
 const ROOT = __dirname;
 
 // Detect Python via the shared detect_python module. Done once at
-// startup so all subprocess calls share the same interpreter.
-const PYTHON = detectPython();
+// startup so all subprocess calls share the same interpreter. PYTHON is
+// what is spawned (an absolute path, when auto-detected); the log shows
+// PY.label and the snapshot hint PY.command, neither of which carries
+// the user's home directory. See build/detect_python.js.
+const PY = detectPythonInfo();
+const PYTHON = PY.exe;
 const runPython = pythonRunner(ROOT, PYTHON);
 
 
@@ -199,9 +207,9 @@ function runTests() {
   //
   // These suites test the PIPELINE — the solver, the loader, the warm
   // engine's equivalence to the cold CLI. None of that changes when
-  // you edit a bullet, and on the reference machine they cost ~9s,
-  // most of it engine_equivalence launching Chromium to render the
-  // document twice. Paying that on every save is a tax on writing.
+  // you edit a bullet, and on the reference machine they cost a couple
+  // of minutes, much of it the suites that launch Chromium. Paying that
+  // on every save is a tax on writing.
   //
   // What validates YOUR DATA is not here and always runs: build.py's
   // validate_data, the layout invariants, the maxPages ceiling. So
@@ -223,12 +231,12 @@ function runTests() {
 
   // When invoked as a subprocess of snapshot_pdf.py --update-all, the
   // parent sets ENV_RESUME_PIPELINE_SUFFIX to label which data source
-  // is being built ("default data" or "local data"). The suffix attaches
+  // is being built ("default data" or "my data"). The suffix attaches
   // to the FIRST banner only — subsequent phase banners stay plain
   // because the data-source context is anchored at the top.
   const suffix = process.env[ENV_RESUME_PIPELINE_SUFFIX];
   c.banner(suffix ? `Tests (${suffix})` : 'Tests');
-  c.ok_pair('Detected Python', PYTHON);
+  c.ok_pair('Detected Python', PY.label);
 
   // The unit tests get a clean environment, not this build's.
   //
@@ -279,9 +287,16 @@ function runTests() {
  * replace.
  */
 function runSnapshot() {
-  if (process.env[ENV_SKIP_SNAPSHOT] === '1') {
+  // Trimmed like its siblings (cmd.exe keeps the space before `&&`).
+  // Only '1' skips; any other value is said out loud and ignored, rather
+  // than ignored in silence.
+  const skip = (process.env[ENV_SKIP_SNAPSHOT] || '').trim();
+  if (skip === '1') {
     c.banner('Snapshot (skipped)');
     return;
+  }
+  if (skip) {
+    c.warn_pair(`Unknown ${ENV_SKIP_SNAPSHOT}`, `${skip} — only '1' skips; not skipping`);
   }
 
   const mode = (process.env[ENV_RESUME_SNAPSHOT] || 'off').trim().toLowerCase();
@@ -322,9 +337,20 @@ function runSnapshot() {
     // ran, and the subprocess has already said why.
     const differs = err.status === 1;
     if (differs) {
-      // The subprocess already printed its per-page diff lines.
+      // The subprocess already printed its per-page diff lines. The
+      // hint names the interpreter this build ran, which need not be
+      // the `python` on PATH: the candidate's name as detection found
+      // it on PATH, or PYTHON as written — not the absolute path, which
+      // would put the user's home directory into the Studio's log. It
+      // is quoted when it has a space in it. PowerShell reads a quoted
+      // first word as a string, not a command, unless & comes first;
+      // cmd.exe refuses the &.
+      const quoted = /\s/.test(PY.command);
       c.detail('To accept this as the new baseline:');
-      c.detail('  python build/snapshot_pdf.py --update');
+      c.detail(`  ${quoted ? `"${PY.command}"` : PY.command} build/snapshot_pdf.py --update`);
+      if (quoted && process.platform === 'win32') {
+        c.detail('  (in PowerShell, start the line with & and a space)');
+      }
     }
     if (mode === 'strict') {
       throw reported(err);
@@ -366,11 +392,7 @@ function builtDataSource() {
     // From here to the prune this build owns dist/: a Studio preview
     // running at the same time rewrites the same metadata, placement
     // and HTML. See build/_dist_lock.js.
-    releaseDist = await distLock.acquire(path.join(ROOT, 'dist'), {
-      owner: 'node resume.js',
-      blocking: true,     // execFileSync steps: heartbeat from a thread
-      onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
-    });
+    releaseDist = await acquireDist(ROOT, 'node resume.js');
     seedRecord(pipeline.paths.dist, 'resume', pipeline.paths.pdfMeta);
 
     c.banner('Build (measurement)');
@@ -399,7 +421,7 @@ function builtDataSource() {
     c.banner('Build (final)');
     await pipeline.buildFinal();
 
-    await pipeline.verifyInvariants(page, placement.pages.length);
+    await pipeline.verifyInvariants(page, placement.pages.length, {}, { measurements });
 
     c.banner('PDF');
     // Read once. `paths.pdf` re-reads pdf_meta.json on every access,

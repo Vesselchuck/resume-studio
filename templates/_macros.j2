@@ -16,11 +16,12 @@
     ──────────────────────────
     Every inner macro (render_job, render_sidebar_block,
     render_edu_item) accepts a `measure=False` flag. When true, the
-    macro adds the data-measure / data-id / data-row-index /
-    data-item-index / data-bullet-index attributes that
-    build/measure_dom.js queries to size content for the layout
-    solver. When false (default — production), those attributes are
-    omitted, keeping the final HTML clean.
+    macro adds data-measure / data-id / data-type attributes, which
+    build/measure_dom.js reads to size content for the layout solver,
+    and data-row-index / data-item-index / data-bullet-index, which
+    nothing reads (a trace for whoever inspects the measurement HTML;
+    see templates/measurement.j2). When false (default — production),
+    those attributes are omitted, keeping the final HTML clean.
 
     Before this refactor, templates/measurement.j2 reimplemented all
     three macros inline with data-* attributes added. A change to the
@@ -56,7 +57,8 @@
       • Regular: title + meta + bullets. `datetime` and `location` are
         optional: without `datetime` the <time> keeps its printed date
         and loses only the machine-readable attribute.
-      • Gap: italic title, no location, no bullets (j.gap is truthy)
+      • Gap: italic title, no bullets (j.gap is truthy); a location
+        prints like a job's when one is given
       • Continuation: no header, just bullets, with data-continues-from
 
     Parameters

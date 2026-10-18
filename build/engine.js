@@ -213,7 +213,6 @@ class PythonWorker {
     this.buildEnv = null;
     this.proc = null;
     this.hello = null;
-    this.lastLog = [];
     // Set by stop(): a worker being shut down on purpose is not restarted.
     this.stopping = false;
     // While true, run() neither echoes the worker's log nor reports a
@@ -304,7 +303,11 @@ class PythonWorker {
         const err = new Error(
           `build/worker.py exited (${signal ? `signal ${signal}` : `code ${code}`})`);
         failPending(err);
-        if (this._resolveReady && this.proc === proc) {
+        // Before it said hello: a start that failed. Whoever awaited the
+        // start reports what that means (createEngine fails; a restart
+        // fails the request that asked for it), so this says only that.
+        const starting = Boolean(this._resolveReady) && this.proc === proc;
+        if (starting) {
           this._resolveReady = null;
           reject(err);
         }
@@ -314,7 +317,9 @@ class PythonWorker {
           c.warn(recent >= MAX_CRASHES
             ? `Python worker exited (${signal || code}); ${recent} crashes in `
               + `${CRASH_WINDOW_MS / 60000} minutes, so it stays down until Re-render`
-            : `Python worker exited (${signal || code}); it restarts on the next request`);
+            : starting
+              ? `Python worker exited (${signal || code}) while starting`
+              : `Python worker exited (${signal || code}); it restarts on the next request`);
         }
       });
     });
@@ -535,8 +540,21 @@ class PythonWorker {
   async run(req, onPartial = null) {
     await this.ensure();
     const frame = await this.call(req, onPartial);
-    this.lastLog = frame.log || [];
-    if (!this.silent) (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
+    if (!this.silent) {
+      (frame.log || []).forEach(line => process.stdout.write(line + '\n'));
+      // What the request printed to its stderr: the warnings (an unknown
+      // key "is ignored") that the CLI shows and that used to be dropped
+      // here. To stderr, where the CLI prints them too; the Studio's log
+      // is a tee of both streams (build/studio_server.js). A failed
+      // build's ❌ headline and the lines after it are also in this list,
+      // and they are the error's own message and detail, reported below;
+      // only what came before is printed. Any other failure's message is
+      // not in the list, so all of it is.
+      const diagnostics = frame.diagnostics || [];
+      const at = frame.ok ? -1 : diagnostics.indexOf(frame.error.message);
+      (at === -1 ? diagnostics : diagnostics.slice(0, at))
+        .forEach(line => process.stderr.write(line + '\n'));
+    }
     if (!frame.ok) {
       // build.py's fail() output arrives already formatted by _console
       // ("  ❌ headline", indented detail): strip that, so c.err does not
@@ -577,7 +595,8 @@ class PythonWorker {
    *
    * Only safe because every caller of this worker is serialized through
    * the engine's queue, so nothing else's log can be swallowed while it
-   * is set. See renderPreview's speculative build, its one user.
+   * is set. Its users are the speculative build (startSpeculation) and
+   * the power-throttling opt-out (optOutOfPowerThrottling).
    */
   async silently(fn) {
     const was = this.silent;
@@ -689,7 +708,13 @@ async function createEngine({
   platform = process.platform, timeouts = {},
 } = {}) {
   root = root || path.join(__dirname, '..');
-  const interpreter = python || detectPython();
+  // No Python, or a PYTHON that cannot be run: detectPython has said why
+  // (on stderr, where the desktop app's start-up page reads it), and
+  // this rejects. Its default is to exit the process, which in the
+  // Studio's server ended it before it could report the failed start.
+  const interpreter = python || detectPython({
+    exit: () => { throw new Error('No Python interpreter this project can use; see the message above'); },
+  });
   const pageTimeoutMs = timeouts.pageMs || PAGE_TIMEOUT_MS;
   const buildTimeoutMs = timeouts.buildMs || BUILD_TIMEOUT_MS;
 
@@ -832,10 +857,14 @@ async function createEngine({
    * and the next render opens a fresh one in the same browser. The
    * render that was running when it crashed still fails; a real
    * navigation follows, since the new page has no history.
+   *
+   * Opening it has a deadline like every other step (withinDeadline):
+   * a Chromium that never answers newContext() or newPage() used to
+   * hold the render, and the queue behind it, forever.
    */
   async function openPage(b) {
-    const ctx = await b.newContext();
-    const opened = await ctx.newPage();
+    const ctx = await withinDeadline(b.newContext(), 'opening a page');
+    const opened = await withinDeadline(ctx.newPage(), 'opening a page');
     opened.on('crash', () => {
       if (page !== opened) return;
       c.warn('The Chromium page crashed; the next render opens a new one');
@@ -860,17 +889,23 @@ async function createEngine({
    * during a render has a deadline of its own: page.evaluate and
    * page.pdf wait forever, and document.fonts.ready can simply never
    * resolve.
+   *
+   * `onStuck`, when given, is called instead of closing the browser:
+   * the speculative page's steps close only that page (see
+   * abandonSpeculativePage), because the main page is in the middle of
+   * this render's own work.
    */
-  function withinDeadline(step, what) {
+  function withinDeadline(step, what, onStuck = null) {
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        const err = new Error(
-          `Chromium did not finish ${what} in ${pageTimeoutMs / 1000} s, so it was closed; `
-          + 'the next render starts a new one.');
+        const err = new Error(onStuck
+          ? `Chromium did not finish ${what} in ${pageTimeoutMs / 1000} s, so that page was closed.`
+          : `Chromium did not finish ${what} in ${pageTimeoutMs / 1000} s, so it was closed; `
+            + 'the next render starts a new one.');
         err.kind = 'timeout';
         c.warn(err.message);
-        abandonBrowser();
+        (onStuck || abandonBrowser)();
         reject(err);
       }, pageTimeoutMs);
       timer.unref();
@@ -921,11 +956,50 @@ async function createEngine({
     return specPagePromise;
   }
 
+  /**
+   * The speculative page did not answer in time: close it and forget it,
+   * and leave the browser and the main page alone. A guess is optional;
+   * the render it was made for goes on without it. Closing the whole
+   * browser here, as withinDeadline otherwise does, pulled the main page
+   * out from under the measurement still running on it, and that render
+   * then failed with Playwright's "target closed" instead of the timeout.
+   * If Chromium itself is stuck, the main page's own deadline says so.
+   */
+  function abandonSpeculativePage() {
+    const stuck = specPagePromise;
+    specPagePromise = null;
+    specNav.assets = null;
+    specNav.sinceGoto = 0;
+    if (stuck) stuck.then(pg => pg.close()).catch(() => { /* already gone */ });
+  }
+
   // The two are independent processes, so booting them side by side
   // costs about as long as the slower of them rather than their sum:
   // Python was spawned first, and Chromium's require and launch came
   // next while Python boots.
-  const hello = await workerReady;
+  //
+  // A worker that fails to start fails createEngine, and then nobody
+  // holds this engine to dispose() it: the launch started above would
+  // finish with nothing left to close it, and Chromium would outlive the
+  // failed start. So the engine shuts itself down here, waiting for that
+  // launch to settle first. tests/test_failure_recovery.js (S1) starts
+  // one with a Python that exits at once.
+  let hello;
+  try {
+    hello = await workerReady;
+  } catch (err) {
+    disposed = true;
+    if (pagePromise) {
+      try { await pagePromise; } catch { /* never launched */ }
+    }
+    if (browser) {
+      try { await browser.close(); } catch { /* already gone */ }
+      browser = null;
+      page = null;
+      pagePromise = null;
+    }
+    throw err;
+  }
 
   // Sass only when the first preview needs it: see "Deferred Sass
   // warm-up" below.
@@ -982,9 +1056,12 @@ async function createEngine({
    * cutoff's memo stays valid, and the first load after a relaunch is a
    * real navigation because the new page has no history.
    *
-   * The page reports visibility (document.visibilitychange) to the
-   * server, which calls setWindowHidden(). Covered-but-not-minimized is
-   * not reported by browsers as hidden, and is not treated as such.
+   * Visibility reaches the server as POST /api/visibility, which calls
+   * setWindowHidden(). In the desktop app the Tauri shell sends it when
+   * the window is minimized or restored: WebView2 never fires
+   * visibilitychange on minimize. In a browser the page sends it, from
+   * document.visibilitychange. Covered-but-not-minimized is reported as
+   * hidden by neither, and is not treated as such.
    */
   let hiddenTimer = null;
   let windowHidden = false;
@@ -1028,8 +1105,11 @@ async function createEngine({
 
   async function releaseBrowser() {
     // Queued behind whatever was running when the delay ran out: the
-    // window may have been shown again since.
-    if (disposed || !windowHidden || (!browser && !pagePromise)) return;
+    // window may have been shown again since. Or that was a render that
+    // ended while still hidden and started the delay again (see
+    // renderPreview's `after`): then the new delay decides, and queues a
+    // release of its own when it runs out.
+    if (disposed || !windowHidden || hiddenTimer || (!browser && !pagePromise)) return;
     if (pagePromise) {
       try { await pagePromise; } catch { /* never launched */ }
     }
@@ -1283,11 +1363,16 @@ async function createEngine({
         const html = readOrMissing(pl.paths.html);
         if (!html) return { failed: 'the speculative build wrote no HTML' };
         const token = digestOf([html, String(t0), String(++specSeq)]);
-        const pg = await speculativePage();
+        // Opening the page has its deadline too: a newPage() that never
+        // answered left this guess, and the render awaiting it, waiting
+        // forever. A page that does arrive late is closed by
+        // abandonSpeculativePage, which waits for it.
+        const pg = await withinDeadline(speculativePage(), 'opening the speculative page',
+          abandonSpeculativePage);
         await withinDeadline(pl.openDocument(pg, specNavOptions(inputs, record)),
-          'loading the speculative page');
+          'loading the speculative page', abandonSpeculativePage);
         await withinDeadline(pg.evaluate((t) => { window.__studioSpeculation = t; }, token),
-          'marking the speculative page');
+          'marking the speculative page', abandonSpeculativePage);
         return { placement, html, page: pg, token, how: record.how, ms: Date.now() - t0 };
       } catch (err) {
         return { failed: String(err.message || err).split('\n')[0], ms: Date.now() - t0 };
@@ -1308,7 +1393,8 @@ async function createEngine({
     if (!finalHtml || !spec.html.equals(finalHtml)) return null;
     try {
       const token = await withinDeadline(
-        spec.page.evaluate(() => window.__studioSpeculation), 'checking the speculative page');
+        spec.page.evaluate(() => window.__studioSpeculation), 'checking the speculative page',
+        abandonSpeculativePage);
       if (token !== spec.token) return null;
     } catch {
       return null;
@@ -1357,6 +1443,17 @@ async function createEngine({
     return run;
   }
 
+  // A job still waiting on the queue when dispose() runs must not start.
+  // dispose() stops what it can see — the build child, the Sass
+  // compiler, Chromium, the worker — but not what is queued: a Build
+  // behind the current job used to run `node resume.js` after it, and a
+  // preview with stale styles to start the Sass compiler again (which
+  // keeps Node from exiting). Checked where each job begins: in
+  // withDist (previews, exclusive()) and in build().
+  function notDisposed() {
+    if (disposed) throw new Error('the engine has been shut down');
+  }
+
   // The queue keeps this process's own work apart; dist/'s lock keeps
   // it apart from a `node resume.js` or `node letter.js` running
   // alongside, which write the same metadata, placement and HTML. Taken
@@ -1365,11 +1462,14 @@ async function createEngine({
   // previews out until the child is done. See build/_dist_lock.js.
   function withDist(fn) {
     return async () => {
+      notDisposed();
       const release = await distLock.acquire(path.join(root, 'dist'), {
         owner: 'the Studio',
         onWait: who => c.info_pair('Waiting for dist/', `in use by ${who}`),
       });
       try {
+        // Again: dispose() may have run while the lock was awaited.
+        notDisposed();
         return await fn();
       } finally {
         release();
@@ -1433,7 +1533,8 @@ async function createEngine({
 
       if (doc === 'letter') {
         // One flowing column: no measurement pass, no solver, no
-        // invariant check. Skipping them here is not an optimization,
+        // invariant check — only the check that it fits its page, after
+        // the load below. Skipping the rest here is not an optimization,
         // it is what the document is — see letter.js.
         t = Date.now();
         await pl.buildLetter();
@@ -1467,10 +1568,11 @@ async function createEngine({
 
       let finalKey;
       let speculated = null;
+      // The resume's measurements, kept for the layout check below.
+      let measurements = null;
       if (doc === 'resume') {
         t = Date.now();
         const measureKey = keyOf('measurement');
-        let measurements;
         let speculating = null;
         if (m.measureKey === measureKey && m.measurements) {
           // A copy: nothing downstream may alter the remembered one.
@@ -1565,10 +1667,14 @@ async function createEngine({
           await withinDeadline(pl.verifyInvariants(printFrom, placement.pages.length,
             navOptions(inputs, timings),
             // Already loaded, and proved to be the final HTML.
-            printFrom === p ? {} : { loaded: speculated.how || 'goto' }), 'checking the layout');
+            { measurements, ...(printFrom === p ? {} : { loaded: speculated.how || 'goto' }) }),
+            'checking the layout');
         } catch (err) {
-          // A stuck page is not a layout verdict: fail the render.
-          if (err.kind === 'timeout') throw err;
+          // Only a violation is a layout verdict. Anything else — a stuck
+          // page, a page that closed, the check itself failing — fails the
+          // render, so it is neither shown as one nor remembered as one
+          // by the early cutoff.
+          if (err.kind !== 'layout') throw err;
           invariants = { ok: false, message: err.message };
         }
         // How full each page is, for the Studio's last-page chip.
@@ -1580,6 +1686,18 @@ async function createEngine({
         t = Date.now();
         await withinDeadline(pl.openDocument(p, navOptions(inputs, timings)), 'loading the letter');
         mark('load', t);
+
+        // The letter's one check, the one `node letter.js` refuses a
+        // letter on: it fits its sheet, which clips whatever runs over
+        // (see verifyLetterFits). Reported like the resume's invariants.
+        t = Date.now();
+        try {
+          await withinDeadline(pl.verifyLetterFits(p), 'checking the letter fits');
+        } catch (err) {
+          if (err.kind !== 'layout') throw err;
+          invariants = { ok: false, message: err.message };
+        }
+        mark('invariants', t);
       }
 
       // Chromium's print as it comes, uncropped: the worker crops it in
@@ -1721,8 +1839,11 @@ async function createEngine({
     try {
       if (process.platform === 'win32') {
         // /T: the tree. TerminateProcess on the child alone left its
-        // Python and Chromium running, holding its pipes.
-        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'],
+        // Python and Chromium running, holding its pipes. By full path:
+        // Node on Windows looks for a bare name in the current directory
+        // (the project root) before PATH, so a taskkill.exe there would run.
+        const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+        spawn(taskkill, ['/PID', String(child.pid), '/T', '/F'],
           { stdio: 'ignore', windowsHide: true }).on('error', () => child.kill());
       } else {
         process.kill(-child.pid, signal);
@@ -1734,6 +1855,7 @@ async function createEngine({
 
   function build({ script = 'resume.js', env = {}, after = null } = {}) {
     return serial(async () => {
+      notDisposed();
       const result = await runBuild(script, env);
       if (after) result.after = await after(result);
       return result;

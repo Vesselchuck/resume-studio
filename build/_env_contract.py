@@ -14,8 +14,10 @@ each consumer's read site, since they carry domain-specific meaning
 (e.g. RESUME_DATA_SOURCE accepts 'default' or 'mine').
 
 Imported by:
-  • build.py            — reads ENV_RESUME_DATA_SOURCE
-  • snapshot_pdf.py     — sets RESUME_DATA_SOURCE and removes the two
+  • build.py            — reads ENV_RESUME_DATA_SOURCE, ENV_RESUME_DATA_FILE
+  • build_letter.py     — reads ENV_RESUME_DATA_SOURCE, ENV_LETTER_DATA_FILE
+  • snapshot_pdf.py     — sets RESUME_DATA_SOURCE, SKIP_SNAPSHOT and
+                          RESUME_PIPELINE_SUFFIX and removes the two
                           data-file variables when invoking resume.js
 """
 

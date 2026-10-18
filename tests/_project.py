@@ -19,6 +19,11 @@ node_modules is linked into the copy, not copied — a directory symlink,
 or a junction on Windows. remove() takes the link away first, on its
 own: shutil.rmtree before Python 3.12 does not recognise a junction as a
 link, and would walk into it and delete the real node_modules.
+
+A build that fails is a failure of the suite, not a skip: the build is
+the code under test. Suites raise build_error(problem), which is a skip
+only when there is no node to build with, or Playwright's Chromium
+cannot start (checked directly).
 """
 
 import os
@@ -26,9 +31,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
+
+# What Project.build() returns when there is no node on PATH.
+NO_NODE = "node not found"
 
 _DIRS = ("build", "styles", "templates", "fonts", "ui", "schemas")
 _FILES = ("resume.js", "letter.js", "package.json")
@@ -90,7 +99,7 @@ class Project:
         """
         node = shutil.which("node")
         if not node:
-            return "node not found"
+            return NO_NODE
         env = {k: v for k, v in os.environ.items() if k not in _DATA_ENV}
         env.update({"RESUME_TESTS": "off", "RESUME_SNAPSHOT": "off"})
         for script in ("resume.js", "letter.js"):
@@ -115,6 +124,58 @@ class Project:
         if link.is_symlink() or link.exists():
             return   # still there somehow: leave the copy rather than risk the target
         shutil.rmtree(self._tmp, ignore_errors=True)
+
+
+# Why Playwright's Chromium cannot start here: None until probed, then
+# "" when it starts. Probed once per process, and only after a build
+# has failed.
+_CHROMIUM_PROBLEM = None
+
+_CHROMIUM_PROBE = (
+    "require('playwright').chromium.launch()"
+    ".then((b) => b.close())"
+    ".catch((e) => { process.stdout.write(String(e.message).split('\\n')[0]);"
+    " process.exitCode = 1; })"
+)
+
+
+def chromium_problem():
+    """Why Playwright's Chromium cannot start, or "" when it can.
+
+    The same check the JS suites make before they skip: launch it and
+    close it. Asked directly, not read from the build's output, so a
+    build that fails for any other reason is never taken for this one.
+    """
+    global _CHROMIUM_PROBLEM
+    if _CHROMIUM_PROBLEM is None:
+        try:
+            r = subprocess.run([shutil.which("node") or "node", "-e", _CHROMIUM_PROBE],
+                               cwd=str(ROOT), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=120)
+            _CHROMIUM_PROBLEM = "" if r.returncode == 0 else (
+                r.stdout.strip() or (r.stderr.strip().splitlines() or ["no reason given"])[-1])
+        except (OSError, subprocess.TimeoutExpired) as err:
+            _CHROMIUM_PROBLEM = f"the launch check did not finish ({type(err).__name__})"
+    return _CHROMIUM_PROBLEM
+
+
+def build_error(problem):
+    """The exception a suite raises when Project.build() returned `problem`.
+
+    Two things are a skip, both of them the machine and not the code:
+    no node to build with, and a Chromium that cannot start (as in the
+    JS suites; the build prints with it). Every other problem (a build
+    that exits non-zero or times out with Chromium working) is the code
+    under test failing, and is an error. These suites used to skip on
+    any of them, so a broken build left five suites skipped and the run
+    green.
+    """
+    if problem == NO_NODE:
+        return unittest.SkipTest("node is not on PATH, so no copy of the project can be built")
+    why = chromium_problem()
+    if why:
+        return unittest.SkipTest(f"chromium unavailable ({why})")
+    return RuntimeError(f"could not build a copy of the project to test against ({problem})")
 
 
 def real_dist_fingerprint():

@@ -48,8 +48,9 @@ ISOLATION
   untouched. The copy's worker is started from the copy: worker.py finds
   the project from its own location.
 
-  The suite skips as a whole only when the copy cannot be built (no
-  Node, no Chromium), and says why.
+  The suite skips as a whole only when there is no node to build the
+  copy with, or no Chromium that starts, and says why. A copy that
+  fails to build otherwise is an error.
 """
 
 import json
@@ -67,7 +68,7 @@ BUILD_DIR = ROOT / "build"
 sys.path.insert(0, str(BUILD_DIR))
 sys.path.insert(0, str(ROOT / "tests"))
 import _output_name  # noqa: E402  (what the build called its PDFs)
-from _project import Project, real_dist_fingerprint  # noqa: E402
+from _project import Project, build_error, real_dist_fingerprint  # noqa: E402
 
 FRAME_PREFIX = "\x1e"
 TIMEOUT = 120  # generous: a cold import of pypdfium2 on a slow CI box
@@ -88,7 +89,7 @@ def setUpModule():
     if problem:
         PROJECT.remove()
         PROJECT = None
-        raise unittest.SkipTest(f"could not build a copy of the project to test against ({problem})")
+        raise build_error(problem)
     root = PROJECT.root
     DIST = root / "dist"
     BUILD_PY = root / "build" / "build.py"

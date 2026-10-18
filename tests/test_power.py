@@ -7,7 +7,8 @@ WHAT THIS GUARDS
   • The process tree is walked from the root the engine names, every
     descendant once, and nothing outside it — a stale parent id that
     points back into the tree (a reused pid) cannot make it loop.
-  • Off Windows it does nothing and says why, instead of raising.
+  • Off Windows it does nothing and says why, instead of raising; so
+    it does for a root that is not a process id, on any platform.
   • On Windows, a process can opt itself out, and the setting reads
     back as set. That half runs only on Windows; it is the only real
     check of the ctypes declarations, so run the suite there.
@@ -67,6 +68,22 @@ class TestDescendants(unittest.TestCase):
     def test_a_child_created_in_the_same_tick_is_a_child(self):
         self.assertEqual(_power.descendants({10: 1, 11: 10}, 10, {10: 5, 11: 5}.get),
                          [10, 11])
+
+
+class TestNeverRaises(unittest.TestCase):
+    def test_a_root_that_is_not_a_pid_is_reported(self):
+        # int(None) raised TypeError on Windows, which the docstring's
+        # "never raises" did not allow for.
+        # int() also took True and 1.9 as pid 1 and b"12" as 12, and
+        # raised OverflowError on infinity; 0 is the System Idle Process.
+        for root in (None, "node", 1.5j, float("inf"), True, 1.9, b"12", "12", 0, -5):
+            with self.subTest(root=root):
+                r = _power.opt_out_tree(root)
+                self.assertFalse(r["supported"])
+                self.assertEqual(r["applied"], [])
+                self.assertTrue(r["reason"])
+                if sys.platform == "win32":
+                    self.assertIn("not a process id", r["reason"])
 
 
 @unittest.skipIf(sys.platform == "win32", "the no-op path is for other platforms")

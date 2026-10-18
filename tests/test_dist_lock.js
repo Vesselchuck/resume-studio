@@ -163,6 +163,39 @@ async function unitTests() {
     assertTrue(!fs.existsSync(breaker), 'its leftover removed');
   }));
 
+  await test('a lock that can be neither created nor read is not waited on forever', () => withTempDir(async (dir) => {
+    // dist/.lock as a directory: every create is refused and there is no
+    // holder to read. The loop retried every 5 ms ahead of its timeout
+    // check, so it spun past any waitMs and never said why.
+    fs.mkdirSync(lockFile(dir));
+    let threw = null;
+    const t0 = Date.now();
+    try { await lock.acquire(dir, { waitMs: 60000 }); } catch (err) { threw = err; }
+    const took = Date.now() - t0;
+    assertTrue(threw !== null && took < 10000, `gives up in seconds, not after waitMs (${took} ms)`);
+    // By the clock, not by counting 5 ms tries: Windows sleeps about
+    // 15 ms for each, and 200 of them took 3.1 s.
+    assertTrue(took >= 900 && took < 2500, `after about a second (${took} ms)`);
+    assertTrue(threw && /can be neither created nor read/.test(threw.message),
+      `says why: ${threw && threw.message}`);
+    threw = null;
+    const t1 = Date.now();
+    try { await lock.acquire(dir, { waitMs: 300 }); } catch (err) { threw = err; }
+    assertEq(threw && threw.code, 'EDISTLOCKED', 'a shorter waitMs still bounds it');
+    assertTrue(Date.now() - t1 < 2000, `within waitMs (${Date.now() - t1} ms)`);
+  }));
+
+  await test('breaking a stale lock sweeps the asides earlier breaks left', () => withTempDir(async (dir) => {
+    // A break renames the lock aside and unlinks it; on Windows the
+    // unlink fails while another process has the file open.
+    const aside = path.join(dir, `${lock.LOCK_NAME}.stale-1-2`);
+    fs.writeFileSync(aside, '{}');
+    writeLock(dir, { pid: deadPid(), host: os.hostname(), owner: 'a crashed build' });
+    (await lock.acquire(dir, { waitMs: 3000 }))();
+    assertTrue(!fs.existsSync(aside), 'the old aside is gone');
+    assertEq(fs.readdirSync(dir).filter(n => n.startsWith(lock.LOCK_NAME)), [], 'no lock files left');
+  }));
+
   await test('a blocking holder keeps its lock fresh from a thread', () => withTempDir(async (dir) => {
     const code = `
       const l = require(${JSON.stringify(path.join(ROOT, 'build', '_dist_lock'))});

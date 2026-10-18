@@ -14,9 +14,11 @@ templates/letter.j2 to dist/letter.html.
 Shared logic is imported from build.py rather than duplicated:
 markdown_filter (the `**bold**` → <strong> filter), read_accent,
 resolve_lang, write_favicon, check_stylesheet_freshness,
-check_no_module_collisions, SchemaError, and fail(). Importing build
-is side-effect-free (it only defines functions/constants and inserts
-build/ on sys.path).
+check_no_module_collisions, the header checks (_check_name,
+_check_role, _check_contact, _check_lang), display_name, SchemaError,
+and fail().
+Importing build is side-effect-free (it only defines functions/constants
+and inserts build/ on sys.path).
 
 Data-file precedence mirrors the resume's and reuses the SAME
 RESUME_DATA_SOURCE env var (the project's single "mine vs default"
@@ -150,52 +152,6 @@ _KEYS_META = ("description", "lang", "maxPages")   # maxPages: the profile's
 _KEYS_LETTER = ("recipient", "body")
 
 
-def _validate_contact(data, warnings):
-    """Validate the optional `contact` block.
-
-    Mirrors the contact rules in build.validate_data so the cover
-    letter accepts exactly the same contact shape as the resume (the
-    header template iterating `contact.rows` is identical). Kept as a
-    local copy rather than importing build.validate_data, which
-    validates the whole resume schema (sidebar, mainColumn, …) that a
-    cover letter doesn't have. If the resume's contact rules change,
-    update both sites.
-
-    That includes strictness. An unknown key in `contact` or in a row
-    stops the build, as it does the résumé's. It used to be a warning
-    here, and the block usually comes from data/_profile.yml, which
-    both documents merge: the same `hre:` typo failed the résumé and
-    built a letter whose link was silently missing.
-    """
-    if "contact" in data and data["contact"] is not None:
-        contact = data["contact"]
-        if not isinstance(contact, dict):
-            raise build.SchemaError("'contact' must be a mapping")
-        build._check_keys(contact, build._KEYS_CONTACT, "contact", warnings,
-                          strict=True)
-        if "address" in contact and not isinstance(contact["address"], str):
-            raise build.SchemaError("'contact.address' must be a string")
-        rows = contact.get("rows")
-        if not isinstance(rows, list):
-            raise build.SchemaError(
-                "'contact.rows' must be a list (use an empty list if you want "
-                "only an address)"
-            )
-        for i, row in enumerate(rows):
-            ctx = f"contact.rows[{i}]"
-            if not isinstance(row, dict):
-                raise build.SchemaError(
-                    f"{ctx}: must be a mapping with 'value' (and optional 'href')"
-                )
-            build._check_keys(row, build._KEYS_CONTACT_ROW, ctx, warnings,
-                              strict=True)
-            if not isinstance(row.get("value"), str) or not row["value"]:
-                raise build.SchemaError(f"{ctx}: 'value' must be a non-empty string")
-            if "href" in row and not isinstance(row["href"], str):
-                raise build.SchemaError(f"{ctx}: 'href' must be a string if provided")
-            build._check_href(row.get("href"), ctx)
-
-
 def validate_data(data):
     """Validate the letter data shape up-front.
 
@@ -203,11 +159,11 @@ def validate_data(data):
       • Top-level required keys: name, letter
       • Top-level optional keys: role (string), contact (mapping),
         meta (mapping)
-      • name has 'first' and 'last' string fields
-      • role, if provided, is a string
-      • contact, if provided, follows the resume's contact shape
-      • meta, if provided, is a mapping; meta.description and meta.lang
-        are optional strings
+      • name, role and contact follow the resume's rules exactly: the
+        same build._check_name, _check_role and _check_contact
+      • meta, if provided, is a mapping; meta.description is an
+        optional string and meta.lang an optional string, a language
+        tag (other text is warned about and marked en-US)
       • letter is a mapping with a required non-empty 'body' list of
         non-empty strings; optional 'recipient' (a list of non-empty
         strings, possibly empty, or one block of text, one line per entry)
@@ -217,36 +173,29 @@ def validate_data(data):
         from 'name'.
 
     Raises build.SchemaError on the first violation found. Returns a
-    list of warnings, as build.validate_data does: keys nothing reads.
-    At the top level and in `meta` and `letter` they are never fatal —
-    the letter never checked keys, and a stricter build must not reject
-    a file that used to build — but a misspelled `recipent` used to
-    vanish without a word. In `name`, `contact` and a contact row they
+    list of warnings, as build.validate_data does: keys nothing reads,
+    and the header text and meta.lang it warns about and tidies in
+    `data` (see build._check_name). Unknown keys at the top level and in
+    `meta` and `letter` are never fatal — the letter never checked keys,
+    and a stricter build must not reject a file that used to build — but
+    a misspelled `recipent` used to vanish without a word. In `name`, `contact` and a contact row they
     are errors, exactly as in the résumé: those blocks are shared with
     it through the profile, and one file must not pass for one document
-    and fail for the other (see _validate_contact).
+    and fail for the other. That is why those three blocks are checked
+    by the résumé's own functions rather than by a copy of them: a copy
+    here once made the same `hre:` typo fail the résumé and build a
+    letter whose link was silently missing.
     """
     warnings = []
     for key in ("name", "letter"):
         if key not in data:
             raise build.SchemaError(f"missing top-level key: {key!r}")
 
-    # Name.
-    if not isinstance(data["name"], dict):
-        raise build.SchemaError("'name' must be a mapping")
-    for key in ("first", "last"):
-        if not isinstance(data["name"].get(key), str):
-            raise build.SchemaError(f"'name.{key}' must be a string")
+    # Name, role (optional) and contact (optional): the résumé's rules.
     build._check_keys(data, _KEYS_TOP, "the top level", warnings, strict=False)
-    build._check_keys(data["name"], build._KEYS_NAME, "name", warnings,
-                      strict=True)
-
-    # Role (optional).
-    if "role" in data and not isinstance(data["role"], str):
-        raise build.SchemaError("'role' must be a string if provided")
-
-    # Contact (optional) — same shape as the resume.
-    _validate_contact(data, warnings)
+    build._check_name(data["name"], warnings)
+    build._check_role(data, warnings)
+    build._check_contact(data, warnings)
 
     # Meta (optional). Only description + lang are consumed.
     if "meta" in data and data["meta"] is not None:
@@ -258,10 +207,7 @@ def validate_data(data):
                 and not isinstance(meta["description"], str):
             raise build.SchemaError("'meta.description' must be a string if provided")
         # Null is the same as leaving it out; resolve_lang defaults it.
-        if meta.get("lang") is not None and not isinstance(meta["lang"], str):
-            raise build.SchemaError(
-                "'meta.lang' must be a string if provided, e.g. lang: en-US"
-            )
+        build._check_lang(meta, warnings)
 
     # Letter.
     letter = data["letter"]
@@ -528,7 +474,8 @@ def resolve_letter(data, lang=None, today=None):
         lang = build.resolve_lang(data)
     letter["date"] = format_date(today, lang)
     letter["date_iso"] = today.isoformat()
-    letter["signature"] = f"{data['name']['first']} {data['name']['last']}"
+    # The parts that are not blank: one alone used to sign " Caesar".
+    letter["signature"] = build.display_name(data["name"])
     return letter
 
 
@@ -541,17 +488,17 @@ def derive_pdf_metadata(data, lang, data_source):
     empty. `lang` and `data_source` are passed in by the
     caller, matching build.derive_pdf_metadata's contract.
     """
-    name = f"{data['name']['first']} {data['name']['last']}"
+    name = build.display_name(data['name'])
     description = ((data.get('meta') or {}).get('description') or '').strip()
     return {
-        'title':       f"{name} — Cover Letter",
+        # As the résumé's: no stray space from a blank name part.
+        'title':       " — ".join(filter(None, (name, "Cover Letter"))),
         'author':      name,
         'subject':     description,
         'keywords':    '',
         'lang':        lang,
         'data_source': data_source,
-        # Shared filename stem for both PDF variants — see
-        # _output_name.py. Derived the same way as the resume's, from
+        # The PDF's filename stem — see _output_name.py. Derived the same way as the resume's, from
         # the same profile, so the two documents always agree.
         'output_stem': _output_name.stem(data['name'], 'letter'),
     }

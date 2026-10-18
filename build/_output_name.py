@@ -119,12 +119,15 @@ _FORBIDDEN = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 # keeps non-ASCII characters on purpose, so it removes these by name.
 _BIDI_CONTROLS = re.compile("[\u202a-\u202e\u2066-\u2069]")
 
-#: Longest filename, in UTF-8 bytes, that ext4 and APFS accept (NTFS
+#: Longest PDF filename, in UTF-8 bytes. ext4 and APFS accept 255 (NTFS
 #: counts 255 UTF-16 units, which a UTF-8 cap of 255 bytes always
-#: satisfies). MAX_PART counts characters, which bounds an ASCII stem
-#: far below this, but not a CJK one: 64 characters are 192 bytes, so
-#: two long parts made a name the build could not write.
-MAX_FILENAME_BYTES = 255
+#: satisfies), but the PDF's name is not the longest one a build makes:
+#: crop_pdf.py writes it as `.<name>.<pid>.tmp` first, 16 bytes more
+#: with a 10-digit pid, so the PDF itself gets 239. MAX_PART counts
+#: characters, which bounds an ASCII stem far below this (146 bytes at
+#: most), but not a CJK one: 64 characters are 192 bytes, so two long
+#: parts made a name the build could not write.
+MAX_FILENAME_BYTES = 255 - len(".") - len(".4294967295.tmp")
 
 
 def fold_to_ascii(text: str) -> str:
@@ -234,10 +237,14 @@ def stem_from_meta(meta_file, variant: str) -> str:
     """
     try:
         meta = json.loads(Path(meta_file).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError covers both a half-written file (JSONDecodeError)
+        # and bytes that are not UTF-8 (UnicodeDecodeError).
         return DOC_SUFFIX[variant]
 
-    value = meta.get("output_stem")
+    # Valid JSON need not be an object (`null`, a list): the same
+    # fallback, as readStem in _output_name.js gives.
+    value = meta.get("output_stem") if isinstance(meta, dict) else None
     return value if isinstance(value, str) and value else DOC_SUFFIX[variant]
 
 

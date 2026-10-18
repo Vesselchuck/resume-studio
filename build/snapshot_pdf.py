@@ -13,22 +13,25 @@ installed. Run it directly:
 
     python3 build/snapshot_pdf.py [--update]
 
-It is also auto-invoked by resume.js as the final pipeline step.
+resume.js also runs it, with --auto-bootstrap, as its last step when
+RESUME_SNAPSHOT is 'on' or 'strict'. It is 'off' by default, and then
+a build does not run it at all.
 
 Workflow
 ────────
-1. First build (no fixture yet):
-       node resume.js
-   resume.js auto-bootstraps a missing fixture on its first
-   snapshot call.
+1. First snapshot build (no fixture yet):
+       RESUME_SNAPSHOT=on node resume.js
+   resume.js's --auto-bootstrap creates the missing fixture from the
+   PDF that build wrote.
 
 2. Routine verification (subsequent builds):
-       node resume.js
-   The snapshot test runs automatically. Exit 0 = the PDF matches
-   within tolerance. Exit 1 = visible regression; side-by-side diff
+       RESUME_SNAPSHOT=on node resume.js    (or run this tool directly)
+   Exit 0 = the PDF matches within tolerance. Exit 1 = visible
+   regression; side-by-side diff
    images written to tests/fixtures/diff_pageN.png. Exit 2 = nothing
    was compared (a missing fixture, dependency or build, metadata it
-   cannot trust, or the tool itself failing); the message says which.
+   cannot trust, a fixture it could not write, or the tool itself
+   failing); the message says which.
    Only 1 means "the PDF differs", and only 1 is answered with advice
    to run --update.
 
@@ -84,6 +87,18 @@ fixture. The record is written by the Build, beside the PDF, with the
 PDF's SHA-256: this tool uses the PDF only if its bytes are still the
 ones that Build recorded.
 
+The record and the PDF are each read once, and the bytes that were
+checked against the record are the bytes compared or written to the
+fixture. Reading the record again for each question and copying the
+PDF by name after hashing it left room for a build running at the same
+time (a terminal build beside the Studio) to replace the PDF in
+between, and --update would then write that build's PDF, your own
+résumé, say, into the committed fixture. The fixture is written to a
+temporary file beside it and moved into place, so it is never half
+written either. dist/.lock (build/_dist_lock.js) is not taken: with the
+bytes pinned there is nothing left for it to protect here, and its
+protocol (heartbeats, stale-lock breaking) has no Python side.
+
 Tolerances
 ──────────
   • PIXEL_RGB_TOLERANCE: max per-channel difference for a pixel to
@@ -108,9 +123,9 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+import hashlib
 import json
 import os
-import shutil
 from pathlib import Path
 
 # Local console helper.
@@ -143,8 +158,15 @@ FIXTURE_DEFAULT = FIXTURE_DIR / "expected_resume.pdf"
 FIXTURE_MINE    = FIXTURE_DIR / "expected_resume.mine.pdf"
 
 
-def built_pdf():
-    """Where the last build put the PDF, or None if no build recorded one.
+def read_build():
+    """The last Build's record of the résumé and that PDF's bytes, each
+    read once, as (record, data). The record is None when no build
+    recorded a PDF (see _output_name.recorded_build); data is None when
+    the PDF it names cannot be read.
+
+    Everything after this works from these two: verify_built_pdf()
+    checks the bytes against the record, and the same bytes are what is
+    compared or written to a fixture (see "Why the build record" above).
 
     A function rather than a module constant because the path is
     resolved from the build record, which every build rewrites —
@@ -159,26 +181,27 @@ def built_pdf():
     repository the placeholder data exists precisely to keep it out of.
     """
     rec = _output_name.recorded_build(DIST_DIR, 'resume')
-    return rec["pdf"] if rec else None
+    if rec is None:
+        return None, None
+    try:
+        return rec, rec["pdf"].read_bytes()
+    except OSError:
+        return rec, None
 
 
-def verify_built_pdf(pdf_path) -> bool:
-    """True if `pdf_path` still holds the bytes the Build recorded.
+def verify_built_pdf(rec, data: bytes) -> bool:
+    """True if `data`, the PDF's bytes as read_build() read them, are
+    the bytes the Build recorded in `rec`.
 
     Anything else — the PDF replaced by hand, restored from a backup,
-    or written by something that did not update the record — is not
-    the PDF the record's data_source describes, so no fixture may be
-    compared against it or overwritten with it.
+    written by something that did not update the record, or by another
+    build between that one's record and this read — is not the PDF the
+    record's data_source describes, so no fixture may be compared
+    against it or overwritten with it.
     """
-    import hashlib
-    rec = _output_name.recorded_build(DIST_DIR, 'resume')
-    try:
-        digest = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
-    except OSError:
-        return False
-    if rec is not None and digest == rec["sha256"]:
+    if hashlib.sha256(data).hexdigest() == rec["sha256"]:
         return True
-    c.err(f"{Path(pdf_path).name} in dist/ is not the PDF the last build "
+    c.err(f"{rec['pdf'].name} in dist/ is not the PDF the last build "
           f"recorded in {RECORD_FILE.relative_to(ROOT)}.")
     c.detail("It changed after that build wrote it, so there is no telling")
     c.detail("which data file it came from. Rebuild with `node resume.js`.")
@@ -213,11 +236,17 @@ def refuse_explicit_source():
     sys.exit(2)
 
 
-def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
+_READ = object()
+
+
+def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False,
+                         source=_READ):
     """
     Choose the fixture file based on which data file backed the build.
 
-    Reads the build record's `data_source` field:
+    Uses the build record's `data_source` field: `source`, from the
+    record the caller already read (read_build), or read here if the
+    caller passes none:
       • 'default'  → committed fixture
       • 'mine'     → gitignored fixture
       • 'explicit' → refused: an arbitrary file has no fixture, and
@@ -242,7 +271,8 @@ def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     exactly the kind of change that would have tripped it, so the
     failure is now loud.
     """
-    source = read_data_source()
+    if source is _READ:
+        source = read_data_source()
     if source is None:
         if require_meta:
             c.err(
@@ -272,13 +302,20 @@ def resolve_fixture_path(default_fixture, mine_fixture, *, require_meta=False):
     sys.exit(2)
 
 
-def safe_copy(src: Path, dst: Path) -> bool:
+def write_fixture(data: bytes, dst: Path) -> bool:
     """
-    Copy `src` to `dst` with metadata, and convert PermissionError
-    into a friendly stderr message instead of a traceback.
+    Write `data` (the PDF's bytes, as verified) to `dst`, and convert
+    PermissionError into a friendly stderr message instead of a
+    traceback.
+
+    The bytes go to a temporary file beside `dst` and are moved over it
+    in one os.replace, as crop_pdf.write_pdf does for the PDF itself,
+    so an interrupted write never leaves half a fixture. The temporary
+    file is removed if anything fails.
 
     Returns True on success, False on permission error. Callers
-    should propagate False as a non-zero exit code.
+    should propagate False as exit 2: nothing was written, and
+    resume.js reads 1 as "the PDF differs" and advises --update.
 
     Most common cause on Windows: `dst` is a snapshot fixture or one
     of the built resume PDFs currently open in a PDF viewer. The
@@ -286,8 +323,17 @@ def safe_copy(src: Path, dst: Path) -> bool:
     usually don't take this lock, but some IDE preview panes do on
     every platform.
     """
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
     try:
-        shutil.copy2(src, dst)
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, dst)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
         return True
     except PermissionError:
         c.err(f"Permission denied writing {dst}.")
@@ -430,9 +476,9 @@ def update_all_fixtures():
 
     1. Rebuild with RESUME_DATA_SOURCE=default and SKIP_SNAPSHOT=1.
        Copy that build's PDF to expected_resume.pdf. It is located
-       through dist/pdf_meta.json, which each pass rewrites — the two
-       passes load different data files and so produce differently
-       named outputs.
+       through the build record, dist/outputs.json, which each pass
+       rewrites — the two passes load different data files and so
+       produce differently named outputs.
     2. If data/resume.yml exists, rebuild with
        RESUME_DATA_SOURCE=mine and copy its PDF to
        expected_resume.mine.pdf. Otherwise skip step 2 with a notice.
@@ -487,8 +533,12 @@ def update_all_fixtures():
         data source, by what the build itself recorded beside the PDF
         (dist/outputs.json). The environment above is the intent; the
         record is the fact, and a fixture is committed on the fact.
+
+        The record and the PDF are read once (read_build), and the
+        bytes checked against the record are the ones written.
         """
-        actual = read_data_source()
+        rec, data = read_build()
+        actual = rec["data_source"] if rec else None
         if actual != source_kind:
             c.err(
                 f"the {source_kind!r} pass built from data_source="
@@ -500,14 +550,13 @@ def update_all_fixtures():
             c.detail(f"Check that {ENV_RESUME_DATA_FILE} is not set by "
                      "something outside this script, then re-run.")
             return None
-        pdf_path = built_pdf()
-        if pdf_path is None or not pdf_path.exists():
+        if data is None:
             c.err("No built PDF in dist/ after the build.")
             return None
-        if not verify_built_pdf(pdf_path):
+        if not verify_built_pdf(rec, data):
             return None
         target = FIXTURE_MINE if source_kind == 'mine' else FIXTURE_DEFAULT
-        if not safe_copy(pdf_path, target):
+        if not write_fixture(data, target):
             return None
         c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
         return [target]
@@ -578,21 +627,23 @@ def main() -> int:
         return update_all_fixtures()
 
     # Check that the last build produced something at all, and that it
-    # is still exactly what that build recorded.
-    pdf_path = built_pdf()
-    if pdf_path is None or not pdf_path.exists():
+    # is still exactly what that build recorded. From here on `data`,
+    # not the file, is the PDF: see read_build().
+    rec, data = read_build()
+    if data is None:
         c.err("No built PDF in dist/. Run `node resume.js` first.")
         return 2
-    if not verify_built_pdf(pdf_path):
+    if not verify_built_pdf(rec, data):
         return 2
+    source = rec["data_source"]
 
     # --update: refresh the current data-source fixture.
     if args.update:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
         target = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE,
-                                      require_meta=True)
-        if not safe_copy(pdf_path, target):
-            return 1
+                                      require_meta=True, source=source)
+        if not write_fixture(data, target):
+            return 2
         c.ok_pair("Updated fixture", str(target.relative_to(ROOT)))
         return 0
 
@@ -601,17 +652,18 @@ def main() -> int:
     if args.auto_bootstrap:
         FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
         target = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE,
-                                      require_meta=True)
+                                      require_meta=True, source=source)
         if not target.exists():
-            if not safe_copy(pdf_path, target):
-                return 1
+            if not write_fixture(data, target):
+                return 2
             c.info_pair("Created fixture", str(target.relative_to(ROOT)))
             c.info_pair("Update with", "python build/snapshot_pdf.py --update")
             return 0
         # The fixture exists — fall through to normal compare.
 
     # Normal compare path: verify the fixture exists.
-    expected_pdf = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE)
+    expected_pdf = resolve_fixture_path(FIXTURE_DEFAULT, FIXTURE_MINE,
+                                        source=source)
     if not expected_pdf.exists():
         c.err(f"fixture missing at {expected_pdf.relative_to(ROOT)}.")
         c.detail("To create it from the PDF the last build wrote, run:")
@@ -630,7 +682,7 @@ def main() -> int:
         return 2
 
     all_ok = True
-    actual_pages = render_pdf_pages(pdfium, pdf_path)
+    actual_pages = render_pdf_pages(pdfium, data)
     expected_pages = render_pdf_pages(pdfium, expected_pdf)
 
     if len(actual_pages) != len(expected_pages):

@@ -372,6 +372,81 @@ test('main: experience heading not orphaned — moves with first job', () => {
   assertEq(result[1].entries[0].jobs[0].job_id, 'j1', 'j1 on page 2');
 });
 
+/**
+ * Where the experience heading went: the entries that carry it
+ * (continuation_of null), as [pageIndex, firstJobId, firstJobOffset].
+ */
+function experienceHeadings(pages) {
+  const found = [];
+  pages.forEach((p, i) => {
+    for (const e of p.entries) {
+      if (e.type === 'experience' && e.continuation_of === null) {
+        found.push([i, e.jobs[0].job_id, e.jobs[0].bullets_offset]);
+      }
+    }
+  });
+  return found;
+}
+
+test('main: the heading is kept when its fit and the first job\'s differ by a rounding error', () => {
+  // Page 1's capacity is exactly the summary plus the heading and the
+  // first job's minimum, summed the way the heading's check used to sum
+  // them. The job's own check sums the same heights in another order and
+  // comes out one ulp short: the heading was charged to page 1, the job
+  // went to page 2 as a continuation, and the heading printed nowhere.
+  const sep = 24.2, heading = 21.6, headingToJobs = 6.1;
+  const header = 38.8, headerToBullets = 3.2, bullet = 17.1, summaryH = 220;
+  const page1 = summaryH + (sep + heading + headingToJobs + (header + headerToBullets + bullet));
+  const pages = solveMainColumn(
+    [
+      summary(20, summaryH - 20),
+      experience(heading, [
+        job('a', header, [bullet, bullet], false, { headerToBulletsGap: headerToBullets }),
+      ], { headingToJobsGap: headingToJobs }),
+    ],
+    geometry({ page1, pageN: 500, mcSep: sep }),
+    10,
+  );
+  assertEq(experienceHeadings(pages).length, 1, 'the heading is placed exactly once');
+  assertEq(experienceHeadings(pages)[0].slice(1), ['a', 0],
+    'the heading opens the section that holds the first job\'s first bullets');
+});
+
+test('main: the heading always travels with the first job (seeded sweep)', () => {
+  // Same failure, hunted with random heights at the exact threshold.
+  // Before the fix about one case in six lost the heading. The heights
+  // need all 53 bits: with 32 random bits most of these sums are exact
+  // and nothing rounds, so the sweep would pass on the broken solver.
+  let seed = 12345;
+  const next32 = () => {   // mulberry32
+    seed = (seed + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(seed ^ (seed >>> 15), seed | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return (x ^ (x >>> 14)) >>> 0;
+  };
+  const rnd = (lo, hi) =>
+    lo + (((next32() >>> 5) * 67108864 + (next32() >>> 6)) / 9007199254740992) * (hi - lo);
+  let lost = 0;
+  for (let t = 0; t < 2000; t++) {
+    const sep = rnd(20, 30), h = rnd(15, 25), g = rnd(2, 8);
+    const H = rnd(30, 50), G = rnd(2, 8), b = rnd(15, 60), S = rnd(100, 300);
+    const pages = solveMainColumn(
+      [
+        summary(0, S),
+        experience(h, [
+          job('a', H, [b, b], false, { headerToBulletsGap: G }),
+          job('b', H, [b]),
+        ], { headingToJobsGap: g }),
+      ],
+      geometry({ page1: S + (sep + h + g + (H + G + b)), pageN: 500, mcSep: sep }),
+      10,
+    );
+    const found = experienceHeadings(pages);
+    if (found.length !== 1 || found[0][1] !== 'a' || found[0][2] !== 0) lost++;
+  }
+  assertEq(lost, 0, 'cases where the heading was lost or misplaced');
+});
+
 test('main: throws when exceeding maxPages', () => {
   assertThrows(
     () => solveMainColumn(
@@ -572,11 +647,11 @@ test('maxPages: cap of 1 forces all-on-one-page or throws', () => {
 //
 // If a single item is structurally too tall to fit on any page (even
 // an empty one), the solver could loop forever pushing it to the next
-// page. The "non-progressing" detector catches this in two ways:
-//   (1) An entry pushed to a fresh empty page that still doesn't fit
-//       throws immediately ("taller than a page").
-//   (2) The same entry pushed forward MAX_CONSECUTIVE_PUSHES times
-//       in a row throws with a "cannot fit on any page" message.
+// page. An entry that still doesn't fit once pushed to a fresh, empty
+// page throws there ("taller than a page"). That is what every test
+// below exercises: a push always lands on an empty page, so the
+// MAX_CONSECUTIVE_PUSHES tracker ("cannot fit on any page") is a
+// backstop that no input reaches today.
 
 test('non-progressing: single bullet taller than pageNCapacity throws', () => {
   // pageN = 200, but bullet is 500 → no possible page can hold it.
@@ -620,9 +695,7 @@ test('non-progressing: oversized FIRST item never causes infinite loop', () => {
   // The "current page is empty AND entry doesn't fit" branch detects
   // this and throws immediately rather than spinning. We verify by
   // confirming the throw happens AND the error has actionable context;
-  // a non-progressing solver would either loop forever or hit the
-  // MAX_CONSECUTIVE_PUSHES guard with a different (also-acceptable)
-  // error.
+  // a non-progressing solver would loop forever.
   let caught = null;
   try {
     solveSidebar(
@@ -691,6 +764,23 @@ test('sidebar: the group back-off never turns a legal split into a failure', () 
   c.items[3].isGroup = true;
   const pages = solveSidebar([c], geometry({ page1: 65, pageN: 25 }), 10);
   assertEq(pages.length, 3, 'the continuation still splits');
+});
+
+test('sidebar: a continuation that opens on a group label is not charged its top margin', () => {
+  // The label is measured mid-list, with its 6px top margin. Opening a
+  // continuation it is the list's first child, where the margin is 0
+  // (_components.scss), so page 2 holds exactly the three items.
+  const b = listBlock('a', 0, [20, 20, 20, 26, 20, 20]);
+  b.items[3].isGroup = true;
+  b.items[3].marginTop = 6;
+  assertEq(sidebarBlockHeight(b, 0, 6, false), 126, 'mid-list: the margin is charged');
+  assertEq(sidebarBlockHeight(b, 3, 3, true), 60, 'opening a continuation: it is not');
+  assertEq(sidebarBlockHeight(b, 4, 2, true), 40, 'an ordinary first item is unchanged');
+  const pages = solveSidebar([b], geometry({ page1: 60, pageN: 60 }), 10);
+  assertEq(pages.length, 2, 'two pages, not three');
+  assertEq(pages[1].entries[0],
+    { block_id: 'a', continuation: true, items_offset: 3, items_limit: null },
+    'page 2 holds the whole continuation');
 });
 
 test('solveLayout: a header taller than page 1 is named, not a block', () => {

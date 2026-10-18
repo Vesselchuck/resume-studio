@@ -73,6 +73,12 @@ function cacheDir() {
 
 let result = null;
 
+/** Whether Node `version` ("22.1.0") reads NODE_COMPILE_CACHE: 22.1 and later. */
+function readsCacheVariable(version) {
+  const [major, minor] = String(version).split('.').map(Number);
+  return major > 22 || (major === 22 && minor >= 1);
+}
+
 /**
  * Turn the compile cache on, once per process.
  *
@@ -81,8 +87,32 @@ let result = null;
 function enable() {
   if (result) return result;
   if (process.env.NODE_COMPILE_CACHE) {
-    result = { enabled: true, dir: process.env.NODE_COMPILE_CACHE,
-               reason: 'NODE_COMPILE_CACHE was already set' };
+    // Node turned it on at start-up, unless NODE_DISABLE_COMPILE_CACHE
+    // said not to; getCompileCacheDir() (Node 22.8+) is what actually
+    // happened, and is undefined when the cache is off.
+    //
+    // Without it, the version decides. Node 22.1 to 22.7 read
+    // NODE_COMPILE_CACHE (Node's CLI docs: added in 22.1.0) and have no
+    // NODE_DISABLE_COMPILE_CACHE (added in 22.8.0), so the cache is on
+    // in the directory it names; nothing confirms it could be written.
+    // Older Nodes (the project runs on 20.19) ignore the variable, and
+    // reporting a cache there named one nobody writes.
+    let getDir;
+    try {
+      getDir = require('node:module').getCompileCacheDir;
+    } catch {
+      getDir = undefined;
+    }
+    if (typeof getDir !== 'function' && !readsCacheVariable(process.versions.node)) {
+      result = { enabled: false, dir: null,
+                 reason: `Node ${process.versions.node} ignores NODE_COMPILE_CACHE` };
+      return result;
+    }
+    const dir = typeof getDir === 'function' ? getDir() : process.env.NODE_COMPILE_CACHE;
+    result = dir
+      ? { enabled: true, dir, reason: 'NODE_COMPILE_CACHE was already set' }
+      : { enabled: false, dir: null,
+          reason: 'NODE_COMPILE_CACHE is set, but the compile cache is off' };
     return result;
   }
   let api;

@@ -4,8 +4,8 @@ worker.py — Long-lived build worker for the Studio GUI.
 WHY THIS EXISTS
 ---------------
 A cold `node resume.js` spends most of its wall-clock on *startup*, not
-on work: one Chromium launch plus four separate `python -B` interpreter
-starts (build.py x2, crop_pdf.py x2). The rendering, solving and
+on work: one Chromium launch plus three separate `python -B` interpreter
+starts (build.py x2, crop_pdf.py once). The rendering, solving and
 cropping in between are milliseconds. A GUI that re-renders on every
 keystroke cannot pay that startup cost per edit.
 
@@ -149,8 +149,32 @@ def _private_frame_stream():
 
 
 def _send(payload):
-    """Write one protocol frame. The only function that may touch _FRAME_OUT."""
-    _FRAME_OUT.write(FRAME_PREFIX + json.dumps(payload, ensure_ascii=False) + "\n")
+    """Write one protocol frame. The only function that may touch _FRAME_OUT.
+
+    ASCII JSON: anything else goes out as a \\u escape, which JSON.parse
+    on the Node side reads back as the same text. A lone surrogate (one
+    a request sent, echoed in an error) used to reach the UTF-8 stream
+    raw; the write raised outside handle(), the worker exited, and five
+    such requests kept it down.
+
+    A frame that cannot be encoded at all (something in it is not JSON)
+    is replaced by an error frame for the same request, so the caller
+    gets an answer and the worker stays up. NaN and the infinities count:
+    json.dumps writes them as NaN and Infinity by default, and JSON.parse
+    on the Node side refuses the whole frame.
+    """
+    try:
+        text = json.dumps(payload, allow_nan=False)
+    except (TypeError, ValueError) as e:
+        text = json.dumps({
+            "id": payload.get("id"), "op": payload.get("op"), "ok": False,
+            "error": {"kind": "internal",
+                      "message": f"the response could not be encoded: "
+                                 f"{type(e).__name__}: {e}",
+                      "detail": []},
+            "log": [], "diagnostics": [], "ms": 0.0,
+        })
+    _FRAME_OUT.write(FRAME_PREFIX + text + "\n")
     _FRAME_OUT.flush()
 
 
@@ -187,13 +211,17 @@ def _env_overrides(overrides):
     variable inherited from the shell cannot leak into a render.
     """
     overrides = overrides or {}
+    # Everything is saved before anything is set, and set inside the try:
+    # a value os.environ refuses (a NUL, a lone surrogate) raises partway
+    # through, and the ones set before it used to stay set for every
+    # later build.
     saved = {k: os.environ.get(k) for k in overrides}
-    for k, v in overrides.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = str(v)
     try:
+        for k, v in overrides.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = str(v)
         yield
     finally:
         for k, v in saved.items():
@@ -213,8 +241,8 @@ def op_build(req):
     dist/pdf_meta.json. Both are gitignored intermediates that the CLI
     overwrites on every run, so a live-preview render touching them
     costs nothing. The PDFs are the deliverables, and this op does not
-    write them — the caller renders live previews to a temp path and
-    only an explicit Build writes dist/*.pdf.
+    write them — a live preview is printed to memory and sent to
+    op_raster as data, and only an explicit Build writes dist/*.pdf.
 
     ORDERING INVARIANT — the caller's responsibility
     ------------------------------------------------
@@ -226,8 +254,9 @@ def op_build(req):
     different data — most easily by changing RESUME_DATA_SOURCE, since
     resume.yml and resume_default.yml have different job ids.
 
-    That fails loudly rather than producing a wrong document (the
-    template raises on the missing id, and this op reports it as
+    That fails loudly rather than producing a wrong document
+    (build.read_placement refuses a placement that names an id the data
+    lacks, or that it cannot read, and handle() reports it as
     kind='stale_placement'), but the orchestrator must still re-run the
     full sequence whenever the data source or the data itself changes.
     Do not treat 'final' as a cheap repeat of the last render.
@@ -789,7 +818,10 @@ def op_compare(req):
     Returns one entry per page. `fraction` is the share of pixels
     differing by more than PIXEL_RGB_TOLERANCE on any channel, and
     `pass` applies MAX_DIFF_FRACTION — the same threshold and the same
-    arithmetic the snapshot test uses.
+    arithmetic the snapshot test uses (snapshot_pdf.diff_images, which
+    also writes a diff image on failure, so it is mirrored here rather
+    than called). This used to count the luma of the difference instead,
+    which weighs blue at 0.11: a page off by 100 in blue alone passed.
     """
     import pypdfium2 as pdfium
     import snapshot_pdf
@@ -825,8 +857,12 @@ def op_compare(req):
             })
             continue
         diff = ImageChops.difference(a_img, b_img)
+        # Per-pixel max-channel difference, as diff_images takes it.
+        diff_max = diff.getchannel("R")
+        for ch in ("G", "B"):
+            diff_max = ImageChops.lighter(diff_max, diff.getchannel(ch))
         differing = sum(
-            1 for v in diff.convert("L").getdata()
+            1 for v in diff_max.tobytes()
             if v > snapshot_pdf.PIXEL_RGB_TOLERANCE
         )
         fraction = differing / (a_img.width * a_img.height)
@@ -908,6 +944,25 @@ def handle(req):
             result = fn(req)
         frame.update({"ok": True, "result": result})
 
+    except build_mod.StalePlacement:
+        # build.read_placement: dist/placement.json was solved for other
+        # data, or cannot be read. See the ordering invariant in op_build.
+        lines = _split_lines(err_buf.getvalue())
+        at = next((i for i, ln in enumerate(lines)
+                   if ln.lstrip().startswith(c._SYM_ERR)), 0)
+        frame.update({
+            "ok": False,
+            "error": {"kind": "stale_placement",
+                      "message": lines[at] if lines
+                                 else "dist/placement.json does not match the data",
+                      "detail": lines[at + 1:] + [
+                          "dist/placement.json is not for the data just loaded. Re-run",
+                          "the full sequence: build(measurement) -> measure -> solve ->",
+                          "build(final). Changing RESUME_DATA_SOURCE without re-solving",
+                          "is the usual cause.",
+                      ]},
+        })
+
     except SystemExit as e:
         # build.py's fail() ends in sys.exit(1). In a one-shot CLI run
         # that is the correct behavior; here it is a reportable error
@@ -953,7 +1008,9 @@ def handle(req):
     except Exception as e:
         # A Jinja UndefinedError out of a 'final' build almost always
         # means dist/placement.json was solved for different data — see
-        # the ordering invariant in op_build. Naming that explicitly
+        # the ordering invariant in op_build. build.read_placement turns
+        # an id the data lacks into StalePlacement above; this is for
+        # whatever else in a placement the template trips on. Naming that explicitly
         # saves the caller from reading a template traceback. Only a
         # 'final' build reads the placement: an UndefinedError out of a
         # measurement build is about the data, and its traceback says where.

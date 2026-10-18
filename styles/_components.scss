@@ -113,10 +113,10 @@
      shape Chromium picked with the variable font; see .name. */
   font-weight: 700;
   font-size: var(--size-section);
-  /* Accent color migrates the brand into content territory — the
-     accent now appears not just in structural framing (top rule,
-     column divider) but in the section labels themselves, making
-     it feel integrated rather than purely decorative.            */
+  /* The accent lives in content, not in structural framing: the top
+     rule, column divider and separators are all --border-rule, and
+     the section labels (with the role line) carry the color, so it
+     reads as integrated rather than purely decorative.            */
   color: var(--accent);
   text-transform: uppercase;
   /* Tracked at --ls-wide (0.1em) in the font, not with letter-spacing,
@@ -337,8 +337,8 @@
 /* Dot marker — a 3×3px filled circle positioned absolutely in the
    padding-inline-start gutter so it sits outside the text column and
    doesn't affect line wrapping. Background is --text-muted (not
-   --accent) to keep the accent reserved for structural elements
-   (heading bars) where it reads as architecture rather than
+   --accent) to keep the accent reserved for the section headings
+   and the role line, where it reads as architecture rather than
    decoration. `top: 0.6em` aligns the dot optically with the visual
    center of the line (between x-height and baseline) rather than
    mathematically with x-height, which lets the small filled dot

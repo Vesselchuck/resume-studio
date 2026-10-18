@@ -51,7 +51,12 @@ use and requirements.txt does not list:
     py build/make_static_fonts.py
 
 It rewrites the files in INSTANCES and nothing else, byte for byte the
-same each time from the same sources.
+same each time from the same sources and the same fontTools and brotli.
+Neither is pinned, and which versions cut the committed files was not
+recorded: unknown. Another fontTools can lay the tables out differently
+and another brotli compress them differently, so a run with other
+versions can change the bytes, and possibly the glyphs, of every file.
+Compare the PDFs' pixels before committing what it writes.
 """
 
 import sys

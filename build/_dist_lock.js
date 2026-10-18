@@ -82,6 +82,14 @@ const TURN_FRESH_MS = 500;
 const BREAK_NAME = '.lock.break';
 const BREAK_STALE_MS = 5000;
 const MAX_POLL_GAP_MS = 1000;
+// A create refused while there is no holder to read is usually a lock
+// released (or delete pending) a moment ago, and is retried every 5 ms.
+// Refused for this long in a row, it is a lock that is not going away
+// by itself — dist/.lock a directory, a dist/ this user may not write
+// to — and acquire throws that error rather than spin until something
+// else gives up. Timed, not counted: 200 tries of 5 ms took 3.1 s on
+// Windows (n=3), where a 5 ms timer sleeps about 15.
+const BLIND_MS = 1000;
 const { performance } = require('perf_hooks');
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
@@ -136,6 +144,7 @@ function describe(holder) {
   return `${info.owner || 'another process'} (pid ${info.pid})`;
 }
 
+/** Create the lock: null when it is ours, else the error that says it is busy. */
 function tryCreate(file, owner) {
   try {
     const fd = fs.openSync(file, 'wx');
@@ -146,13 +155,14 @@ function tryCreate(file, owner) {
     } finally {
       fs.closeSync(fd);
     }
-    return true;
+    return null;
   } catch (err) {
-    if (err.code === 'EEXIST') return false;
+    if (err.code === 'EEXIST') return err;
     // Windows: a lock file just deleted while someone had it open is
     // "delete pending" until they close it, and creating it again is
-    // refused with EPERM rather than EEXIST. Busy, not an error.
-    if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY') return false;
+    // refused with EPERM rather than EEXIST. Busy, not an error — unless
+    // it never clears; see BLIND_MS.
+    if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY') return err;
     throw err;
   }
 }
@@ -211,11 +221,38 @@ function breakStale(file, judged) {
     } catch {
       return false;
     }
-    try { fs.unlinkSync(aside); } catch { /* removed next time round */ }
+    try { fs.unlinkSync(aside); } catch { /* still open somewhere: the next break sweeps it */ }
+    sweepAsides(path.dirname(file));
     return true;
   } finally {
     try { fs.unlinkSync(breaker); } catch { /* removed as stale later */ }
   }
+}
+
+/**
+ * Remove the dist/.lock.stale-* files earlier breaks could not unlink
+ * (on Windows, a file another process still has open). Nothing reads
+ * them. Only a break makes them, so a break sweeps them: the common
+ * acquire pays nothing for it. Best effort.
+ */
+function sweepAsides(dir) {
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    if (!name.startsWith(`${LOCK_NAME}.stale-`)) continue;
+    try { fs.unlinkSync(path.join(dir, name)); } catch { /* still open: the next break */ }
+  }
+}
+
+/** The error for a holder that did not let go within `waitMs`. */
+function timedOut(turn, holder, waitMs) {
+  dropTurn(turn);
+  const err = new Error(
+    `dist/ is in use by ${describe(holder)} and was not released within `
+    + `${Math.round(waitMs / 1000)} s. If nothing else is building, delete `
+    + `${path.join('dist', LOCK_NAME)}.`);
+  err.code = 'EDISTLOCKED';
+  return err;
 }
 
 function startBeat(file, blocking) {
@@ -265,9 +302,13 @@ async function acquire(dist, {
   // How long WE have seen the lock unchanged (see the header).
   let seen = null;
   let lastPoll = performance.now();
+  // When the current run of creates refused with no holder to read
+  // began (see BLIND_MS); null while there is none.
+  let blindSince = null;
   for (;;) {
     const queued = othersTurn(turn);
-    if (!queued && tryCreate(file, owner)) break;
+    const busy = queued ? null : tryCreate(file, owner);
+    if (!queued && !busy) break;
     const holder = readHolder(file);
     const mono = performance.now();
     let mtime = null;
@@ -286,21 +327,26 @@ async function acquire(dist, {
       }
     }
     if (!holder && !queued) {       // Released (or delete pending) meanwhile.
+      if (blindSince === null) blindSince = mono;
+      if (mono - blindSince >= BLIND_MS) {
+        dropTurn(turn);
+        const err = new Error(
+          `${path.join('dist', LOCK_NAME)} can be neither created nor read `
+          + `(${busy.message}). If nothing else is building, delete it, and `
+          + 'check that dist/ can be written to.');
+        err.code = busy.code;
+        err.cause = busy;
+        throw err;
+      }
+      if (Date.now() - started > waitMs) throw timedOut(turn, holder, waitMs);
       await sleep(5);
       continue;
     }
+    blindSince = null;
     claimTurn(turn);
     if (!told && onWait) onWait(describe(holder));
     told = true;
-    if (Date.now() - started > waitMs) {
-      dropTurn(turn);
-      const err = new Error(
-        `dist/ is in use by ${describe(holder)} and was not released within `
-        + `${Math.round(waitMs / 1000)} s. If nothing else is building, delete `
-        + `${path.join('dist', LOCK_NAME)}.`);
-      err.code = 'EDISTLOCKED';
-      throw err;
-    }
+    if (Date.now() - started > waitMs) throw timedOut(turn, holder, waitMs);
     await sleep(POLL_MS);
   }
 

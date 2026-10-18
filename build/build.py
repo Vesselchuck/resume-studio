@@ -19,8 +19,10 @@ Custom Jinja filter:
   • md   — converts `**bold**` to <strong>bold</strong>. Used inside
            bullet text. Only spans on a single line are matched.
 
-HTML escaping for special characters (& < >) is done via Jinja's
-built-in `e` (escape) filter at the template call sites.
+HTML escaping for special characters (& < > ") is done by Jinja's
+autoescape, which is on for every template (see jinja_env). Where `md`
+is used, the chain is `| e | md | safe`: `e` escapes first, `md` adds
+the <strong> tags, and `safe` keeps autoescape off them.
 
 Run via `node resume.js`, which calls this first; or directly with
 `python3 build/build.py` (run from project root).
@@ -79,21 +81,31 @@ DATA_FILE_DEFAULT = DATA_DIR / "resume_default.yml"
 PDF_META_FILE = ROOT / "dist" / "pdf_meta.json"
 
 
-def fail(msg: str) -> None:
+class StalePlacement(SystemExit):
+    """fail() for a dist/placement.json that does not describe the data.
+
+    A SystemExit, so the CLI exits 1 exactly as for any other fail();
+    its own class so the warm worker can report it as kind
+    'stale_placement' rather than as an ordinary build failure.
+    """
+
+
+def fail(msg: str, exit_type=SystemExit) -> None:
     """
     Emit a colored error headline (and any subsequent newline-
     separated detail lines) via _console, then exit non-zero.
 
     Replaces the old `sys.exit('ERROR: ...')` pattern. The message
     string can be multi-line; the first line becomes the headline,
-    further lines become indented detail.
+    further lines become indented detail. `exit_type` is what is
+    raised: SystemExit, or a subclass of it such as StalePlacement.
     """
     lines = msg.splitlines()
     if lines:
         c.err(lines[0])
         for line in lines[1:]:
             c.detail(line)
-    sys.exit(1)
+    raise exit_type(1)
 
 
 def markdown_filter(text):
@@ -101,12 +113,13 @@ def markdown_filter(text):
     Minimal markdown for resume bullets: `**bold**` → `<strong>bold</strong>`.
 
     Anything else is left as-is. HTML metacharacters in the input are NOT
-    auto-escaped here — that's the template's job (Jinja's `e` filter runs
-    before `md` in the chain `bullet | e | md | safe`). The contract:
-      • Input is plain text plus `**bold**` runs.
-      • Output is HTML-safe to inject inside a <li> via `| safe`.
-      • Any literal '<' or '>' in YAML source will pass through to the
-        HTML and be interpreted as markup. Don't put HTML in YAML.
+    escaped here — that's the template's job (Jinja's `e` filter runs
+    before `md` in the chain `text | e | md | safe`). The contract:
+      • Input is already-escaped text plus `**bold**` runs.
+      • Output is HTML-safe to inject via `| safe`, given that input.
+      • A literal '<' or '>' in the YAML source prints as itself: `e`
+        has turned it into &lt; / &gt; before this runs. Called on text
+        that was NOT escaped first, it would pass through as markup.
 
     Bold spans cannot cross newlines, cannot be empty (`****`), and the
     pattern is non-greedy so `**a** **b**` produces two distinct spans.
@@ -152,7 +165,8 @@ def read_yaml(path):
     A syntax error, a duplicate key or a bad explicit tag used to reach
     the terminal as a Python traceback ending in the useful part. The
     useful part is kept — PyYAML's message already names the line and
-    column — and the traceback is dropped.
+    column, and _yaml_loader.load makes it name the file and count lines
+    as an editor does — and the traceback is dropped.
     """
     try:
         # Read to text first and keep it: locate_schema_error needs the
@@ -160,7 +174,7 @@ def read_yaml(path):
         # validation fails (an editor may have saved again in between).
         text = Path(path).read_text(encoding="utf-8")
         _READ_TEXT[str(path)] = text
-        return _yaml_loader.load(text)
+        return _yaml_loader.load(text, name=str(_shown(path)))
     except _yaml_loader.YAMLError as e:
         fail(
             f"{_shown(path)} could not be read as YAML.\n"
@@ -489,7 +503,7 @@ def derive_pdf_metadata(data, lang, data_source):
     metadata defaults (Title is usually OK from <title>, but Author,
     Subject, and Keywords are typically empty or wrong).
     """
-    name = f"{data['name']['first']} {data['name']['last']}"
+    name = display_name(data['name'])
     description = (data.get('meta', {}).get('description') or '').strip()
 
     # Pull keywords from the sidebar's "Key Skills" block (id='key-skills'
@@ -513,7 +527,9 @@ def derive_pdf_metadata(data, lang, data_source):
         pass
 
     return {
-        'title':    f"{name} — Resume",
+        # "Caesar — Resume" from one name part, not " Caesar — Resume";
+        # just "Resume" from none.
+        'title':    " — ".join(filter(None, (name, "Resume"))),
         'author':   name,
         'subject':  description,
         'keywords': ', '.join(keywords),
@@ -532,8 +548,8 @@ def derive_pdf_metadata(data, lang, data_source):
         # maxPages cap from meta.maxPages — read by resume.js to feed
         # the layout solver.
         'max_pages': data['meta']['maxPages'],
-        # The filename stem both PDF variants share, derived from the
-        # name above. Node cannot read the YAML this came from, so the
+        # The filename stem of the PDF, derived from the name above.
+        # Node cannot read the YAML this came from, so the
         # derivation happens here and travels in this file; see
         # _output_name.py for the folding rules and _output_name.js
         # for who reads it back.
@@ -546,7 +562,11 @@ def resolve_lang(data: dict) -> str:
     Resolve the document's BCP-47 language tag.
 
     Single source of truth for the en-US fallback used when meta.lang is
-    absent, null, blank or whitespace — or when `meta` itself is null. Called exactly once per build, from build(), which
+    absent, null, blank or whitespace, or not a language tag at all
+    (validate_data warns about that one) — or when `meta` itself is
+    null. A `_` between subtags is written as `-`: `en_GB` is a POSIX
+    locale's spelling, and /Lang, the XMP and <html lang> take en-GB.
+    Called exactly once per build, from build(), which
     then threads the resolved value into:
       • template.render(lang=…) — drives <html lang="…">
       • derive_pdf_metadata(data, lang, …) — written into the PDF /Lang
@@ -562,7 +582,10 @@ def resolve_lang(data: dict) -> str:
     # PDF — the two disagreeing is exactly what this function prevents.
     if not isinstance(lang, str):
         return 'en-US'
-    return lang.strip() or 'en-US'
+    tag = lang.strip()
+    if not _LANG_TAG.fullmatch(tag):
+        return 'en-US'
+    return tag.replace('_', '-')
 
 
 def read_accent() -> str:
@@ -677,23 +700,9 @@ _NULL_TAG = "tag:yaml.org,2002:null"
 _MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
-def _editor_position(text, mark):
-    """
-    (line, column), 1-based, as an editor counts them, for a YAML mark.
-
-    YAML counts U+0085, U+2028 and U+2029 as line breaks, and editors do
-    not (VS Code, Notepad: CR, LF, CRLF only), so mark.line was one too
-    far down for every one of them above the error — and text pasted
-    from a word processor carries U+2028. Columns are UTF-16 units, as
-    in an editor's goto-line, so an emoji earlier on the line does not
-    shift them. mark.index counts code points after any BOM (libyaml)
-    or including it (the pure-Python reader); stripping the BOM from
-    `text` before composing makes both agree.
-    """
-    head = text[:mark.index]
-    breaks = list(re.finditer(r"\r\n|\r|\n", head))
-    start = breaks[-1].end() if breaks else 0
-    return len(breaks) + 1, len(head[start:].encode("utf-16-le")) // 2 + 1
+#: (line, column) as an editor counts them, for a YAML mark. It lives in
+#: _yaml_loader, which corrects a syntax error's position the same way.
+_editor_position = _yaml_loader.editor_position
 
 
 def _is_null(node):
@@ -998,16 +1007,93 @@ _HREF_EXAMPLE = {"http": "https://example.com/me", "https": "https://example.com
                  "mailto": "mailto:you@example.com", "tel": "tel:+15550100"}
 
 
-def _check_href(href, ctx):
-    """Raise SchemaError unless a non-empty `href` is a link a reader can follow.
+#: Characters nobody sees in an editor: controls (Cc), format characters
+#: (Cf: U+200B, U+FEFF, U+2060 …) and every space and separator (Zs, Zl,
+#: Zp: U+00A0, U+3000, U+2028 …), as of Unicode 16, in the Basic
+#: Multilingual Plane. Spelled out rather than read from unicodedata, so
+#: the set does not move with the Python version, and so the schemas'
+#: href patterns can carry the very same class (tests/test_yaml_typing.py
+#: checks that they agree).
+_INVISIBLE = ("\x00-\x20\x7f-\xa0\xad\u0600-\u0605\u061c\u06dd\u070f"
+              "\u0890\u0891\u08e2\u1680\u180e\u2000-\u200f\u2028-\u202f"
+              "\u205f-\u2064\u2066-\u206f\u3000\ufeff\ufff9-\ufffb")
+_HREF_LEAD = re.compile(f"^[{_INVISIBLE}]+")
+_HREF_TRAIL = re.compile(f"[{_INVISIBLE}]+$")
+_VISIBLE = re.compile(f"[^{_INVISIBLE}]")
+
+
+def _invisible_note(chars):
+    """
+    'U+00A0, U+200B' for the invisible characters an href lost, leaving
+    out U+0001 to U+0020: a browser drops those from a URL itself, and
+    the build always removed them without a word.
+    """
+    return ", ".join(f"U+{ord(ch):04X}" for ch in dict.fromkeys(chars)
+                     if not "\x01" <= ch <= "\x20")
+
+
+def _check_href(href, ctx, warnings=None):
+    """
+    The `href` to render. SchemaError unless it is a link a reader can
+    follow.
 
     Empty is allowed and means no link. Call after the string check.
+    Returns the link without the invisible characters around it and
+    without any U+0000 in it, each removal reported in `warnings`; or
+    None for a mailto: or tel: link with nothing visible after the
+    scheme, which then prints as text.
     """
     if not href:
-        return
-    link = href.strip()
+        return href
+    if warnings is None:
+        warnings = []
+    # A browser strips U+0001 to U+0020 from the ends of a URL, and
+    # nothing else: "\u00a0https://…" went into the PDF as
+    # file:///…/dist/%C2%A0https://…, a dead link carrying the project's
+    # path, and so did "\0https://…", because the HTML parser turns
+    # U+0000 into U+FFFD before the URL parser sees it. So every
+    # invisible character in front of the address is removed here, the
+    # removal is reported, and the value without them is what gets
+    # rendered: the link works. Refusing it would reject a file that
+    # built before.
+    lead = _HREF_LEAD.match(href)
+    link = href[lead.end():] if lead else href
+    if lead and _invisible_note(lead.group()):
+        warnings.append(
+            f"{ctx}: 'href' starts with invisible characters "
+            f"({_invisible_note(lead.group())}) — removed, so the link "
+            f"works; delete them from the file"
+        )
     if _HREF_ALLOWED.match(link):
-        return
+        scheme = re.match(r"[Mm][Aa][Ii][Ll][Tt][Oo]:|[Tt][Ee][Ll]:", link)
+        if scheme and not _VISIBLE.search(link, scheme.end()):
+            # `mailto:\u200b` passes the allowlist, whose \S takes a
+            # zero-width space for a character, and it built a link to
+            # nobody. Printed as text instead: refusing it would reject a
+            # file that built before.
+            name = scheme.group().lower()
+            warnings.append(
+                f"{ctx}: 'href' has nothing visible after {name} — printed "
+                f"as text, without a link; write the whole link, e.g. "
+                f"\"{_HREF_EXAMPLE[name[:-1]]}\""
+            )
+            return None
+        trail = _HREF_TRAIL.search(link)
+        if trail:
+            link = link[:trail.start()]
+            if _invisible_note(trail.group()):
+                warnings.append(
+                    f"{ctx}: 'href' ends with invisible characters "
+                    f"({_invisible_note(trail.group())}) — removed; delete "
+                    f"them from the file"
+                )
+        if "\0" in link:
+            link = link.replace("\0", "")
+            warnings.append(
+                f"{ctx}: 'href' contains U+0000, which the page would turn "
+                f"into U+FFFD — removed; delete it from the file"
+            )
+        return link
     m = _HREF_SCHEME.match(link)
     if m is None:
         # The advice is the address it most likely is: `//host/…` is a
@@ -1098,6 +1184,146 @@ def _check_list(value, ctx, *, what, example):
     )
 
 
+# ─── The header: shared with the cover letter ────────────────────
+#
+# `name`, `role` and `contact` are printed by the same header markup in
+# both documents and usually come from the one profile both merge, so
+# build_letter.validate_data calls these too: one file must not pass for
+# one document and fail for the other.
+#
+# A key left empty is not set (see deep_merge), so null passes wherever
+# a field is optional. Text that is only spaces is warned about, never
+# refused: such a file built in 1.0.0, and a stricter build must not
+# reject it (see _check_keys). Where the header would print an empty
+# element for it, the element is left out instead, so these checks also
+# tidy `data` in place, and the render uses what they leave.
+
+def display_name(name):
+    """The name as printed in one line: the parts that are not blank,
+    stripped, joined by a space. '' when both are blank."""
+    return " ".join(part.strip() for part in (name["first"], name["last"])
+                    if part.strip())
+
+
+def _check_name(name, warnings):
+    """`name`: a mapping of first and last; both blank is warned about."""
+    if not isinstance(name, dict):
+        raise SchemaError("'name' must be a mapping")
+    for key in ("first", "last"):
+        if not isinstance(name.get(key), str):
+            raise SchemaError(f"'name.{key}' must be a string")
+    _check_keys(name, _KEYS_NAME, "name", warnings, strict=True)
+    # One part may be empty (a single name is still a name). Both empty
+    # print an empty heading and give the PDF no author.
+    if not display_name(name):
+        warnings.append(
+            "'name.first' and 'name.last' are both blank, so the heading "
+            "prints empty and the PDF names no author — write your name, "
+            "e.g. first: Gaius and last: Caesar"
+        )
+
+
+def _check_role(data, warnings):
+    """`role`: absent, null, empty, or text; only spaces is left out."""
+    role = data.get("role")
+    if role is None:
+        return
+    if not isinstance(role, str):
+        raise SchemaError("'role' must be a string if provided")
+    if role and not role.strip():
+        # It printed an empty subtitle line under the name.
+        data["role"] = None
+        warnings.append(
+            "'role' is blank, so no subtitle is printed — write the role, "
+            "e.g. role: Operations Lead, or delete the line"
+        )
+
+
+def _check_contact(data, warnings):
+    """`contact`: absent, null, or a mapping with a `rows` list."""
+    contact = data.get("contact")
+    if contact is None:
+        return
+    if not isinstance(contact, dict):
+        raise SchemaError("'contact' must be a mapping")
+    _check_keys(contact, _KEYS_CONTACT, "contact", warnings, strict=True)
+    address = contact.get("address")
+    if address is not None:
+        if not isinstance(address, str):
+            raise SchemaError("'contact.address' must be a string")
+        if address and not address.strip():
+            # It printed an empty line above the contact rows.
+            contact["address"] = None
+            warnings.append(
+                "'contact.address' is blank, so no address is printed — "
+                "write it, e.g. address: Springfield, IL, or delete the line"
+            )
+    rows = contact.get("rows")
+    if not isinstance(rows, list):
+        raise SchemaError(
+            "'contact.rows' must be a list (use an empty list if "
+            "you want only an address)"
+        )
+    blank = []
+    for i, row in enumerate(rows):
+        ctx = f"contact.rows[{i}]"
+        if not isinstance(row, dict):
+            raise SchemaError(
+                f"{ctx}: must be a mapping with 'value' (and optional 'href')"
+            )
+        _check_keys(row, _KEYS_CONTACT_ROW, ctx, warnings, strict=True)
+        if not isinstance(row.get("value"), str) or not row["value"]:
+            raise SchemaError(
+                f"{ctx}: 'value' must be a non-empty string — it is the "
+                f"text people see"
+            )
+        if row.get("href") is not None and not isinstance(row["href"], str):
+            raise SchemaError(f"{ctx}: 'href' must be a string if provided")
+        if "href" in row:
+            row["href"] = _check_href(row["href"], ctx, warnings)
+        if not row["value"].strip():
+            # Only spaces printed an empty contact line, or a link with
+            # nothing to click when it had an href.
+            blank.append(i)
+            warnings.append(
+                f"{ctx}: 'value' is blank, so the row is left out — write "
+                f"the text people see, e.g. value: you@example.com, or "
+                f"delete the row"
+            )
+    if blank:
+        contact["rows"] = [row for i, row in enumerate(rows) if i not in blank]
+
+
+#: A BCP 47-shaped language tag: a language of 2–8 letters (or the x-
+#: of a private-use tag, or the i- of an old registered one), then any
+#: number of subtags of 1–8 letters or digits. `_` is accepted between
+#: them as well as `-`, because `en_GB` is what people type; it is
+#: written as en-GB (see resolve_lang). The tag reaches the PDF's /Lang
+#: and its XMP, where a control character made the metadata ill-formed.
+_LANG_TAG = re.compile(r"(?:[A-Za-z]{2,8}|[XxIi])(?:[-_][A-Za-z0-9]{1,8})*")
+
+
+def _check_lang(meta, warnings):
+    """`meta.lang`: absent, null, blank (en-US), or a language tag. Any
+    other text is warned about, and the documents are marked en-US."""
+    lang = meta.get("lang")
+    if lang is None:
+        return
+    if not isinstance(lang, str):
+        raise SchemaError(
+            "'meta.lang' must be a string if provided, e.g. lang: en-US"
+        )
+    tag = lang.strip()
+    # Warned, not refused: a locale name such as en_US.UTF-8 or C built
+    # in 1.0.0. resolve_lang marks such a document en-US.
+    if tag and not _LANG_TAG.fullmatch(tag):
+        warnings.append(
+            f"'meta.lang' {lang!r} is not a language tag, so the documents "
+            f"are marked en-US — write letters and digits separated by "
+            f"hyphens, e.g. lang: en-GB"
+        )
+
+
 def validate_data(data):
     """
     Validate the resume data shape up-front so failures surface
@@ -1107,15 +1333,21 @@ def validate_data(data):
     Schema:
       • Top-level required keys: name, meta, sidebar, mainColumn
       • Top-level optional keys: role (string), contact (mapping)
-      • name has 'first' and 'last' string fields
-      • role, if provided, is a string
-      • contact, if provided, is a mapping with a required `rows` list
-        (each row: non-empty `value`, optional `href`) and an optional
-        string `address`
+      • name has 'first' and 'last' string fields (both blank: a warning)
+      • role, if provided (not null), is a string (only spaces: a
+        warning, and it is left out)
+      • contact, if provided (not null), is a mapping with a required
+        `rows` list (each row: non-empty `value`, optional `href`) and
+        an optional string `address` (a blank address or value: a
+        warning, and it is left out)
+      • every href is a link with an allowed scheme, once invisible
+        characters around it are removed (with a warning)
       • meta has 'description' (string), 'maxPages' (positive int, not
-        a boolean), and an optional 'lang' (string)
+        a boolean), and an optional 'lang' (not a language tag: a
+        warning, and the documents are marked en-US)
       • sidebar.blocks is a flat list; each block has a unique kebab-case 'id',
-        a 'type' in VALID_SIDEBAR_BLOCK_TYPES, and a heading. A list
+        a 'type' in VALID_SIDEBAR_BLOCK_TYPES, and a non-empty heading
+        (only spaces: a warning). A list
         block has a non-empty 'items' list of text lines or
         {group: text} headings; a details block a non-empty 'rows'
         list of {label, value, href?}
@@ -1132,7 +1364,10 @@ def validate_data(data):
 
     Raises SchemaError on the first violation found. Returns a list of
     warning strings — unknown keys in objects the JSON schema leaves
-    open — for the caller to print; an empty list means a clean file.
+    open, and the shapes above that are warned about — for the caller
+    to print; an empty list means a clean file. What a warning says is
+    left out, or an href's invisible characters, is changed in `data`
+    itself, which is what the build renders.
     """
     warnings = []
     if not isinstance(data, dict):
@@ -1145,49 +1380,19 @@ def validate_data(data):
     _check_keys(data, _KEYS_TOP, "the top level", warnings, strict=False)
 
     # Name.
-    if not isinstance(data["name"], dict):
-        raise SchemaError("'name' must be a mapping")
-    for key in ("first", "last"):
-        if not isinstance(data["name"].get(key), str):
-            raise SchemaError(f"'name.{key}' must be a string")
-    _check_keys(data["name"], _KEYS_NAME, "name", warnings, strict=True)
+    _check_name(data["name"], warnings)
 
     # Role (optional). Free-form subtitle rendered under the name; if
     # provided must be a string. A non-string would render via Python's
     # default str() conversion inside the page header — usually weird.
-    if "role" in data and not isinstance(data["role"], str):
-        raise SchemaError("'role' must be a string if provided")
+    _check_role(data, warnings)
 
     # Contact (optional). If provided must be a mapping. The header
     # template iterates `contact.rows` unconditionally once the contact
     # block opens, so `rows` is required as soon as you opt in (use an
     # empty list if you only want an address). Each row needs a non-
     # empty `value`; `href` is optional but must be a string when set.
-    if "contact" in data and data["contact"] is not None:
-        contact = data["contact"]
-        if not isinstance(contact, dict):
-            raise SchemaError("'contact' must be a mapping")
-        _check_keys(contact, _KEYS_CONTACT, "contact", warnings, strict=True)
-        if "address" in contact and not isinstance(contact["address"], str):
-            raise SchemaError("'contact.address' must be a string")
-        rows = contact.get("rows")
-        if not isinstance(rows, list):
-            raise SchemaError(
-                "'contact.rows' must be a list (use an empty list if "
-                "you want only an address)"
-            )
-        for i, row in enumerate(rows):
-            ctx = f"contact.rows[{i}]"
-            if not isinstance(row, dict):
-                raise SchemaError(
-                    f"{ctx}: must be a mapping with 'value' (and optional 'href')"
-                )
-            _check_keys(row, _KEYS_CONTACT_ROW, ctx, warnings, strict=True)
-            if not isinstance(row.get("value"), str) or not row["value"]:
-                raise SchemaError(f"{ctx}: 'value' must be a non-empty string")
-            if "href" in row and not isinstance(row["href"], str):
-                raise SchemaError(f"{ctx}: 'href' must be a string if provided")
-            _check_href(row.get("href"), ctx)
+    _check_contact(data, warnings)
 
     # Meta.
     meta = data["meta"]
@@ -1210,12 +1415,10 @@ def validate_data(data):
             f"'meta.maxPages' must be a positive integer; got "
             f"{max_pages!r}{hint}"
         )
-    # meta.lang (optional). If provided must be a string — resolve_lang()
-    # calls .strip() on it. Null is the same as leaving it out.
-    if meta.get("lang") is not None and not isinstance(meta["lang"], str):
-        raise SchemaError(
-            "'meta.lang' must be a string if provided, e.g. lang: en-US"
-        )
+    # meta.lang (optional). If provided must be a string —
+    # resolve_lang() calls .strip() on it — and should be a language
+    # tag. Null is the same as leaving it out.
+    _check_lang(meta, warnings)
 
     # Sidebar.
     if not isinstance(data["sidebar"], dict):
@@ -1235,12 +1438,21 @@ def validate_data(data):
             raise SchemaError(f"{ctx}: duplicate sidebar block id {block['id']!r}")
         seen_block_ids.add(block["id"])
         btype = block.get("type")
-        if btype not in VALID_SIDEBAR_BLOCK_TYPES:
+        # isinstance first: a list or mapping is unhashable, and the
+        # set lookup raised a TypeError instead of this message.
+        if not isinstance(btype, str) or btype not in VALID_SIDEBAR_BLOCK_TYPES:
             raise SchemaError(
                 f"{ctx}: type {btype!r} not in {sorted(VALID_SIDEBAR_BLOCK_TYPES)}"
             )
         if not isinstance(block.get("heading"), str) or not block["heading"]:
             raise SchemaError(f"{ctx}: 'heading' must be a non-empty string")
+        # Only spaces prints an empty heading over the block. Warned, not
+        # refused: it built in 1.0.0 (see _check_keys).
+        if not block["heading"].strip():
+            warnings.append(
+                f"{ctx}: 'heading' is blank, so the block prints under an "
+                f"empty heading — write one, e.g. heading: Key Skills"
+            )
         own, other = ("items", "rows") if btype == "list" else ("rows", "items")
         _check_keys(block, _KEYS_BLOCK[btype], ctx, warnings, strict=False,
                     hints={other: f" (a {btype} block reads {own!r})"})
@@ -1257,7 +1469,7 @@ def validate_data(data):
         if not isinstance(section, dict):
             raise SchemaError(f"mainColumn entry {i} must be a mapping")
         stype = section.get("type")
-        if stype not in VALID_SECTION_TYPES:
+        if not isinstance(stype, str) or stype not in VALID_SECTION_TYPES:
             raise SchemaError(
                 f"mainColumn entry {i}: type {stype!r} not in "
                 f"{sorted(VALID_SECTION_TYPES)}"
@@ -1464,12 +1676,13 @@ def _validate_detail_rows(rows, ctx, warnings):
                     example="label: GitHub", allow_blank=True)
         _check_text(row.get("value"), rctx, what="'value'",
                     example="value: github.com/you")
-        if "href" in row and not isinstance(row["href"], str):
+        if row.get("href") is not None and not isinstance(row["href"], str):
             raise SchemaError(
                 f"{rctx}: 'href' must be a string if provided, e.g. "
                 f"href: \"https://github.com/you\""
             )
-        _check_href(row.get("href"), rctx)
+        if "href" in row:
+            row["href"] = _check_href(row["href"], rctx, warnings)
 
 
 def check_no_module_collisions():
@@ -1645,8 +1858,9 @@ def jinja_env(templates_dir=None):
         # Filter sites that need to emit literal HTML (the markdown
         # filter expands `**bold**` into `<strong>` tags) MUST end the
         # chain with `| safe` so autoescape doesn't re-escape the tags.
-        # In practice the only such chain is `bullet | e | md | safe`:
-        # the leading `| e` does real work (escapes '&' etc. before
+        # The chain is `… | e | md | safe` wherever `md` is used (a
+        # bullet, the summary, a letter paragraph): the leading `| e`
+        # does real work (escapes '&' etc. before
         # markdown_filter sees the text, which it would otherwise pass
         # through raw), and `| safe` blocks the auto-escape that would
         # otherwise hit `<strong>` and produce `&lt;strong&gt;`.
@@ -1659,6 +1873,45 @@ def jinja_env(templates_dir=None):
     env.filters["md"] = markdown_filter
     _JINJA_ENVS[templates_dir] = env
     return env
+
+
+def read_placement(path, block_by_id, job_by_id):
+    """
+    dist/placement.json, checked against the data it is about to place.
+
+    The solver wrote it for one set of sidebar block and job ids, and a
+    final build can be run against one solved for other data: by the
+    warm worker after the data changed (see worker.op_build), or by
+    `build.py --mode=final` run by hand. That used to fail three
+    different ways — a job the data lacks as a template error, a sidebar
+    block as a KeyError the worker called internal, a corrupt file as a
+    JSON error it called a bad request — for one cause. All three now
+    fail here, as StalePlacement, before anything is rendered.
+    """
+    shown = _shown(path)
+    advice = ("Solve the layout again: `node resume.js` runs every step "
+              "in order and writes a new one.")
+    try:
+        placement = json.loads(path.read_text(encoding="utf-8"))
+        pages = placement["pages"]
+        blocks = [e["block_id"] for p in pages for e in p.get("sidebar_blocks", [])]
+        jobs = [e["job_id"] for p in pages for s in p.get("main_sections", [])
+                for e in s.get("jobs", [])]
+        missing = ([f"sidebar block {i!r}" for i in blocks if i not in block_by_id]
+                   + [f"job {i!r}" for i in jobs if i not in job_by_id])
+    # ValueError: not JSON, or not UTF-8. The rest: JSON of another shape.
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        reason = str(e) if isinstance(e, ValueError) else "not a layout"
+        fail(f"{shown} could not be read ({reason}).\n{advice}", StalePlacement)
+    if missing:
+        more = f" and {len(missing) - 1} more" if len(missing) > 1 else ""
+        fail(
+            f"{shown} does not match the data just loaded.\n"
+            f"It places {missing[0]}{more}, which the data does not have: "
+            f"the layout was solved for other data.\n{advice}",
+            StalePlacement,
+        )
+    return placement
 
 
 def build(mode='final'):
@@ -1692,6 +1945,13 @@ def build(mode='final'):
     # can reference jobs and sidebar blocks by id without searching.
     block_by_id = {b["id"]: b for b in data["sidebar"]["blocks"]}
     job_by_id = {j["id"]: j for j in experience["jobs"]}
+
+    # A gap entry's `bullets:` left empty is null, which validate_data
+    # accepts (empty means not set) and the job macro would slice. It is
+    # the empty list the gap entry has anyway.
+    for job in experience["jobs"]:
+        if "bullets" in job and job["bullets"] is None:
+            job["bullets"] = []
 
     # Canonical accent color, read from the SCSS token file. Threaded
     # into the template context (theme-color meta tag) and the favicon
@@ -1740,7 +2000,7 @@ def build(mode='final'):
                 f"{Path(__file__).relative_to(ROOT)} --mode=measurement` "
                 f"to generate the measurement HTML for inspection."
             )
-        placement = json.loads(placement_path.read_text(encoding='utf-8'))
+        placement = read_placement(placement_path, block_by_id, job_by_id)
         n_pages = len(placement.get('pages', []))
         page_word = 'page' if n_pages == 1 else 'pages'
         c.ok_pair("Loaded placement",

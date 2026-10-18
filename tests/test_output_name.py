@@ -181,6 +181,27 @@ class TestFilesystemSafety(unittest.TestCase):
                 self.assertTrue(got.startswith("山") and got.endswith(on.DOC_SUFFIX[variant]))
                 self.assertIn("_Иван", got)
 
+    def test_the_temporary_name_beside_the_pdf_fits_too(self):
+        # crop_pdf.py writes `.<name>.<pid>.tmp` before moving it over
+        # the PDF. With the PDF capped at 255 bytes that was 267+ bytes
+        # for two 64-character CJK parts, and the write failed on ext4.
+        for variant in ("resume", "letter"):
+            with self.subTest(variant=variant):
+                name = stem("山" * 64, "田" * 64, variant) + ".pdf"
+                self.assertLessEqual(len(name.encode("utf-8")), on.MAX_FILENAME_BYTES)
+                tmp = f".{name}.{2 ** 32 - 1}.tmp"     # the longest Windows pid
+                self.assertLessEqual(len(tmp.encode("utf-8")), 255, tmp)
+
+    def test_no_ascii_name_reaches_the_byte_cap(self):
+        # MAX_PART bounds an ASCII stem far below the cap, so the cap
+        # changes no ASCII name.
+        for variant in ("resume", "letter"):
+            with self.subTest(variant=variant):
+                got = stem("A" * 200, "B" * 200, variant)
+                self.assertEqual(got, "A" * on.MAX_PART + "_" + "B" * on.MAX_PART
+                                 + "_" + on.DOC_SUFFIX[variant])
+                self.assertLess(len((got + ".pdf").encode("utf-8")), on.MAX_FILENAME_BYTES)
+
     def test_names_that_fit_are_not_touched_by_the_byte_cap(self):
         # 64 CJK characters and 10 more: 238 bytes with "_Resume.pdf".
         self.assertEqual(stem("山" * 64, "田" * 10), "山" * 64 + "_" + "田" * 10 + "_Resume")
@@ -294,6 +315,25 @@ class TestMetadataRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             meta = Path(tmp) / "pdf_meta.json"
             meta.write_text(json.dumps({"title": "x"}), encoding="utf-8")
+            self.assertEqual(on.stem_from_meta(meta, "resume"), "Resume")
+
+    def test_json_that_is_not_an_object_does_not_raise(self):
+        # `null` raised AttributeError here; readStem in
+        # _output_name.js returned the suffix.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            meta = Path(tmp) / "pdf_meta.json"
+            for text in ("null", "[1]", '"x"', "42"):
+                with self.subTest(text=text):
+                    meta.write_text(text, encoding="utf-8")
+                    self.assertEqual(on.stem_from_meta(meta, "letter"), "Cover_Letter")
+
+    def test_bytes_that_are_not_utf8_do_not_raise(self):
+        # UnicodeDecodeError escaped; the Node side falls back too.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            meta = Path(tmp) / "pdf_meta.json"
+            meta.write_bytes('{"output_stem": "José_Resume"}'.encode("latin-1"))
             self.assertEqual(on.stem_from_meta(meta, "resume"), "Resume")
 
 

@@ -6,8 +6,9 @@
  * filename and then ask you to confirm the guess, every time.
  *
  * The rule is not a heuristic: the two builders require disjoint
- * top-level keys, so a file that satisfies one cannot satisfy the
- * other.
+ * top-level keys, so a file with one set and not the other can only be
+ * that document. A file with both sets satisfies both builders, which
+ * is why it gets no answer.
  *
  *   resume  build.py               requires `sidebar` and `mainColumn`
  *   letter  build_letter.py  requires `letter`
@@ -56,6 +57,13 @@ test('either resume key alone is enough', () => {
 
 test('a cover letter is detected from letter', () => {
   assertEq(doc('letter:\n  body: |\n    Dear sir\n'), 'letter', 'letter key');
+});
+
+test('a byte-order mark does not hide the first key', () => {
+  // Notepad's "UTF-8 with BOM": readFileSync keeps U+FEFF, and the
+  // letter's only key is often on line 1.
+  assertEq(doc('﻿letter:\n  body: x\n'), 'letter', 'BOM before letter');
+  assertEq(doc('﻿sidebar:\r\n  blocks: []\r\n'), 'resume', 'BOM and CRLF before sidebar');
 });
 
 test('the reason is reported, for the toast that names it', () => {
@@ -109,6 +117,9 @@ test('both shapes at once returns null rather than picking', () => {
   const both = 'sidebar:\n  blocks: []\nletter:\n  body: x\n';
   assertEq(doc(both), null, 'ambiguous -> null');
   assertTrue(/both/.test(detectDoc(both).reason), 'says why');
+  // Both builders accept such a file; the reason must not say neither does.
+  assertTrue(/either document/.test(detectDoc(both).reason)
+             && !/not a shape/.test(detectDoc(both).reason), 'says it could be either');
 });
 
 test('neither shape returns null', () => {
@@ -180,7 +191,7 @@ test('resolveInsideRoot rejects anything that escapes', () => {
   assertEq(resolveInsideRoot('../../etc/passwd'), null, 'dot-dot escape');
   assertEq(resolveInsideRoot('/etc/passwd'), null, 'absolute outside');
   assertEq(resolveInsideRoot('dist/../../..'), null, 'escape via a valid prefix');
-  assertEq(resolveInsideRoot(''), null === resolveInsideRoot('') ? null : resolveInsideRoot(''),
+  assertEq(resolveInsideRoot(''), path.resolve(ROOT),
            'empty resolves to the root, which is allowed');
 });
 

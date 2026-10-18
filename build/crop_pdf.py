@@ -23,8 +23,11 @@ This crop has TWO important guarantees:
      fail this — it would shift the lower-left inward and reduce the
      left and bottom margins below the requested value.)
 
-The crop only adjusts the MediaBox (the page's physical extent).
-No content is moved; nothing is rasterized; the PDF stays vector.
+The crop only moves each page's MediaBox (the page's physical extent)
+and CropBox. No content is moved; nothing is rasterized; the PDF stays
+vector. On a tagged PDF the content streams are rewritten as well, but
+only to add marked-content operators, which draw nothing (see
+ACCESSIBILITY).
 
 The Studio's live preview applies the same geometry in memory, to the
 page it is about to rasterize, instead of running this file on every
@@ -57,16 +60,20 @@ Chromium tags the PDF (`tagged: true`) but leaves two things a
 screen reader and a PDF/UA validator need:
   • Link annotations carry no /Contents, the link's text alternative.
     describe_links() gives each the destination it points to: the
-    address for a mailto: link, host and path for a web link.
+    address for a mailto: link, host and path for a web link, the page
+    for a link inside the document.
   • Whatever Chromium does not tag — the page background, the rules,
     the page footer — is left as unmarked content, which PDF/UA
     forbids: content is either tagged or an artifact.
     mark_untagged_as_artifacts() wraps each such drawing operation in
-    /Artifact BMC … EMC. Marked content draws nothing, so the pages
+    /Artifact BMC … EMC, inside a form XObject when the form holds
+    tagged content itself. Marked content draws nothing, so the pages
     render to the same pixels.
 Both run only on a tagged PDF (the deliverable); the preview prints
 untagged and never comes here. With them, veraPDF passes every PDF/UA-1
-rule, so the tagged PDF's XMP declares it (pdfuaid:part 1). veraPDF
+rule, so the tagged PDF's XMP declares it (pdfuaid:part 1), unless the
+marking had to leave some drawing unmarked, which it warns about and
+which Chromium's output never needs. veraPDF
 checks what a machine can; PDF/UA also asks for human judgement
 (reading order, whether headings and link texts make sense); the
 heading order was checked with NVDA and Acrobat on 2026-09-27.
@@ -104,7 +111,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import DecodedStreamObject, NameObject, TextStringObject
+from pypdf.generic import (ArrayObject, ContentStream, DecodedStreamObject,
+                           EncodedStreamObject, IndirectObject, NameObject,
+                           TextStringObject)
 from pypdf.xmp import XmpInformation
 
 # Local console helper.
@@ -236,16 +245,20 @@ def crop_pdfium_page_to_letter(page) -> None:
 
 
 #: Characters XML 1.0 cannot hold, even escaped: C0 controls other than
-#: tab, LF and CR, and U+FFFE/U+FFFF. YAML lets "\x01" or "\f" through in
-#: a double-quoted string; copied into the XMP they made the packet
-#: ill-formed, and pypdf and PDF/UA validators reject the whole packet.
+#: tab, LF and CR, lone surrogates (U+D800–U+DFFF) and U+FFFE/U+FFFF.
+#: YAML lets "\x01" or "\f" through in a double-quoted string; copied
+#: into the XMP they made the packet ill-formed, and pypdf and PDF/UA
+#: validators reject the whole packet. A lone surrogate ("\ud800" in
+#: JSON or YAML) never got that far: no UTF can encode it, and writing
+#: /Title or /Lang stopped the crop with UnicodeEncodeError.
 #: Removed from the manifest values before /Info is stamped, so /Info
 #: and the XMP apply_xmp() copies from it still say the same thing.
 #: A str.translate() table (each code point mapped to None, i.e. deleted)
 #: rather than a regex character class, so the set is spelled out as
 #: code points and no range can be misread as wider than it is.
 _XML_ILLEGAL = dict.fromkeys(
-    [*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF])
+    [*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), *range(0xD800, 0xE000),
+     0xFFFE, 0xFFFF])
 
 
 def apply_metadata(writer: PdfWriter, reader: PdfReader, meta_path: Path | None) -> None:
@@ -340,14 +353,21 @@ def apply_language(writer: PdfWriter, meta_path: Path | None) -> None:
 
 
 def read_lang(meta_path: Path | None) -> str:
-    """The manifest's `lang`, stripped, or 'en-US' when there is none."""
+    """The manifest's `lang`, stripped, or 'en-US' when there is none.
+
+    Characters XML cannot hold are removed first, as from the /Info
+    values (_XML_ILLEGAL): the language goes into the XMP packet as
+    dc:language, and a U+0001 in the language made that packet
+    ill-formed in a PDF that still declared PDF/UA-1."""
     lang = 'en-US'
     if meta_path is not None:
         try:
             manifest = json.loads(meta_path.read_text(encoding='utf-8'))
             value = manifest.get('lang')
-            if isinstance(value, str) and value.strip():
-                lang = value.strip()
+            if isinstance(value, str):
+                value = value.translate(_XML_ILLEGAL).strip()
+            if isinstance(value, str) and value:
+                lang = value
         except (OSError, json.JSONDecodeError):
             # Manifest unreadable — keep the default rather than fail.
             pass
@@ -409,8 +429,9 @@ def apply_xmp(writer: PdfWriter, lang: str, pdfua: bool = False) -> None:
     With `pdfua`, it also declares PDF/UA-1 (pdfuaid:part 1, ISO
     14289-1 clause 5). crop_and_stamp() asks for that on a tagged PDF,
     the deliverable, which veraPDF passes on every other PDF/UA-1 rule
-    (tests/test_pdf_accessibility.py keeps those in place). It never
-    claims PDF/A: the files are not built or checked for it.
+    (tests/test_pdf_accessibility.py keeps those in place), unless the
+    artifact marking had to leave drawing unmarked. It never claims
+    PDF/A: the files are not built or checked for it.
     """
     info = writer.metadata or {}
 
@@ -482,20 +503,56 @@ def link_description(uri: str) -> str | None:
 
 def describe_links(writer: PdfWriter) -> int:
     """Give every link annotation without one a /Contents (PDF/UA-1
-    7.18.1 and 7.18.5). Returns how many were described."""
+    7.18.1 and 7.18.5). Returns how many were described.
+
+    A web or mail link is described by link_description(). A link
+    inside the document (`<a href="#id">`, which Chromium writes as a
+    /Dest, or a /GoTo action) has no address to read out, so it says
+    which page it goes to. A file: link is described like any other, and
+    warned about: it puts a path on this computer in the PDF."""
     count = 0
+    pages = None
     for page in writer.pages:
         for ref in page.get('/Annots') or []:
             annot = ref.get_object()
             if annot.get('/Subtype') != '/Link' or annot.get('/Contents'):
                 continue
             action = annot.get('/A')
-            uri = action.get_object().get('/URI') if action is not None else None
-            text = link_description(str(uri)) if uri else None
+            action = action.get_object() if action is not None else {}
+            uri = action.get('/URI')
+            dest = annot.get('/Dest')
+            if dest is None and action.get('/S') == '/GoTo':
+                dest = action.get('/D')
+            text = None
+            if uri:
+                if str(uri).strip().lower().startswith('file:'):
+                    c.warn(f"a link points at a file on this computer ({uri}) "
+                           f"— the PDF shows that path to whoever opens it")
+                text = link_description(str(uri))
+            elif dest is not None:
+                if pages is None:
+                    pages = {p.indirect_reference.idnum: n
+                             for n, p in enumerate(writer.pages, 1)}
+                number = _destination_page(writer, dest, pages)
+                text = f"Link to page {number}" if number else None
             if text:
                 annot[NameObject('/Contents')] = TextStringObject(text)
                 count += 1
     return count
+
+
+def _destination_page(writer: PdfWriter, dest, pages) -> int | None:
+    """The 1-based page a destination goes to: an explicit one (an
+    array starting with the page) or a named one. None if unknown."""
+    dest = dest.get_object()
+    if not isinstance(dest, ArrayObject):
+        named = writer.named_destinations.get(str(dest))
+        if named is None:
+            return None
+        number = writer.get_destination_page_number(named)
+        return None if number is None or number < 0 else number + 1
+    target = dest[0] if dest else None
+    return pages.get(target.idnum) if isinstance(target, IndirectObject) else None
 
 
 # Content-stream operators, by what they do (ISO 32000, Annex A).
@@ -504,26 +561,90 @@ _PAINT = {b'f', b'F', b'f*', b'S', b's', b'B', b'B*', b'b', b'b*'}
 _SHOW = {b'Tj', b'TJ', b"'", b'"', b'Do', b'sh', b'INLINE IMAGE'}
 
 
-def _artifact_spans(ops):
+def _artifact_spans(ops, holds_tags=lambda i: False, covers=lambda i: True):
     """(first, last) operator index of each drawing operation, in
-    `ops` (a page's operators in order), that lies outside every
-    marked-content sequence. See mark_untagged_as_artifacts."""
-    depth = 0
+    `ops` (a content stream's operators in order), that lies outside
+    every marked-content sequence that covers it. covers(index) says
+    whether the BMC or BDC there does: an /Artifact or a sequence with
+    an MCID (_covers) — a sequence that is neither, such as optional
+    content (/OC) or a bare /Span, leaves its drawing neither tagged
+    nor an artifact, so that drawing is wrapped too. A `Do` for which
+    holds_tags(index) is true draws a form with tagged content inside,
+    and is left out: see mark_untagged_as_artifacts."""
+    stack = []     # whether each open sequence covers what it holds
+    covered = 0    # how many of them do
     path_start = None
     for i, op in enumerate(ops):
         if op in (b'BDC', b'BMC'):
-            depth += 1
+            stack.append(bool(covers(i)))
+            covered += stack[-1]
         elif op == b'EMC':
-            depth = max(0, depth - 1)
+            if stack:
+                covered -= stack.pop()
         elif op in _PATH:
-            if depth == 0 and path_start is None:
+            if not covered and path_start is None:
                 path_start = i
         elif op in _PAINT or op == b'n':
-            if depth == 0 and op != b'n':
+            if not covered and op != b'n':
                 yield (i if path_start is None else path_start, i)
             path_start = None
-        elif op in _SHOW and depth == 0:
-            yield (i, i)
+        elif op in _SHOW and not covered:
+            if op != b'Do' or not holds_tags(i):
+                yield (i, i)
+
+
+def _bare_draws(ops, covers):
+    """The indices of the `Do` operators in `ops` that lie outside every
+    marked-content sequence that covers them (as in _artifact_spans)."""
+    stack = []
+    covered = 0
+    for i, op in enumerate(ops):
+        if op in (b'BDC', b'BMC'):
+            stack.append(bool(covers(i)))
+            covered += stack[-1]
+        elif op == b'EMC':
+            if stack:
+                covered -= stack.pop()
+        elif op == b'Do' and not covered:
+            yield i
+
+
+_TAG = re.compile(rb'\s*(/[^\x00\t\n\x0c\r ()<>\[\]{}/%]*)\s*(.*)', re.DOTALL)
+
+
+def _mark_kind(operator, operands, resources):
+    """(tag, whether it carries an MCID) for the BMC or BDC whose
+    operands are `operands`: raw bytes from the scanner, or pypdf's
+    objects. The property list of a BDC is inline (<< /MCID 0 >>, as
+    Chromium writes it) or named (/MC0), in the stream's /Properties."""
+    if isinstance(operands, bytes):
+        m = _TAG.match(operands)
+        if not m:
+            return None, False
+        tag, props = m.group(1).decode('latin-1'), m.group(2).strip()
+        if operator != b'BDC' or not props:
+            return tag, False
+        if props.startswith(b'<<'):
+            return tag, b'/MCID' in props
+        props = NameObject.unnumber(props).decode('utf-8', 'replace')
+    else:
+        if not operands:
+            return None, False
+        tag = str(operands[0])
+        props = operands[1] if operator == b'BDC' and len(operands) > 1 else None
+    if isinstance(props, str):
+        resources = resources.get_object() if resources is not None else None
+        named = resources.get('/Properties') if resources else None
+        props = named.get_object().get(props) if named is not None else None
+    props = props.get_object() if props is not None else None
+    return tag, hasattr(props, 'get') and '/MCID' in props
+
+
+def _covers(operator, operands, resources):
+    """Whether a marked-content sequence leaves what it holds alone: an
+    /Artifact, or tagged content (an MCID)."""
+    tag, mcid = _mark_kind(operator, operands, resources)
+    return tag == '/Artifact' or mcid
 
 
 # One content-stream token (ISO 32000, 7.2 and 7.8.2): whitespace or a
@@ -579,7 +700,7 @@ def _scan_operators(data: bytes):
 
 
 def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
-    """Wrap drawing that is outside every marked-content sequence in
+    """Wrap drawing that is neither tagged nor an artifact in
     /Artifact BMC … EMC (PDF/UA-1 7.1: content is tagged or an
     artifact). Returns how many operations were wrapped.
 
@@ -588,51 +709,271 @@ def mark_untagged_as_artifacts(writer: PdfWriter) -> int:
     a clip (W, W*). A path that is only a clip (ending in n) paints
     nothing and is left as it is. Text is wrapped one show operator at
     a time, inside its BT … ET; an XObject, a shading and an inline
-    image, one operator each. Drawing already inside a marked-content
-    sequence — Chromium's tagged content, or anything else — is not
-    touched.
+    image, one operator each. Drawing inside an /Artifact or inside a
+    sequence with an MCID (Chromium's tagged content) is not touched.
+    Drawing inside any other marked-content sequence (optional content,
+    a bare /Span) is neither, and is wrapped where it is, inside it.
+
+    A form XObject that holds tagged content is the exception to "one
+    operator each". Chromium draws a group (opacity, a blend mode, a
+    mask) as a form, and tags what is inside it there: the form has
+    /StructParents and its content a BDC with an MCID, which the
+    structure tree reaches through an MCR /Stm. Its `Do` sits outside
+    any marked content on the page, and wrapping it put that tagged
+    content inside an artifact, which PDF/UA forbids too (ISO 32000
+    14.8.2). On the templates these are the section rules (/NonStruct);
+    `<p style="opacity:.5">` put a paragraph there. Such a `Do` is left
+    as it is, and the form's own stream gets the same treatment as a
+    page's, forms inside it included.
+
+    A form is one stream however often it is drawn, so its stream is
+    marked only when every drawing of it is outside marked content.
+    Chromium draws a masked element (-webkit-mask-image) as one form
+    drawn twice, both times like that, and the same markers are then
+    right for both. A form also drawn inside marked content, which
+    Chromium never writes, would get the artifacts inside that content
+    too (inside tagged content, where an artifact is wrong as well), so
+    it is left as it is, with a warning when it has drawing to mark;
+    crop_and_stamp() then does not declare PDF/UA-1.
 
     The markers are spliced into the stream's own bytes, which are
     otherwise kept as Chromium wrote them. Parsing every operand into
     pypdf objects and writing them all back out, as this used to,
-    was most of this step's time. A page the small scanner above does
+    was most of this step's time. A stream the small scanner above does
     not read (an inline image, say) still goes through pypdf.
     """
-    wrapped = 0
+    return _mark_document(writer)[0]
+
+
+def _mark_document(writer: PdfWriter):
+    """mark_untagged_as_artifacts(), returning (how many operations were
+    wrapped, how many drawing operations were left unmarked)."""
+    pages = []
     for page in writer.pages:
         contents = page.get_contents()
-        if contents is None:
-            continue
+        if contents is not None:
+            pages.append((_Content(contents, writer, page), page.get('/Resources')))
+    forms = _Forms(writer)
+    for content, resources in pages:
+        forms.count(content, resources)
+    wrapped = sum(_mark(content, resources, forms) for content, resources in pages)
+    return wrapped, forms.left
+
+
+class _Content:
+    """One content stream's operators, read once: the scanner's
+    (operator, start, end) in `ops`, or, when the scanner cannot read
+    it, pypdf's parse in `parsed`. `page` is the page it belongs to, or
+    None for a form's stream."""
+
+    def __init__(self, stream, pdf, page=None):
+        self.stream = stream
+        self.page = page
+        self.data = stream.get_data()
         try:
-            data = contents.get_data()
-            ops = _scan_operators(data)
+            self.ops = _scan_operators(self.data)
+            self.parsed = None
+            self.names = [op for op, _, _ in self.ops]
         except ValueError:
-            wrapped += _mark_with_pypdf(page, contents)
+            self.ops = None
+            self.parsed = stream if page is not None else ContentStream(stream, pdf)
+            self.names = [op for _, op in self.parsed.operations]
+
+    def operands(self, i):
+        """Operator i's operands: raw bytes from the scanner, else pypdf's."""
+        if self.ops is not None:
+            _, start, end = self.ops[i]
+            return self.data[start:end - len(self.names[i])]
+        return self.parsed.operations[i][0]
+
+    def xobject(self, i):
+        """The resource name a `Do` at index i draws, or None."""
+        operands = self.operands(i)
+        if isinstance(operands, bytes):
+            raw = operands.strip()
+            return NameObject.unnumber(raw).decode('utf-8', 'replace') if raw else None
+        return str(operands[0]) if operands else None
+
+    def covers(self, i, resources):
+        """Whether the BMC or BDC at index i is an /Artifact or tagged."""
+        return _covers(self.names[i], self.operands(i), resources)
+
+    def marks_tags(self, resources):
+        """Whether any marked-content sequence here carries an MCID."""
+        return any(op == b'BDC' and _mark_kind(op, self.operands(i), resources)[1]
+                   for i, op in enumerate(self.names))
+
+
+def _form(resources, name):
+    """The form XObject `name` in `resources`, as (key, form), the key
+    telling one object from another; None for anything else."""
+    resources = resources.get_object() if resources is not None else None
+    xobjects = resources.get('/XObject') if resources and name else None
+    ref = xobjects.get_object().get(name) if xobjects is not None else None
+    if ref is None:
+        return None
+    form = ref.get_object()
+    if form.get('/Subtype') != '/Form':
+        return None
+    return (ref.idnum if isinstance(ref, IndirectObject) else id(form)), form
+
+
+def _form_resources(form, resources):
+    """A form's resources: its own, or (deprecated, ISO 32000 7.8.3)
+    those of the stream that draws it."""
+    return form.get('/Resources') or resources
+
+
+class _Forms:
+    """The form XObjects drawn from the pages, each read once: how many
+    times each is drawn, how many of those inside marked content, and
+    whether it holds tagged content."""
+
+    def __init__(self, pdf):
+        self.pdf = pdf
+        self.content = {}
+        self.uses = {}
+        self.inside = {}       # of those uses, how many inside marked content
+        self.reached = set()   # (key, whether outside marked content)
+        self.tagged = {}
+        self.handled = set()   # forms marked inside, or warned about
+        self.left = 0          # drawing operations left unmarked
+
+    def read(self, key, form):
+        if key not in self.content:
+            self.content[key] = _Content(form, self.pdf)
+        return self.content[key]
+
+    def draws(self, content, resources):
+        """(index, key, form, its resources) for each `Do` of a form in
+        content."""
+        for i, op in enumerate(content.names):
+            if op == b'Do':
+                found = _form(resources, content.xobject(i))
+                if found:
+                    yield (i,) + found + (_form_resources(found[1], resources),)
+
+    def count(self, content, resources, outside=True):
+        """Count every form `content` draws, at any depth, and inside them:
+        how often, and how often inside a marked-content sequence that
+        covers it (_covers), its own `Do` or the one that draws `content`
+        (`outside` false). Each form is read at most twice, once for
+        each."""
+        bare = set(_bare_draws(content.names, lambda i: content.covers(i, resources))
+                   if outside else ())
+        for i, key, form, inner in self.draws(content, resources):
+            free = i in bare
+            self.uses[key] = self.uses.get(key, 0) + 1
+            if not free:
+                self.inside[key] = self.inside.get(key, 0) + 1
+            if (key, free) not in self.reached:
+                self.reached.add((key, free))
+                self.count(self.read(key, form), inner, free)
+
+    def holds_tags(self, key, form, inner):
+        """/StructParents, an MCID, or a form inside that holds tags."""
+        if key not in self.tagged:
+            self.tagged[key] = False   # so a form that draws itself cannot loop
+            content = self.read(key, form)
+            self.tagged[key] = (
+                '/StructParents' in form
+                or content.marks_tags(inner)
+                or any(self.holds_tags(*found[1:]) for found in self.draws(content, inner))
+            )
+        return self.tagged[key]
+
+
+def _mark(content, resources, forms, key=None) -> int:
+    """mark_untagged_as_artifacts for one content stream, and the forms
+    with tagged content it draws outside marked content. `key` is the
+    form's, for a form's stream. A form also drawn inside marked
+    content is only read: what it would wrap is counted in forms.left
+    and warned about."""
+    descend = []
+
+    def holds_tags(i):
+        # Asked only of a `Do` outside every marked-content sequence
+        # that covers it.
+        found = _form(resources, content.xobject(i))
+        if found is None:
+            return False
+        found += (_form_resources(found[1], resources),)
+        if not forms.holds_tags(*found):
+            return False
+        descend.append(found)
+        return True
+
+    def covers(i):
+        return content.covers(i, resources)
+
+    if forms.inside.get(key):
+        spans = list(_artifact_spans(content.names, holds_tags, covers))
+        wrapped = 0
+        if spans:
+            forms.left += len(spans)
+            c.warn(f"a group holding tagged content is drawn {forms.uses[key]} times, "
+                   f"{forms.inside[key]} of them inside marked content — its untagged "
+                   f"drawing is left unmarked (PDF/UA 7.1), and the PDF does not "
+                   f"declare PDF/UA-1")
+    elif content.ops is None and content.page is not None:
+        wrapped = _mark_with_pypdf(content.page, content.stream, holds_tags, covers)
+    else:
+        spans = list(_artifact_spans(content.names, holds_tags, covers))
+        wrapped = len(spans)
+        if spans and content.ops is not None:
+            data = _splice(content.data, content.ops, spans)
+            if content.page is not None:
+                stream = DecodedStreamObject()
+                stream.set_data(data)
+                content.page.replace_contents(stream.flate_encode())
+            else:
+                _replace_form_data(content.stream, data)
+        elif spans:
+            content.parsed.operations = _wrap_operations(content.parsed.operations, spans)
+            _replace_form_data(content.stream, content.parsed.get_data())
+    for key, form, inner in descend:
+        if key in forms.handled:
             continue
-        spans = list(_artifact_spans(op for op, _, _ in ops))
-        if not spans:
-            continue
-        cuts = sorted([(ops[a][1], 1, b'/Artifact BMC\n') for a, _ in spans]
-                      + [(ops[b][2], 0, b'\nEMC\n') for _, b in spans])
-        out = []
-        last = 0
-        for at, _, marker in cuts:
-            out += [data[last:at], marker]
-            last = at
-        out.append(data[last:])
-        stream = DecodedStreamObject()
-        stream.set_data(b''.join(out))
-        page.replace_contents(stream.flate_encode())
-        wrapped += len(spans)
+        forms.handled.add(key)
+        wrapped += _mark(forms.read(key, form), inner, forms, key)
     return wrapped
 
 
-def _mark_with_pypdf(page, contents) -> int:
-    """mark_untagged_as_artifacts for one page, on pypdf's parse."""
-    operations = contents.operations
-    spans = list(_artifact_spans(op for _, op in operations))
-    if not spans:
-        return 0
+def _replace_form_data(form, data: bytes) -> None:
+    """Give a form XObject the decoded content `data`, in the same
+    object: the resources that draw it, and the structure tree (an MCR's
+    /Stm), point at that object.
+
+    pypdf's set_data re-encodes only a stream whose one filter is
+    FlateDecode: any other filter ([/ASCII85Decode /FlateDecode], say)
+    raised PdfReadError and stopped the crop, and a /DecodeParms (a
+    predictor) was kept while the data was encoded without it, which
+    no reader can decode. So an encoded form loses its filters and its
+    parameters and is flate-encoded afresh, which for Chromium's forms
+    (FlateDecode alone) is what set_data did. An unencoded one stays so.
+    """
+    if isinstance(form, EncodedStreamObject):
+        form.get_data()   # decoded with the old filters, and kept
+        form.pop(NameObject('/DecodeParms'), None)
+        form[NameObject('/Filter')] = NameObject('/FlateDecode')
+    form.set_data(data)
+
+
+def _splice(data: bytes, ops, spans) -> bytes:
+    """`data` with /Artifact BMC … EMC around each span of `ops`."""
+    cuts = sorted([(ops[a][1], 1, b'/Artifact BMC\n') for a, _ in spans]
+                  + [(ops[b][2], 0, b'\nEMC\n') for _, b in spans])
+    out = []
+    last = 0
+    for at, _, marker in cuts:
+        out += [data[last:at], marker]
+        last = at
+    out.append(data[last:])
+    return b''.join(out)
+
+
+def _wrap_operations(operations, spans):
+    """pypdf's `operations` with /Artifact BMC … EMC around each span."""
     starts = [a for a, _ in spans]
     ends = [b for _, b in spans]
     out = []
@@ -640,7 +981,19 @@ def _mark_with_pypdf(page, contents) -> int:
         out += [([NameObject('/Artifact')], b'BMC')] * starts.count(i)
         out.append(operation)
         out += [([], b'EMC')] * ends.count(i)
-    contents.operations = out
+    return out
+
+
+def _mark_with_pypdf(page, contents, holds_tags=lambda i: False, covers=None) -> int:
+    """mark_untagged_as_artifacts for one page, on pypdf's parse."""
+    operations = contents.operations
+    if covers is None:
+        def covers(i):
+            return _covers(operations[i][1], operations[i][0], page.get('/Resources'))
+    spans = list(_artifact_spans((op for _, op in operations), holds_tags, covers))
+    if not spans:
+        return 0
+    contents.operations = _wrap_operations(operations, spans)
     page.replace_contents(contents)
     page.compress_content_streams()
     return len(spans)
@@ -693,22 +1046,26 @@ def foreign_fonts(reader: PdfReader) -> list[str]:
 
 
 def crop_and_stamp(reader: PdfReader, meta_path: Path | None) -> PdfWriter:
-    """The whole post-process, in its one order: crop, /Info, /Lang, XMP,
-    and on a tagged PDF the link descriptions and artifacts.
+    """The whole post-process, in its one order: crop, /Info, /Lang, on a
+    tagged PDF the link descriptions and artifacts, then XMP.
 
     Both callers go through this — main() below and the Studio worker's
     crop op (build/worker.py) — so a step added here reaches both. They
     used to spell the sequence out separately.
+
+    The XMP comes last because it declares PDF/UA-1 only when the
+    marking left nothing unmarked (see mark_untagged_as_artifacts).
     """
     writer = PdfWriter()
     crop_pages(reader, writer)
     apply_metadata(writer, reader, meta_path)
     lang = apply_language(writer, meta_path)
     tagged = is_tagged(writer)
-    apply_xmp(writer, lang, pdfua=tagged)
+    unmarked = 0
     if tagged:
         describe_links(writer)
-        mark_untagged_as_artifacts(writer)
+        unmarked = _mark_document(writer)[1]
+    apply_xmp(writer, lang, pdfua=tagged and not unmarked)
     return writer
 
 
@@ -758,10 +1115,8 @@ def main() -> int:
     parser.add_argument(
         '--quiet', action='store_true',
         help="Suppress the success-summary lines (Cropped, Stamped metadata). "
-             "Errors and warnings still print. Used by resume.js's dual-PDF "
-             "flow to avoid emitting identical summary lines twice — the "
-             "first crop invocation runs normally, the second runs with "
-             "--quiet so only the per-variant 'Wrote PDF' lines vary.",
+             "Errors and warnings still print. For a caller cropping to a "
+             "throwaway file (the tests), where the summary is only noise.",
     )
     args = parser.parse_args()
 

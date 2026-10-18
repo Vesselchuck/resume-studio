@@ -36,8 +36,12 @@ The template has no details block, so TestDetailLabels builds a copy
 with one and checks that its labels read whole.
 
 pdfplumber and pdftotext, also checked when the fix was made, are not
-project dependencies; they are used here when installed and skipped
-otherwise.
+project dependencies; they are used here when installed. A missing one
+used to drop out without a word, so a run that never read the PDFs
+with pdftotext looked the same as one that did. TestOptionalExtractors
+now skips once for each one that is missing, and says which. The
+pdftotext that matters most is Xpdf's, in the Windows CI job, which
+fails before the tests if it has none.
 """
 
 import html
@@ -51,7 +55,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
-from _project import Project, real_dist_fingerprint  # noqa: E402
+from _project import Project, build_error, real_dist_fingerprint  # noqa: E402
 
 PROJECT = None
 _REAL_DIST = None
@@ -67,7 +71,7 @@ def setUpModule():
     if problem:
         PROJECT.remove()
         PROJECT = None
-        raise unittest.SkipTest(f"could not build a copy of the project to test against ({problem})")
+        raise build_error(problem)
 
 
 def tearDownModule():
@@ -141,6 +145,27 @@ def _version(name):
 
 EXTRACTORS = {"pypdf": _pypdf, "pdfium": _pdfium,
               "pdfplumber": _pdfplumber, "pdftotext": _pdftotext}
+
+
+class TestOptionalExtractors(unittest.TestCase):
+    """The optional extractors this run reads the PDFs with.
+
+    The other tests use whichever extractors are installed. These say
+    which ones were not: a skip here means every check in this file ran
+    without that extractor.
+    """
+
+    def test_pdfplumber_is_installed(self):
+        try:
+            import pdfplumber  # noqa: F401
+        except ImportError:
+            self.skipTest("pdfplumber is not installed, so the text layer "
+                          "is not read with it (optional)")
+
+    def test_pdftotext_is_on_path(self):
+        if not shutil.which("pdftotext"):
+            self.skipTest("pdftotext is not on PATH, so the text layer "
+                          "is not read with it (optional)")
 
 
 class TestTextLayer(unittest.TestCase):
@@ -218,7 +243,7 @@ class TestDetailLabels(unittest.TestCase):
         problem = cls.project.build()
         if problem:
             cls.project.remove()
-            raise unittest.SkipTest(f"could not build the copy ({problem})")
+            raise build_error(problem)
 
     @classmethod
     def tearDownClass(cls):
@@ -273,7 +298,7 @@ class TestLongWords(unittest.TestCase):
         problem = cls.project.build()
         if problem:
             cls.project.remove()
-            raise unittest.SkipTest(f"could not build the copy ({problem})")
+            raise build_error(problem)
 
     @classmethod
     def tearDownClass(cls):

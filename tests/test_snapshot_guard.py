@@ -19,7 +19,9 @@ What is pinned:
     manifest reports a different data source than the one it asked for.
   • The data source is the one the BUILD recorded beside its PDF
     (dist/outputs.json), not dist/pdf_meta.json, which a preview
-    rewrites; a PDF whose bytes changed since is refused.
+    rewrites; a PDF whose bytes changed since is refused, and the bytes
+    checked against the record are the ones written, so a build that
+    lands in between cannot put its PDF in a fixture.
   • Exit 1 means a visible difference and nothing else.
 
 Every path the tool writes to is redirected into a temp dir; the real
@@ -204,6 +206,42 @@ class TestTheRecordNotThePreview(SandboxedSnapshot):
         self.assertIn("not the PDF the last build recorded", err)
         self.assertEqual(self.fixture_files(), [])
 
+    def test_a_build_landing_mid_update_cannot_reach_the_fixture(self):
+        # A terminal build beside the Studio replaces the PDF and then
+        # the record after this tool has checked one against the other.
+        # The tool used to read the record three times and copy the PDF
+        # by name after hashing it, so the other build's PDF, your own
+        # résumé, say, went into a fixture.
+        self.write_build("default", content=b"%PDF-template")
+        checked = snapshot_pdf.verify_built_pdf
+
+        def then_another_build(*args):
+            ok = checked(*args)
+            self.write_build("mine", content=b"%PDF-yours")
+            return ok
+
+        with mock.patch.object(snapshot_pdf, "verify_built_pdf",
+                               side_effect=then_another_build):
+            code, _ = self.run_main("--update")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.fixture_files(), ["expected_resume.pdf"])
+        self.assertEqual((self.fixtures / "expected_resume.pdf").read_bytes(),
+                         b"%PDF-template")
+
+    def test_a_fixture_that_cannot_be_replaced_is_left_whole(self):
+        # A viewer holding the fixture open on Windows makes the final
+        # move fail: the old fixture stays, and no temporary file is left.
+        self.write_build("default", content=b"%PDF-new")
+        (self.fixtures / "expected_resume.pdf").write_bytes(b"%PDF-old")
+        with mock.patch.object(snapshot_pdf.os, "replace",
+                               side_effect=PermissionError("in use")):
+            code, err = self.run_main("--update")
+        self.assertEqual(code, 2)
+        self.assertIn("Permission denied", err)
+        self.assertEqual(self.fixture_files(), ["expected_resume.pdf"])
+        self.assertEqual((self.fixtures / "expected_resume.pdf").read_bytes(),
+                         b"%PDF-old")
+
     def test_no_record_means_nothing_to_compare_or_copy(self):
         self.write_build("default")
         self.record.unlink()
@@ -227,6 +265,20 @@ class TestExitCodes(SandboxedSnapshot):
         code, err = self.run_main()
         self.assertEqual(code, 2)
         self.assertIn("does not recognize", err)
+
+    def test_a_fixture_that_cannot_be_written_is_not_a_difference(self):
+        # A viewer holding the fixture open made --update, and the
+        # bootstrap resume.js runs, exit 1: resume.js then reported
+        # "Snapshot differs" and advised --update, which fails the same way.
+        self.write_build("default")
+        with mock.patch.object(snapshot_pdf.os, "replace",
+                               side_effect=PermissionError("in use")):
+            for args in (("--update",), ("--auto-bootstrap",)):
+                with self.subTest(args=args):
+                    code, err = self.run_main(*args)
+                    self.assertEqual(code, 2)
+                    self.assertIn("Permission denied", err)
+        self.assertEqual(self.fixture_files(), [])
 
     def test_a_crash_is_not_a_difference(self):
         self.write_build("default")
@@ -313,6 +365,25 @@ class TestUpdateAll(SandboxedSnapshot):
                         side_effect=self.fake_build(lambda s: "explicit")):
             self.assertEqual(self.update_all(), 1)
         self.assertEqual(self.fixture_files(), [])
+
+    def test_a_build_landing_mid_copy_cannot_reach_the_fixture(self):
+        # As in TestTheRecordNotThePreview: another build lands between
+        # the check and the write. The bytes checked are the bytes written.
+        checked = snapshot_pdf.verify_built_pdf
+
+        def then_another_build(*args):
+            ok = checked(*args)
+            self.write_build("mine", content=b"%PDF-yours")
+            return ok
+
+        with mock.patch("subprocess.run",
+                        side_effect=self.fake_build(lambda s: s)),                 mock.patch.object(snapshot_pdf, "verify_built_pdf",
+                                  side_effect=then_another_build):
+            self.assertEqual(self.update_all(), 0)
+        self.assertEqual(self.fixture_files(), ["expected_resume.pdf"])
+        self.assertEqual(
+            (self.fixtures / "expected_resume.pdf").read_bytes(),
+            b"default")
 
     def test_both_passes_copy_to_their_own_fixtures(self):
         (self.tmp / "data" / "resume.yml").write_text("x: 1\n", encoding="utf-8")

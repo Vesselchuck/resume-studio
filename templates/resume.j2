@@ -5,24 +5,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=816, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>{{ name.first }} {{ name.last }} — Resume</title>
-  <meta name="author" content="{{ name.first }} {{ name.last }}">
+  <title>{{ [name.first, name.last] | select | map('trim') | select | join(' ') }} — Resume</title>
+  <meta name="author" content="{{ [name.first, name.last] | select | map('trim') | select | join(' ') }}">
   <meta name="description" content="{{ meta.description }}">
 
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <meta name="theme-color" content="{{ accent }}">
 
   <meta property="og:type" content="profile">
-  <meta property="og:title" content="{{ name.first }} {{ name.last }} — Resume">
+  <meta property="og:title" content="{{ [name.first, name.last] | select | map('trim') | select | join(' ') }} — Resume">
   <meta property="og:description" content="{{ meta.description }}">
   <meta property="profile:first_name" content="{{ name.first }}">
   <meta property="profile:last_name" content="{{ name.last }}">
 
   <!-- Fonts: vendored Manrope (body) and Newsreader (display) loaded
        from fonts/ via @font-face rules in styles.css. Both are
-       variable WOFF2 files covering the full weight range used in the
-       document. License terms (SIL OFL 1.1) live alongside the woff2
-       binaries at fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
+       static WOFF2 cuts, one file per weight (and, for Newsreader,
+       per optical size) the document draws; the variable originals
+       they were cut from are in fonts/variable/. License terms (SIL
+       OFL 1.1) live alongside the woff2 binaries at
+       fonts/Manrope-OFL.txt and Newsreader-OFL.txt. -->
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -33,9 +35,9 @@
        changes will be overwritten on the next `node resume.js`.
 
        Page placement (which content goes on which page) is computed
-       automatically by the layout solver in resume.js based on
+       automatically by the layout solver (build/solve_layout.js) from
        measured content heights. To change content, edit the YAML.
-       To change page break behavior, edit the solver in resume.js
+       To change page break behavior, edit build/solve_layout.js
        or the meta.maxPages cap in the YAML.
        ══════════════════════════════════════════════════════════════════ -->
   {#- READING ORDER. A screen reader follows the PDF's tags, and Chromium

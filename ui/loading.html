@@ -9,12 +9,20 @@
   created once the server was ready, so launching the app showed nothing
   at all for that long.
 
-  If the server cannot start, the shell calls showStartupError(message)
-  and the reason stays on screen, where the window's owner can read it.
+  If the server cannot start, the shell calls showStartupError(message,
+  heading) and the reason stays on screen, where the window's owner can
+  read it. If it fails or stops after the window has gone to it, the
+  shell brings the window back here and does the same, with a heading
+  that says which: the server stopping once the Studio was open (a
+  crash, /api/shutdown) is not a start that failed. The shell keeps both
+  and calls again on every load of this page, so a reload shows them too.
 
   Served by Tauri from the bundle (tauri.conf.json, build.frontendDist),
   never by the server: nothing here may depend on it. Self-contained on
-  purpose — no scripts, fonts or styles from anywhere else.
+  purpose — no scripts, fonts or styles from anywhere else. It makes no
+  requests of any kind, Tauri's IPC included: the shell reaches it by
+  evaluating script in it, which is why tauri.conf.json's CSP allows no
+  connections at all.
 -->
 <html lang="en">
 <head>
@@ -92,12 +100,14 @@ body.failed .error{display:flex}
   <p>Starting the preview engine…</p>
 </div>
 <div class="box error" role="alert">
-  <h1>Resume Studio could not start</h1>
+  <h1 id="heading">Resume Studio could not start</h1>
   <pre id="message"></pre>
 </div>
 <script>
-  // Called by the desktop shell (main.rs) with the reason, as plain text.
-  window.showStartupError = function (message) {
+  // Called by the desktop shell (main.rs) with the reason and the heading
+  // over it, as plain text. Without a heading, the one above stays.
+  window.showStartupError = function (message, heading) {
+    if (heading) document.getElementById('heading').textContent = String(heading);
     document.getElementById('message').textContent = String(message);
     document.body.classList.add('failed');
   };

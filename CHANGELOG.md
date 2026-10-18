@@ -66,6 +66,448 @@ minor one before 1.0.0).
   it. The metadata check in `test_anonymized.py` reads images through
   Pillow, which skips chunk types it does not know, so it never saw the
   manifests. This one needs none of your data files and runs on GitHub.
+  It reads every PNG and icon in the git history too, so a manifest
+  stripped from the files but still in an older commit is found
+  before that commit is pushed.
+- **Security.** The Studio's local server refuses every request that
+  does not carry a token made fresh at each start. Before, any program
+  on the computer, including one run by another Windows account, could
+  read your data files, save files into `data/`, run builds and change
+  settings while the Studio was open. The desktop app passes the token
+  on by itself, and the address it echoes to its terminal leaves the
+  token out; `npm run ui` prints the Studio's address with the token
+  and opens it, and your browser keeps it in a cookie for that run.
+  The token keeps another Windows account out only if that account
+  cannot open the project folder either. See SECURITY.md for what it
+  does and does not protect against, and how to check the folder.
+- **Changed.** A bookmarked or typed address such as
+  `http://127.0.0.1:PORT/` no longer opens the Studio: it shows a page
+  saying where to open it from. Open the link `npm run ui` or
+  `npm run ui:serve` prints at each start instead. A link from an
+  earlier start opens the Studio, not that page, in a browser that
+  already holds the current start's cookie.
+- **Security.** On a Windows volume that keeps 8.3 short names, a name
+  such as `SECRET~1.YML` let the Studio read, pick or adopt a file in
+  `data/` that is not YAML (`secret.ymlx`). The file a name finally
+  resolves to must now be a `.yml` or `.yaml` file.
+- **Security.** **Show in folder** could show any existing path inside
+  the project. It now shows only `dist/` or a file in it, after
+  following links. `explorer.exe` is run by its full path, so a
+  program of that name in the project folder cannot run instead, and a
+  path with a comma, which explorer splits at even inside quotes, is
+  refused. `npm run ui` opens the page through `explorer.exe` by its
+  full path too.
+- **Security.** The Studio's page is sent with
+  `Cross-Origin-Opener-Policy: same-origin`, so a site that opens it
+  in a new window is cut off from it instead of keeping a handle it
+  can navigate or message. The desktop window's start-up page now
+  allows no connections at all; it never made any.
+- **Security.** An `href` that starts with an invisible space, such as
+  a no-break space pasted from a web page, passed the link check, and
+  Chromium wrote it into the PDF as a link to a file in `dist/` on
+  your computer, carrying the project's path. The build now removes
+  the invisible characters around an address (spaces, zero-width
+  characters, U+0000) and writes the link without them, naming in a
+  warning any that a browser would not drop by itself. A `mailto:` or
+  `tel:` link with nothing visible after it prints as text, with a
+  warning.
+- **Security.** An auto-detected Python is run by the absolute path it
+  reports for itself, and the candidates are tried from
+  `%SystemRoot%`: on Windows a bare name is looked up in the current
+  folder first, so a `python.exe` in the project folder could run
+  instead. A path that is not plain ASCII (`C:\Users\José\…`) is read
+  as it is, and a Python that cannot say where it is still runs by its
+  name. The build log shows the interpreter's name and version
+  (`python 3.14.7`), not that path, which for a per-account install
+  names your account. `PYTHON` is still run as written, and shown with
+  your home folder as `~`. `taskkill`, which stops a Build's processes
+  on Windows, is run from System32 for the same reason.
+- **Security.** In a browser running `npm run ui`, a link from a page
+  served by any other program on 127.0.0.1 opened the whole Studio,
+  because to a browser every port on a host is the same site. Such a
+  page load now gets only the page saying where to open the Studio
+  from, whatever cookie it brings.
+- **Fixed.** When the Python worker failed to start, the Chromium the
+  engine had already launched was left running. The engine now closes
+  it before it reports the failure.
+- **Fixed.** A Build or a preview still waiting in the engine's queue
+  when the Studio shut down ran anyway: the Build ran
+  `node resume.js`, and a preview with changed styles started the Sass
+  compiler again, which kept Node from exiting. Queued work now fails,
+  saying the engine has been shut down.
+- **Fixed.** The Studio's log showed only what the server printed to
+  stdout, so it had the successes and none of the failures: a Chromium
+  that would not launch, a page that timed out, a failed build's
+  headline. Errors and warnings now appear there too, in the order
+  they were printed.
+- **Fixed.** Warnings from the Python side of a preview, such as a
+  misspelled key being ignored, were dropped. They now appear in the
+  Studio's log, as they do in a terminal build.
+- **Fixed.** The cover letter's preview did not run the check
+  `node letter.js` refuses a letter on, so a letter that ran off its
+  page previewed as fine. It now shows "Layout check failed".
+- **Fixed.** A preview whose layout check could not run (its page
+  closed, or the check itself failed) was shown as a layout violation,
+  and remembered as one. It now fails as a render.
+- **Fixed.** A render that finished while the window was hidden, after
+  starting the five-minute delay again, could be followed at once by
+  Chromium closing. The close now waits for the new delay.
+- **Fixed.** A speculative page that stopped answering closed the
+  whole Chromium, under the render still using it, which then failed
+  with Playwright's "target closed". Only that page is closed now, and
+  the render goes on without the guess. One that never opened held the
+  preview forever; it now fails only the guess too.
+- **Fixed.** A print that failed part-way left a partial PDF in the
+  temporary directory.
+- **Fixed.** A `--port` or `STUDIO_PORT` that was not a port reached
+  the listener only after Python and Chromium had been launched, and
+  the failed start left both running. The port is checked first now: a
+  whole number from 0 to 65535, or the start stops with a message.
+- **Fixed.** A port already in use stopped the server with an uncaught
+  exception and a stack trace. It now says the port is in use and how
+  to choose another, and stops what it had started.
+- **Fixed.** An engine that failed to start after the server had
+  reported its address left the process running, held up by the
+  Chromium it had launched, and the desktop window on a page that
+  would never answer. The server now reports the failure to the window
+  and exits, and the window shows the reason with the last of what the
+  server printed.
+- **Fixed.** Ctrl-C, or closing the desktop app, while the server was
+  still starting left Python and Chromium running. The server can now
+  be stopped from the moment it starts launching them.
+- **Fixed.** The desktop app's report that its window was minimized or
+  restored was answered only once the engine had started, which on a
+  slow first start took longer than the app waits. It is answered at
+  once.
+- **Fixed.** A cover letter saved with a byte-order mark (Notepad's
+  "UTF-8 with BOM") was not recognized as one when dropped on the
+  window or listed in **Data files…**.
+- **Fixed.** A malformed request to the Studio's server (a body that
+  is not a JSON object, a field of the wrong type, a file name over
+  255 characters) was answered 500, in one case with the data folder's
+  absolute path in the message. It is answered 400 now, saying what
+  was wrong. So is every other request refused for what it asks (a
+  name that is not a data file, a profile picked as a document), and
+  a file that is not there is a 404. An unknown `doc` is refused; it
+  used to build the résumé.
+- **Fixed.** **Data files…** badged any file ending in `_default.yml`
+  or `_default.yaml` as committed, although `.gitignore` commits only
+  the three shipped templates. Only those three are badged now.
+- **Fixed.** A file with both the résumé's and the letter's top-level
+  keys was described as "not a shape either builder accepts". It
+  passes both, and is now described as a file that could be either
+  document.
+- **Fixed.** When the server stopped, or its engine failed, after the
+  desktop window had gone to it, the window showed WebView2's "can't
+  reach this page". It now goes back to the start-up page and says
+  why: "The Studio stopped" when it stopped once open, "could not
+  start" only when it did not start. The window may no longer go to
+  the stopped server's address, and stops checking whether it is
+  minimized.
+- **Fixed.** When the server could not start, the desktop app could
+  only say to run `npm run ui` to find out why: in a release build,
+  what the server printed went nowhere. The window now shows the last
+  of it. A start the server refuses before it is ready, a port in use
+  say, is shown by its own reason. A server whose address or ready
+  message could not be read was left running; it is stopped now.
+- **Fixed.** In the development app (`npm run studio`) the window
+  refused its own start-up page, so it stayed blank until the server
+  was ready and a start-up error was never shown. The same went for
+  `tauri dev --release`, which also opened the templates instead of
+  your data files and built into a copy of the project under
+  `src-tauri/target/`.
+- **Fixed.** Reloading the start-up page after an error brought the
+  spinner back for good. The error now stays on screen through a
+  reload.
+- **Fixed.** A `STUDIO_NODE` set with quotes, as cmd.exe keeps them in
+  `set STUDIO_NODE="C:\Program Files\nodejs\node.exe"`, could not be
+  started. The quotes are removed now, and an error starting it names
+  `STUDIO_NODE` and its value.
+- **Fixed.** A line of server output that was not UTF-8, from a tool
+  printing in the console's code page, stopped the desktop app's
+  start-up.
+- **Fixed.** A quick minimize and restore could leave the server's
+  last word on the window as "hidden" while it was on screen, so
+  Chromium was closed five minutes later. The two reports are now sent
+  in order.
+- **Fixed.** After a save, switching to the other document showed its
+  pages from before the save, marked "Live". It renders again now.
+- **Fixed.** Pressing Build while a preview was rendering did nothing,
+  and said nothing. The build now starts as soon as the preview
+  finishes, and the button no longer grays out for every save's
+  render. Builds of both documents pressed during one preview all run,
+  once each, in the order pressed, and a queued build says so on its
+  button.
+- **Fixed.** A build that succeeded was reported as failed when
+  reading the Studio's status after it failed. The same held for
+  choosing a data file and for keeping a dropped one.
+- **Fixed.** With a long console, the notice that the snapshot differs
+  could be lost: the console is trimmed as lines arrive, and that
+  moved the place where the build's own lines started.
+- **Fixed.** The cover letter's Data file menu showed nothing selected
+  once the résumé's data source had been set.
+- **Fixed.** When a save had rebuilt the control that opened a dialog,
+  closing the dialog left focus nowhere. It returns to that control,
+  or failing that to its pane. Dismiss on a build's error card, and
+  closing Diagnostics from inside it, no longer leave focus nowhere
+  either.
+- **Fixed.** **Data files…** said nothing when `data/` could not be
+  listed, opened a second dialog on a double click, and loaded a file
+  whose kind it could not tell under Resume. It now says the listing
+  failed, opens one dialog, and asks which document such a file is, as
+  a drop does.
+- **Fixed.** Dragging text, out of the console say, showed the "Drop a
+  .yml file" prompt, and dragging across the window closed the "Which
+  document is this?" question.
+- **Fixed.** Another window's render finishing could end this window's
+  build in the display, and a dropped event stream could leave another
+  window's render shown as running.
+- **Fixed.** F5 and Ctrl+R did nothing while a dialog was open. They
+  re-render behind it now, as everywhere else.
+- **Fixed.** Screen readers heard a copied location twice, and the
+  zoom on every step of a window resize under a fit. A location is
+  read once, and the zoom only when you change it.
+- **Fixed.** Zooming in fast steps could leave an older zoom saved:
+  the settings requests overlapped and landed out of order. They are
+  sent one at a time now, with the latest values.
+- **Fixed.** A gap entry with `bullets:` left empty failed the build
+  with a TypeError. It builds like one with no `bullets:`.
+- **Fixed.** A list or a mapping as a sidebar block's or a section's
+  `type:` raised a TypeError instead of the error that names the
+  allowed types.
+- **Fixed.** `role:`, `contact.address:` and an `href:` left empty
+  were refused as not being text. Empty now means not set, as it
+  already did elsewhere.
+- **Fixed.** A name with both parts blank built a PDF with an empty
+  heading, titled " — Resume", without a word. It still builds, now
+  with a warning, and the title is just "Resume". With one part blank,
+  the PDF's title and author and the letter's signature no longer
+  start with a space. A `role`, a `contact.address` or a contact line
+  of only spaces printed an empty line in the header; it is left out
+  now, with a warning. A sidebar heading of only spaces builds as
+  before, with a warning. None of these is refused: each built in
+  1.0.0.
+- **Fixed.** `meta.lang` took any text, and a control character in it
+  made the PDF's XMP metadata ill-formed. Text that is not a language
+  tag, letters and digits in parts separated by `-` or `_`, such as a
+  locale name (`en_US.UTF-8`, `C`), now marks the documents `en-US`,
+  with a warning; left blank, it is `en-US` too. A `_` is written as
+  `-`, so `en_GB` reaches the PDF as `en-GB`. The crop step also drops
+  characters XML cannot hold, lone surrogates included, from the
+  language before writing it.
+- **Fixed.** A YAML syntax error said it was in `"<unicode string>"`,
+  and counted lines as YAML does, which puts the error lower than your
+  editor does after a U+2028 pasted from a word processor. It now
+  names the file and gives the line and column your editor shows, as a
+  duplicate key's message does. A mapping with both `1:` and `true:`,
+  which YAML reads as one key, is reported with both spellings named
+  rather than as a key that repeats itself. A control character YAML
+  cannot hold is placed at a line and column too, rather than at an
+  offset into the file.
+- **Fixed.** A final build against a layout solved for other data, a
+  sidebar block or job the data no longer has or a damaged
+  `dist/placement.json`, failed in three different ways, one of them
+  reported as an internal error. It now fails before anything is
+  rendered, saying the layout was solved for other data and should be
+  solved again.
+- **Fixed.** A request whose answer carried an unpaired surrogate (an
+  error echoing it back, say) could stop the Python worker, and five
+  of them kept it down. A per-request environment value the system
+  refused left the values set before it in place for every later
+  build. An answer holding NaN or Infinity, which Node cannot read,
+  never reached its request; it is an error for that request now.
+- **Fixed.** The editor schemas in `schemas/` flagged empty fields the
+  build accepts, a document without `meta.description` (the profile
+  can supply it), and profile keys the build accepts. They now flag
+  the blank text the build refuses, counting as blank what the build
+  counts, which is not what an editor's idea of a space is, and a main
+  column without its summary, experience or education section. What
+  the build only warns about, such as a blank `role`, a name with both
+  parts blank or a `meta.lang` that is not a language tag, they no
+  longer flag.
+- **Fixed.** Text or rules drawn with transparency are tagged by
+  Chromium inside a group of their own, and marking untagged drawing
+  as decoration wrapped the whole group as an artifact, which hid that
+  tagged content from screen readers and broke PDF/UA. On the
+  templates that was the section rules. Such a group is now marked
+  inside; the pages draw the same pixels. So is the group of a masked
+  element (`-webkit-mask-image`), which Chromium draws twice. A PDF in
+  which some drawing had to be left unmarked no longer declares
+  PDF/UA-1, and the build warns about it.
+- **Fixed.** A link inside the document had no description. It now
+  says which page it goes to. A `file:` link is described too, and the
+  build warns that it shows a path on your computer.
+- **Fixed.** `snapshot_pdf.py --update` and `--update-all` hashed the
+  PDF and then copied it by name, so a build finishing in between, a
+  terminal build beside the Studio say, could put its PDF, your own
+  résumé perhaps, into the committed fixture. They now write exactly
+  the bytes they checked, through a temporary file, so a fixture is
+  never half written either.
+- **Fixed.** The Windows power-throttling opt-out, which must never
+  raise, raised when it was given no process id, text or infinity,
+  and took `true` or `1.9` for process 1. Anything but a whole number
+  above 0 is now reported as not a process id, and nothing is done.
+- **Fixed.** The preview's PNG writer turned an image with no pixels
+  into a PNG nothing can read. It refuses one now, with an error that
+  says why.
+- **Fixed.** The solver measured each section separator by its painted
+  box, which the rule's paint-only transform shrinks, so it counted
+  about 0.49 px less per separator than the separator takes. A column
+  with several could fit by the solver's count and still fail the
+  layout check. Separators are measured by the space they take now,
+  and such a column moves on to the next page. Placements on the
+  shipped template are unchanged.
+- **Fixed.** The experience section's heading could print nowhere:
+  when its fit and its first job's disagreed by a rounding error, the
+  heading was charged to one page and the job sent to the next as a
+  continuation. The heading and its first job are now placed together.
+- **Fixed.** A sidebar list continued on a new page that starts with a
+  `- group:` label was charged the label's 6 px top margin, which the
+  label does not have there.
+- **Fixed.** A PDF of yours in `dist/` named like one of the retired
+  grayscale copies (`Acme_Resume_Grayscale.pdf`) was deleted by the
+  next build. Such a name is now removed only beside a color PDF of
+  the same name that a build recorded or has just written. On a
+  case-sensitive folder, a color PDF whose name differs only in case
+  does not count as that twin. A grayscale copy that could not be
+  removed, held open by a viewer say, is removed by the next build.
+- **Fixed.** A `dist/.lock` that could be neither created nor read, a
+  folder of that name or a `dist/` you may not write to, kept a build
+  retrying for good. It now stops after a second, with a plain error
+  that says so, not an unexpected one with a stack trace.
+- **Fixed.** `dist/.lock.stale-*` files, left when a stale lock was
+  broken while another program still had it open, are removed the next
+  time a stale lock is broken.
+- **Fixed.** A very long name in a script with no ASCII form could
+  pass the file-name length check and still fail to build on Linux and
+  macOS, because the PDF is first written under a temporary name 16
+  bytes longer. The PDF's name is now kept 16 bytes shorter; ordinary
+  names are unchanged.
+- **Fixed.** A `dist/pdf_meta.json` that is not UTF-8 gave Node a PDF
+  name no build wrote, and one that is JSON but not an object made
+  Python raise. Both now fall back as an unreadable one does.
+- **Fixed.** Python auto-detection took any program that answered
+  `--version` with exit code 0. It now needs one that reports a Python
+  version.
+- **Fixed.** A failed Python step printed a redundant "Command failed:
+  python -B …" line under its own error whenever it had printed
+  nothing to stdout. A step that crashed, which prints nothing itself,
+  says it exited with that status (`3221225477 (0xC0000005)`, say).
+- **Fixed.** The hint after a snapshot difference said
+  `python build/snapshot_pdf.py --update` whatever interpreter the
+  build ran. It names that interpreter now, the way auto-detection
+  found it or `PYTHON` as written, quoted when it has a space.
+- **Fixed.** `SKIP_SNAPSHOT` with a stray space (cmd.exe keeps the one
+  before `&&`) was ignored in silence. It is trimmed now, and any
+  value other than `1` is reported as unknown.
+- **Fixed.** With `NODE_COMPILE_CACHE` set and the cache turned off by
+  `NODE_DISABLE_COMPILE_CACHE=1`, the Studio reported a compile cache
+  in use. On Node older than 22.1, which ignores `NODE_COMPILE_CACHE`,
+  the cache is reported off too.
+- **Fixed.** A Chromium that never opened a page held that preview,
+  and every one queued behind it, forever. Opening a page now has a
+  deadline, like every other step of a render.
+- **Fixed.** Dropping a file saved with a byte-order mark, when it was
+  already in `data/`, reported a conflict with itself.
+- **Fixed.** `POST /api/shutdown` sent while the Studio was still
+  starting waited for Python and Chromium to start first.
+- **Fixed.** The Studio's log showed the folder of Node's
+  compiled-code cache, which is under your home folder and so names
+  your account. It is printed in the terminal only.
+- **Fixed.** The desktop app no longer crashes when the terminal or
+  pipe it prints to goes away (`npm run studio | Select-String …`,
+  and the reader quits).
+- **Fixed.** After the Studio's server was started again, or stopped,
+  a page still open from the earlier run reported every render and
+  build as failed, opened Diagnostics on it, and failed the same way
+  at every save. It now says once that this Studio run has ended and
+  tries nothing more; F5 and Ctrl+R reload the page.
+- **Fixed.** A file dragged in while a dialog was open drew its prompt
+  under the dialog's backdrop. A build started in another window did
+  not show as running in this one. Focus on the Diagnostics summary,
+  a console count or a run's header could jump when the page redrew,
+  and the caret in the console's Find box jumped to the end. In a long
+  console, a run whose first line had scrolled away was headed
+  "Studio".
+- **Fixed.** Drawing inside marked content that is neither tagged nor
+  decoration, such as optional content or a bare span, was left
+  unmarked in the tagged PDF. It is marked as decoration now.
+- **Fixed.** A title, subject or language holding a lone surrogate
+  stopped the crop step. Such characters are dropped, as other
+  characters XML cannot hold are.
+- **Fixed.** A snapshot fixture that could not be written, held open
+  by a PDF viewer say, was reported as "Snapshot differs", with advice
+  to run `--update`, which fails the same way. It is reported as not
+  checked now.
+- **Changed.** CI runs the tests with `STRICT_TESTS=1` in every job. A
+  Python skip passes only when `build/run_tests.js` lists it
+  (`EXPECTED_SKIPS`), and only where it is right: the other platform's
+  test, on the other platform; the checks that need your private data
+  files, on GitHub; the optional text extractors. Any other skip fails
+  the job; a Chromium that could not start used to leave a dozen
+  suites skipped and the run green. A missing Tesseract is not
+  accepted: where your data files are, it means the screenshots were
+  not read.
+- **Changed.** The five Python suites that build a copy of the project
+  fail when that build fails. They skip only when there is no `node`,
+  or Playwright's Chromium cannot start; a broken build used to leave
+  all five skipped.
+- **Changed.** The Windows CI job is pinned to its runner image,
+  `windows-2025`, as the Linux job already was, and it fails when
+  `pdftotext` is missing instead of letting that check skip.
+- **Changed.** `tests/test_anonymized.py` also looks for your details
+  in the names of committable files and folders, and in the git
+  history: every commit's author and committer, and every commit and
+  tag message.
+- **Changed.** The attribution check catches more co-author trailer
+  forms, including ones typed with a Unicode hyphen, and every chat
+  link. It also catches a trailer that names an AI tool and more link
+  and phrasing forms, and no longer refuses ordinary prose that only
+  begins with a tool's name.
+- **Changed.** The test runner counts a Python skip reported beside
+  other results, such as an expected failure, which it used to read as
+  a plain pass. A single test name that matches no file is a usage
+  error, exit code 2, instead of an import failure.
+- **Changed.** `tests/test_cold_start.js` reports the part it skips
+  without Chromium as a skip; it used to show the whole suite as
+  passed. `tests/test_text_extraction.py` reports a missing pdfplumber
+  or pdftotext as a skip that names it; a missing one used to drop out
+  without a word.
+- **Changed.** The warm-versus-cold pixel comparison counts a pixel as
+  different by its largest channel, as the snapshot test does. It used
+  the difference's brightness, so a page off in blue alone passed.
+- **Changed.** The Linux CI jobs install `pdftotext`, so the text-layer
+  check reads the PDFs with it there too instead of skipping.
+- **Changed.** `tests/test_tagged_groups.py` fails when Chromium is
+  there and the print still fails; it used to skip. The suites that
+  start the Studio's server no longer pass it your data-file and port
+  variables.
+- **Changed.** The temporary file `snapshot_pdf.py` writes a fixture
+  through (`tests/fixtures/.*.tmp`) is gitignored: one left behind by
+  a killed process can be a render of your résumé.
+  `tests/test_anonymized.py` still reads any that is left there.
+- **Changed.** `.gitignore` no longer lists the folder one local tool
+  saves its files into, and `tests/test_anonymized.py` no longer
+  treats it as private. If you keep such a folder in the project,
+  list it in `.git/info/exclude`.
+- **Added.** The layout check also confirms that everything the source
+  holds renders exactly once, every sidebar block and job with all its
+  items and bullets and each section heading, and that nothing runs
+  out of its column sideways, nor the page-1 header or the footer past
+  the page's side margins (a long contact row pushed the header off
+  the page). Such a build fails, naming the column, or `resume-header`
+  or `page-footer`. The other checks could not see missing content: a
+  lost section heading left every one of them clean. An education
+  section with `items: []` passes.
+- **Added.** The test runner checks that this checkout's `dist/` was
+  not written during the run, by content, and names each file that
+  changed and who held `dist/.lock`. It is a warning, or a failure
+  under `STRICT_TESTS`.
+- **Added.** A CI job on the minimum versions, Node 20.19 and Python
+  3.10, and the desktop shell's unit tests (`cargo test`) in the
+  Windows job.
+- **Added.** `package.json` declares the minimum Node version,
+  `engines: node >=20.19`.
 
 ---
 
@@ -1382,9 +1824,9 @@ interface changed.*
   the examples in the schemas, README and tests use invented places and
   values. The only personal detail left is the copyright holder's name
   in `LICENSE`, which the privacy test deliberately allows.
-- **Changed.** `.gitignore` also covers files an AI assistant saves into
-  the project folder (`Claude outputs/`), since previews rendered from
-  your data show your contact details. It also covers snapshot
+- **Changed.** `.gitignore` also covers the files a local tool saves
+  into the project folder, since previews rendered from your data
+  show your contact details. It also covers snapshot
   fixtures under their 0.5.x names (`*.local.pdf`).
 
 ### Tests

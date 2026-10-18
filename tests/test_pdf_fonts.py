@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
-from _project import Project, real_dist_fingerprint  # noqa: E402
+from _project import Project, build_error, real_dist_fingerprint  # noqa: E402
 
 PROJECT = None
 _REAL_DIST = None
@@ -47,7 +47,7 @@ def setUpModule():
     if problem:
         PROJECT.remove()
         PROJECT = None
-        raise unittest.SkipTest(f"could not build a copy of the project to test against ({problem})")
+        raise build_error(problem)
 
 
 def tearDownModule():

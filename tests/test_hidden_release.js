@@ -16,12 +16,15 @@
  *   • a render while it is closed still works, and relaunches it — and
  *     while the window stays hidden, Chromium is closed again after the
  *     delay (the Studio renders on every save, hidden or not);
- *   • a close never lands in the middle of a render;
+ *   • a close never lands in the middle of a render, nor right after
+ *     one that started the delay again (the close was queued behind
+ *     that render when the first delay ran out);
  *   • renders before and after a close give identical pixels;
  *   • dispose() with a close pending leaves nothing running;
- *   • the server's POST /api/visibility reaches the engine;
+ *   • the server's POST /api/visibility reaches the engine, with the
+ *     launch token as the shell sends it, and not without;
  *   • it counts each page for itself: one page in the background (a
- *     Studio tab another site opened, say) does not hide the others,
+ *     second browser window, say) does not hide the others,
  *     and a page coming forward does not undo the shell's "minimized".
  *
  * Runs in a throwaway copy of the project (tests/_project.js). Needs
@@ -36,6 +39,9 @@ const { tempProject, realDistFingerprint } = require('./_project');
 
 const SUITE = 'test_hidden_release';
 const READY_PREFIX = '\x1eSTUDIO_READY ';
+// Each server's launch token, by port, from its ready frame; every request
+// here sends it, as the desktop shell and the page do.
+const tokens = new Map();
 const DELAY = 200;
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
@@ -109,7 +115,36 @@ async function engineTests(createEngine, root) {
   assertEq(engine.status().browserOpen, false, 'dispose with a close pending leaves no browser');
 }
 
-function post(port, route, body) {
+/**
+ * The delay runs out while a render waits on the queue, so the close is
+ * queued behind it. That render finishes while still hidden and starts
+ * the delay again; the queued close must then wait for the new delay
+ * rather than close Chromium the moment the render is done.
+ */
+async function rearmedByRender(createEngine, root) {
+  const engine = await createEngine({ root, warm: true, hiddenReleaseMs: DELAY });
+  try {
+    await engine.renderPreview({ doc: 'letter', scale: 1 });
+    let open;
+    const gate = new Promise(res => { open = res; });
+    const held = engine.exclusive(() => gate);
+    const render = engine.renderPreview({ doc: 'letter', scale: 1, recompileStyles: true });
+    engine.setWindowHidden(true);
+    await sleep(DELAY * 3);   // the delay runs out: the close is queued behind the render
+    open();
+    await held;
+    await render;
+    await engine.exclusive(async () => {});   // the queued close has had its turn
+    assertTrue(engine.status().browserOpen,
+      'a render that restarted the delay keeps Chromium open past a close queued before it');
+    assertTrue(await waitFor(() => !engine.status().browserOpen),
+      '...and Chromium closes once the restarted delay runs out');
+  } finally {
+    await engine.dispose();
+  }
+}
+
+function post(port, route, body, token = tokens.get(port)) {
   const data = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = http.request({
@@ -117,6 +152,7 @@ function post(port, route, body) {
       headers: {
         'content-type': 'application/json', 'content-length': Buffer.byteLength(data),
         host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}`,
+        ...(token ? { 'x-studio-token': token } : {}),
       },
     }, (res) => {
       let buf = '';
@@ -135,7 +171,7 @@ function post(port, route, body) {
 function viewer(port) {
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/events',
-      headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      headers: { host: `127.0.0.1:${port}`, 'x-studio-token': tokens.get(port) } }, (res) => {
       let buf = '';
       res.setEncoding('utf-8');
       res.on('data', (chunk) => {
@@ -155,9 +191,13 @@ function viewer(port) {
  * endpoint answers and the engine behind it takes the report.
  */
 async function serverTest(project) {
+  const env = { ...process.env };
+  for (const k of ['RESUME_DATA_SOURCE', 'RESUME_DATA_FILE', 'LETTER_DATA_FILE', 'STUDIO_PORT']) {
+    delete env[k];
+  }
   const child = spawn(process.execPath,
-    [path.join(project.root, 'build', 'studio_server.js'), '--exit-with-parent'],
-    { cwd: project.root, stdio: ['pipe', 'pipe', 'inherit'] });
+    [path.join(project.root, 'build', 'studio_server.js'), '--port', '0', '--exit-with-parent'],
+    { cwd: project.root, env, stdio: ['pipe', 'pipe', 'inherit'] });
   try {
     const port = await new Promise((resolve, reject) => {
       let buf = '';
@@ -168,18 +208,23 @@ async function serverTest(project) {
         const line = buf.split('\n').find(l => l.startsWith(READY_PREFIX));
         if (line) {
           clearTimeout(timer);
-          resolve(JSON.parse(line.slice(READY_PREFIX.length)).port);
+          const frame = JSON.parse(line.slice(READY_PREFIX.length));
+          tokens.set(frame.port, frame.token);
+          resolve(frame.port);
         }
       });
       child.once('exit', () => reject(new Error('server exited before it was ready')));
     });
+    const refused = await post(port, '/api/visibility', { hidden: true }, null);
+    assertEq(refused.status, 403, 'POST /api/visibility without the launch token is refused');
     const r = await post(port, '/api/visibility', { hidden: true });
     assertEq(r.status, 200, 'POST /api/visibility answers 200');
     assertEq(r.data, { hidden: true }, 'and echoes what it was told');
     const back = await post(port, '/api/visibility', { hidden: false });
     assertEq(back.data, { hidden: false }, 'shown again');
 
-    // Two pages: the desktop window's and one another site opened.
+    // Two pages: the desktop window's and another (a second browser
+    // window, say).
     const own = await viewer(port);
     const foreign = await viewer(port);
     const say = (who, hidden) => post(port, '/api/visibility', who ? { hidden, client: who.client } : { hidden })
@@ -197,7 +242,8 @@ async function serverTest(project) {
     own.close();
     await sleep(200);
     const status = await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port, path: '/api/status', headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/status',
+        headers: { host: `127.0.0.1:${port}`, 'x-studio-token': tokens.get(port) } }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => resolve(JSON.parse(buf)));
@@ -211,7 +257,8 @@ async function serverTest(project) {
     const again = await viewer(port);
     await sleep(200);
     const status2 = await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port, path: '/api/status', headers: { host: `127.0.0.1:${port}` } }, (res) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/status',
+        headers: { host: `127.0.0.1:${port}`, 'x-studio-token': tokens.get(port) } }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => resolve(JSON.parse(buf)));
@@ -241,6 +288,7 @@ async function serverTest(project) {
   try {
     const { createEngine } = project.require('build/engine');
     await engineTests(createEngine, project.root);
+    await rearmedByRender(createEngine, project.root);
     await serverTest(project);
   } catch (err) {
     fail('hidden release run', { error: err.stack || err.message });

@@ -1,5 +1,5 @@
 """
-console.py — Shared console-output helper.
+_console.py — Shared console-output helper.
 
 The shared constants (status symbols, banner geometry, ANSI codes,
 indent widths) live in build/_constants.json. This module loads them
@@ -48,9 +48,11 @@ Indented detail
 Color suppression
 ──────────────────
   ANSI codes (used only for banner dimming) are emitted only when
-  stdout is a TTY (or when NO_COLOR is unset and FORCE_COLOR is
-  set). Emoji are emitted unconditionally — they're not ANSI, so
-  there's nothing to "suppress." If a terminal can't render emoji,
+  stdout is a TTY, unless NO_COLOR or FORCE_COLOR says otherwise:
+  FORCE_COLOR=0 turns them off even on a TTY, and FORCE_COLOR=1
+  turns them on when piped. _color_enabled has the exact rules, the
+  same as _console.js. Emoji are emitted unconditionally — they're
+  not ANSI, so there's nothing to "suppress." If a terminal can't render emoji,
   it shows a fallback glyph (typically a question mark in a box),
   which still readably distinguishes success/failure.
 

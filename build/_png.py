@@ -77,11 +77,17 @@ def encode(img) -> bytes:
 
     Any other mode is converted to RGB first — the rasterizer only ever
     hands this RGB.
+
+    Raises ValueError for an image with no pixels: PNG has no way to
+    write one (IHDR's width and height must be at least 1), and the
+    bytes written for it would not decode.
     """
     if img.mode not in _COLOR_TYPES:
         img = img.convert("RGB")
     color_type, bpp = _COLOR_TYPES[img.mode]
     width, height = img.size
+    if width < 1 or height < 1:
+        raise ValueError(f"cannot encode an empty image ({width}x{height}) as PNG")
     stride = width * bpp
 
     raw = img.tobytes()

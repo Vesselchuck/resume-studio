@@ -2,6 +2,9 @@
   "name": "resume-studio",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20.19"
+  },
   "description": "Single-source-of-truth resume and cover letter, built to pixel-exact US Letter PDFs.",
   "scripts": {
     "test": "node build/run_tests.js",

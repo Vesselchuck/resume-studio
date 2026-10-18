@@ -21,7 +21,7 @@
  *     sidebar: [
  *       { id, type, totalHeight,
  *         headingHeight, headingToItemsGap, itemGap,
- *         items: [{ height }] },
+ *         items: [{ height, isGroup, marginTop }] },
  *       ...
  *     ],
  *     mainColumn: [
@@ -131,11 +131,15 @@ const MIN_SIDEBAR_ITEMS_ON_ORIGIN = 3;
 const MIN_SIDEBAR_ITEMS_ON_RECEIVER = 1;
 
 // Cascade-prevention guard: if the same content unit is pushed to the
-// next page this many consecutive times without making progress, the
-// solver gives up with a clear error instead of looping. 2 is enough
-// to absorb legitimate "didn't fit, retry on fresh page" cases while
-// catching pathological inputs (e.g. a single bullet taller than a
-// whole page).
+// next page more than this many consecutive times without making
+// progress, the solver gives up with a clear error instead of looping.
+// Defensive only: it cannot fire today. A push always lands on a fresh,
+// empty page, and every push site already throws when the entry does
+// not fit on an empty page, so an entry is pushed at most once in a row
+// and the second attempt throws "taller than a page" first. Content too
+// tall for any page (a single bullet taller than a page) is caught by
+// that check, not by this one. It stays as a backstop against a future
+// push that lands on a page that is not empty.
 const MAX_CONSECUTIVE_PUSHES = 2;
 
 
@@ -161,7 +165,12 @@ function sidebarBlockHeight(block, offset, count, isContinuation) {
   const itemSlice = block.items.slice(offset, offset + count);
   const itemTotal = itemSlice.reduce((s, it) => s + it.height, 0);
   const itemGapTotal = (count - 1) * block.itemGap;
-  return heading + headingGap + itemTotal + itemGapTotal;
+  // A `- group:` label measured mid-list carries its top margin; as the
+  // first item of a continuation it is its list's first child, and
+  // _components.scss drops that margin there.
+  const first = itemSlice[0];
+  const leadMargin = (offset > 0 && first.isGroup) ? (first.marginTop || 0) : 0;
+  return heading + headingGap + (itemTotal - leadMargin) + itemGapTotal;
 }
 
 
@@ -213,11 +222,12 @@ function maxFitting(heightFn, container, offset, remaining, isContinuation, avai
 // extracted here:
 //
 //   • Push-tracker — detects non-progressing placement (same entry
-//     pushed forward MAX_CONSECUTIVE_PUSHES times in a row without
-//     fitting) so the solver can fail with a clear diagnostic instead
-//     of looping forever. Each solver uses entry-specific signatures
-//     (block_id@offset, job_id@bullets_offset, etc.), so the tracker
-//     is parameterized by signature string, not by entry shape.
+//     pushed forward more than MAX_CONSECUTIVE_PUSHES times in a row
+//     without fitting) so the solver can fail with a clear diagnostic
+//     instead of looping forever. A backstop that cannot fire today
+//     (see MAX_CONSECUTIVE_PUSHES). Each solver uses entry-specific
+//     signatures (block_id@offset, job_id@bullets_offset, etc.), so the
+//     tracker is parameterized by signature string, not by entry shape.
 //
 //   • Max-pages guard — both solvers throw a structurally-identical
 //     SolverError when they'd otherwise create more pages than the
@@ -523,21 +533,28 @@ function solveMainColumn(sections, geometry, maxPages) {
         throw new SolverError('experience heading not followed by any job');
       }
       const j = nextJobUnit.job;
-      const minJobHeight = j.isGap
-        ? j.headerHeight
-        : j.headerHeight + j.headerToBulletsGap + j.bullets[0].height;
+      // The first job's minimum (a gap entry's header; a job's header
+      // and first bullet), and the room it will get, are computed here
+      // exactly as the job unit computes them below: the same jobHeight
+      // call against the same `capacity - used - gap`, summed in the
+      // same order. Summed any other way the two can disagree by a
+      // rounding error — the heading fits, the job does not, and the
+      // job leaves for the next page without it.
+      const minJobHeight = jobHeight(j, 0, 1, false);
       const sepCost = (currentPage.entries.length > 0 ||
                        currentPage.activeJobs.length > 0)
         ? interSectionCost : 0;
-      const minTotal = sepCost + unit.height + unit.headingToJobsGap + minJobHeight;
+      const headingCost = sepCost + unit.height;
+      const roomForFirstJob = currentCapacity - (currentUsed + headingCost)
+        - unit.headingToJobsGap;
 
-      if (minTotal <= available) {
+      if (minJobHeight <= roomForFirstJob) {
         finalizeActiveSection();
         currentPage.activeSection = 'experience';
         currentPage.activeSectionContinuationOf = null;
         // Charge: separator + heading. The first job will charge
         // headingToJobsGap when it processes.
-        currentUsed += sepCost + unit.height;
+        currentUsed += headingCost;
         unitIndex++;
         pushTracker.reset();
         continue;
@@ -562,37 +579,32 @@ function solveMainColumn(sections, geometry, maxPages) {
     if (unit.kind === 'job') {
       const j = unit.job;
       const isContinuation = unit.bullets_offset > 0;
-      const inActiveExperience = currentPage.activeSection === 'experience'
-        || currentPage.activeSectionContinuationOf === 'experience';
 
-      // Starting an experience-continuation section on this page (no
-      // heading)? That's a section start, charge inter-section cost.
-      if (!inActiveExperience) {
-        const sepCost = (currentPage.entries.length > 0)
-          ? interSectionCost : 0;
-        // Ensure space for at least the minimum (gap-job header, or
-        // header + first bullet for regular jobs). If insufficient,
-        // push to next page.
-        const minHere = j.isGap
-          ? j.headerHeight
-          : (isContinuation
-              ? j.bullets[unit.bullets_offset].height
-              : j.headerHeight + j.headerToBulletsGap + j.bullets[0].height);
-        if (sepCost + minHere > available) {
-          if (pushTracker.push(`start-exp-cont:${j.id}@${unit.bullets_offset}`) ||
-              currentPage.entries.length === 0) {
-            throw new SolverError(
-              `cannot start experience continuation for '${j.id}' on a page`,
-              { column: 'main', job_id: j.id, bullets_offset: unit.bullets_offset },
-            );
-          }
-          newPage('experience');
-          continue;
-        }
-        currentPage.activeSection = 'experience';
-        currentPage.activeSectionContinuationOf = 'experience';
-        currentUsed += sepCost;
+      // A job always arrives inside an open experience section: the
+      // first one right after its heading, every later one on the same
+      // page or on a page opened by newPage('experience'). A guard, not
+      // a path — there used to be a branch here that opened a headingless
+      // section, and nothing could reach it.
+      if (currentPage.activeSection !== 'experience') {
+        throw new SolverError(`job '${j.id}' reached outside the experience section`);
       }
+
+      // Pushing a job off a page where its section holds only the heading
+      // takes the heading along (back to the heading unit, on a fresh
+      // page): left behind, the section would be dropped with no jobs
+      // and the heading would print nowhere. The heading's own check
+      // above is written to make this unreachable; this keeps a change
+      // to either check from silently losing the heading.
+      const pushToNextPage = () => {
+        if (currentPage.activeSectionContinuationOf === null
+            && currentPage.activeJobs.length === 0) {
+          currentPage.activeSection = null;
+          unitIndex--;
+          newPage();
+        } else {
+          newPage('experience');
+        }
+      };
 
       // Inter-job gap: 0 if first job in active section, else jobGap.
       // For a section that JUST got its heading, hasFirstJobInActiveSection
@@ -630,7 +642,7 @@ function solveMainColumn(sections, geometry, maxPages) {
             { column: 'main', job_id: j.id },
           );
         }
-        newPage('experience');
+        pushToNextPage();
         continue;
       }
 
@@ -680,7 +692,7 @@ function solveMainColumn(sections, geometry, maxPages) {
             capacity: currentCapacity },
         );
       }
-      newPage('experience');
+      pushToNextPage();
       continue;
     }
 

@@ -7,7 +7,7 @@
   "required": ["letter"],
   "properties": {
     "name": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Your name, split in two so the design can weight them differently. Same shape as the resume's. Optional here: if data/_profile.yml supplies it, omit it and this file inherits it.",
       "required": ["first", "last"],
       "additionalProperties": false,
@@ -18,16 +18,16 @@
     },
 
     "role": {
-      "type": "string",
+      "type": ["string", "null"],
       "description": "Optional subtitle under your name — usually the role this letter is for."
     },
 
     "contact": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Contact details in the letterhead. Normally omitted here and inherited from data/_profile.yml, which is the same file the resume inherits from — that is how the two documents stay in sync. Set here, it merges over the profile key by key: setting only `rows` keeps the profile's `address`. After the merge the build needs a `rows` list (use [] for an address only).",
       "additionalProperties": false,
       "properties": {
-        "address": { "type": "string", "description": "Shown on its own line." },
+        "address": { "type": ["string", "null"], "description": "Shown on its own line." },
         "rows": {
           "type": "array",
           "description": "Clickable contact lines. Use an empty list for address only.",
@@ -38,8 +38,8 @@
             "properties": {
               "value": { "type": "string", "minLength": 1, "description": "The text people see." },
               "href": {
-                "type": "string",
-                "pattern": "^$|^\\s*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]|[Mm][Aa][Ii][Ll][Tt][Oo]:\\s*\\S|[Tt][Ee][Ll]:\\s*\\S)",
+                "type": ["string", "null"],
+                "pattern": "^$|^[\\x00-\\x20\\x7f-\\xa0\\xad\\u0600-\\u0605\\u061c\\u06dd\\u070f\\u0890\\u0891\\u08e2\\u1680\\u180e\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u2064\\u2066-\\u206f\\u3000\\ufeff\\ufff9-\\ufffb]*(?:[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Mm][Aa][Ii][Ll][Tt][Oo]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|[Tt][Ee][Ll]:[\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])",
                 "description": "Where it points: 'tel:', 'mailto:', 'https:' or 'http:', written in full. Empty means no link.",
                 "examples": ["tel:+15551234567", "mailto:you@example.com"]
               }
@@ -50,13 +50,13 @@
     },
 
     "meta": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Optional document metadata. Only these two fields are read.",
       "properties": {
-        "description": { "type": "string", "description": "One sentence, stamped into the PDF's metadata." },
+        "description": { "type": ["string", "null"], "description": "One sentence, stamped into the PDF's metadata." },
         "lang": {
           "type": ["string", "null"],
-          "description": "BCP 47 language tag, e.g. 'en-US'. It also decides how the date is written: en-US → September 20, 2026; day-first English (en-GB, en-AU, en-150, …) → 20 September 2026; any other language → 2026-09-20.",
+          "description": "BCP 47 language tag, e.g. 'en-US'; anything that is not a tag is marked en-US, with a warning. It also decides how the date is written: en-US → September 20, 2026; day-first English (en-GB, en-AU, en-150, …) → 20 September 2026; any other language → 2026-09-20.",
           "examples": ["en-US", "en-GB"]
         }
       }
@@ -75,14 +75,18 @@
           "description": "The address block — name, company, street, city. Two forms, both accepted: a list of strings (one per line), or a single block scalar written with '|', which you can paste an address straight into. Unlike body, this splits on EVERY line, not on blank ones: each line is its own entry.",
           "oneOf": [
             {
+              "type": "null",
+              "description": "Left empty, like leaving the key out: no address block."
+            },
+            {
               "type": "array",
               "description": "One entry per line. An empty list, like leaving the key out, means no address block.",
-              "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+              "items": { "type": "string", "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]" }
             },
             {
               "type": "string",
               "minLength": 1,
-              "pattern": "\\S",
+              "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
               "description": "One block of text; each non-empty line becomes an entry."
             }
           ],
@@ -95,12 +99,12 @@
               "type": "array",
               "minItems": 1,
               "description": "One entry per paragraph.",
-              "items": { "type": "string", "minLength": 1, "pattern": "\\S" }
+              "items": { "type": "string", "minLength": 1, "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]" }
             },
             {
               "type": "string",
               "minLength": 1,
-              "pattern": "\\S",
+              "pattern": "[^\\x09-\\x0d\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
               "description": "One block of text; blank lines split it into paragraphs."
             }
           ]

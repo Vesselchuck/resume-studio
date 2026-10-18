@@ -33,13 +33,11 @@
  *   sidebarBlockGap: flex gap between sidebar blocks (between
  *                    consecutive <section> children of <aside>).
  *   mainColumnSectionGap: flex gap between main-col sections.
- *   mainColSeparatorHeight: rendered height of <hr class="section-sep">
- *                           inside .main-col, INCLUDING its own margins
- *                           (which compensate to --section-rhythm).
- *   sidebarSeparatorHeight: same, for the sidebar's <hr>. Differs from
- *                           the main-col value because the rhythm calc
- *                           subtracts a different parent gap per context
- *                           (see styles/_layout.scss .section-sep rules).
+ *   mainColSeparatorHeight: the layout space <hr class="section-sep">
+ *                           takes inside .main-col, INCLUDING its own
+ *                           margins (which compensate to --section-rhythm).
+ *   sidebarSeparatorHeight: same, for the sidebar's <hr>. Today the two
+ *                           are equal (see measureHr below).
  *
  * Inter-block spacing on a page = separatorHeight + 2 * blockGap
  * (the gap appears once on each side of the <hr>; use the column-
@@ -87,15 +85,39 @@ function measurePageGeometry() {
   // We still measure each column independently so a future per-
   // column rhythm override would propagate to the solver without
   // any code change here.
+  //
+  // What a separator costs is the distance it opens between the two
+  // sections around it, read off those sections' edges (less their own
+  // margins and the parent's flex gap, which the solver charges
+  // separately). Not the <hr>'s getBoundingClientRect: that includes
+  // its `transform: scaleY(var(--rule-paint))`, which paints half the
+  // rule but leaves its full layout box in place, so it read 25.17 px
+  // for a 25.66 px separator and the solver undercounted every column
+  // by half a pixel per separator. Nor its computed margins: Chromium
+  // lays out the 12.3333px margins at 12.328125 (1/64 px units), and
+  // the border at a whole pixel. The sections' edges carry all of it.
+  // The fallback, for an <hr> without a neighbor on each side, is its
+  // untransformed layout box (offsetHeight, a rounded value) and
+  // margins; measurement.j2 never emits one.
   const measureHr = (el) => {
     if (!el) return 0;
     const sepCS = window.getComputedStyle(el);
-    return el.getBoundingClientRect().height
+    const prev = el.previousElementSibling;
+    const next = el.nextElementSibling;
+    if (prev && next) {
+      const parentGap = parsePx(window.getComputedStyle(el.parentElement).rowGap);
+      return (next.getBoundingClientRect().top
+          - parsePx(window.getComputedStyle(next).marginTop))
+        - (prev.getBoundingClientRect().bottom
+          + parsePx(window.getComputedStyle(prev).marginBottom))
+        - 2 * parentGap;
+    }
+    return el.offsetHeight
       + parsePx(sepCS.marginTop)
       + parsePx(sepCS.marginBottom);
   };
-  const mainColSepEl = document.querySelector('.main-col hr.section-sep');
-  const sidebarSepEl = document.querySelector('.sidebar hr.section-sep');
+  const mainColSepEl = document.querySelector('.main-col [data-measure="separator"]');
+  const sidebarSepEl = document.querySelector('.sidebar [data-measure="separator"]');
   const mainColSeparatorHeight = measureHr(mainColSepEl);
   const sidebarSeparatorHeight = measureHr(sidebarSepEl);
 
@@ -125,7 +147,8 @@ function measurePageGeometry() {
  *   • headingHeight: heading element's box height + its margins
  *   • itemGap: parent's flex row-gap (gap between siblings inside
  *              the items container)
- *   • items: per-item heights (without inter-item gap)
+ *   • items: per-item heights (without inter-item gap, with the item's
+ *            margins), whether it is a group heading, and its top margin
  *
  * Invariant the solver relies on:
  *   totalHeight ≈ headingHeight + sum(items.height) +
@@ -189,6 +212,11 @@ function measureSidebar() {
           + parsePx(ics.marginBottom),
         // A `- group:` sub-heading. The solver never ends a page on one.
         isGroup: itemEl.classList.contains('list-group-heading'),
+        // Included in `height`. A group's top margin is suppressed when it
+        // is its list's first child (_components.scss), which is how it
+        // renders when a continuation slice starts on it; the solver
+        // takes it back off there (sidebarBlockHeight).
+        marginTop: parsePx(ics.marginTop),
       });
     }
 

@@ -105,6 +105,20 @@ test('every broken-metadata case falls back instead of throwing', () => {
              'Resume', 'empty field');
     assertEq(on.readStem(writeMeta(dir, { output_stem: 42 }), 'letter'),
              'Cover_Letter', 'wrong type');
+    assertEq(on.readStem(writeMeta(dir, 'null'), 'resume'), 'Resume', 'JSON null');
+    assertEq(on.readStem(writeMeta(dir, '[1]'), 'resume'), 'Resume', 'not an object');
+  });
+});
+
+test('metadata that is not UTF-8 falls back, as in Python', () => {
+  // A lenient decode read Latin-1 bytes as U+FFFD and returned a stem
+  // naming a file no build wrote; stem_from_meta returned 'Resume'.
+  withTempDir((dir) => {
+    const meta = path.join(dir, 'pdf_meta.json');
+    fs.writeFileSync(meta, Buffer.from('{"output_stem": "Jos\xe9_Resume"}', 'latin1'));
+    assertEq(on.readStem(meta, 'resume'), 'Resume', 'Latin-1 bytes');
+    fs.writeFileSync(meta, Buffer.from('{"output_stem": "José_Resume"}', 'utf-8'));
+    assertEq(on.readStem(meta, 'resume'), 'José_Resume', 'UTF-8 is read as before');
   });
 });
 
@@ -372,9 +386,9 @@ test('a PDF of yours that fits the pattern is never deleted', () => {
 });
 
 test('with no record (a dist/ from before it), only retired names go', () => {
-  // The upgrade: the grayscale PDFs and the 0.5.x names are still
-  // cleaned out; an old `…_Resume.pdf` is not, since nothing says a
-  // build wrote it.
+  // The upgrade: the grayscale PDFs beside today's PDF and the 0.5.x
+  // names are still cleaned out; an old `…_Resume.pdf` is not, since
+  // nothing says a build wrote it.
   withTempDir((dir) => {
     touch(dir, 'Gaius_Caesar_Resume.pdf', 'Gaius_Caesar_Resume_Grayscale.pdf',
       'Gaius_Caesar_Resume-grayscale.pdf', 'resume-color.pdf', 'resume-grayscale.pdf',
@@ -384,6 +398,24 @@ test('with no record (a dist/ from before it), only retired names go', () => {
       'Gaius_Caesar_Resume_Grayscale.pdf', 'resume-color.pdf', 'resume-grayscale.pdf'],
       'the retired names');
     assertEq(pdfs(dir), ['Gaius_Caesar_Resume.pdf', 'Gaius_Julius_Resume.pdf'], 'the rest stay');
+  });
+});
+
+test('a grayscale-marked PDF of yours is not deleted either', () => {
+  // The retired markers used to be deleted on sight, record or not, so
+  // dist/Acme tailored_Resume_Grayscale.pdf went with the next build. A
+  // retired name now goes only beside a color PDF a build wrote: its
+  // twin, the same name without the marker, is on the record or kept.
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Acme tailored_Resume_Grayscale.pdf',
+      'Mine_Resume-grayscale.pdf', 'Gaius_Julius_Resume.pdf',
+      'Gaius_Julius_Resume_Grayscale.pdf');
+    record(dir, 'resume', 'Gaius_Caesar_Resume.pdf', 'Gaius_Julius_Resume.pdf');
+    const removed = on.pruneStale(dir, 'resume', [path.join(dir, 'Gaius_Caesar_Resume.pdf')]);
+    assertEq(removed.sort(), ['Gaius_Julius_Resume.pdf', 'Gaius_Julius_Resume_Grayscale.pdf'],
+      'only a recorded name and its grayscale twin');
+    assertEq(pdfs(dir), ['Acme tailored_Resume_Grayscale.pdf', 'Gaius_Caesar_Resume.pdf',
+      'Mine_Resume-grayscale.pdf'], 'yours stay');
   });
 });
 
@@ -434,6 +466,90 @@ test('a removal that fails stays on the record, to be retried', () => {
     assertEq(on.readRecord(dir).resume.written, ['Gaius_Caesar_Resume.pdf', 'Old_Resume.pdf'],
              'still listed');
   });
+});
+
+test('a retired name that could not be removed goes on the record', () => {
+  // Its color twin was the old name, removed in the same prune; with
+  // the grayscale copy off the record too, nothing vouched for it again
+  // and it stayed in dist/ for good.
+  withTempDir((dir) => {
+    touch(dir, 'Gaius_Caesar_Resume.pdf', 'Old_Resume.pdf', 'Old_Resume_Grayscale.pdf');
+    record(dir, 'resume', 'Old_Resume.pdf', 'Gaius_Caesar_Resume.pdf');
+    const keep = [path.join(dir, 'Gaius_Caesar_Resume.pdf')];
+    const failing = { ...fs, rmSync: (p, o) => {
+      if (path.basename(p) === 'Old_Resume_Grayscale.pdf') throw new Error('EBUSY: open in a viewer');
+      return fs.rmSync(p, o);
+    } };
+    const removed = on.pruneStale(dir, 'resume', keep, null, null, { fs: failing });
+    assertEq(removed, ['Old_Resume.pdf'], 'the twin went');
+    assertEq(on.readRecord(dir).resume.written, ['Gaius_Caesar_Resume.pdf', 'Old_Resume_Grayscale.pdf'],
+             'the grayscale copy is on the record');
+    assertEq(on.pruneStale(dir, 'resume', keep), ['Old_Resume_Grayscale.pdf'], 'and goes next time');
+    assertEq(pdfs(dir), ['Gaius_Caesar_Resume.pdf'], 'only this build left');
+  });
+});
+
+/**
+ * A dist/ of `files` ({name: ino}) on a volume that is case-sensitive
+ * or not, with a record listing `recorded`. Deletions are collected.
+ */
+function stubVolume(dist, files, { caseSensitive, recorded = [] }) {
+  const live = new Map(Object.entries(files));
+  const deleted = [];
+  const recordFile = path.join(dist, on.RECORD);
+  let recordText = JSON.stringify({ resume: { written: recorded } });
+  const enoent = p => Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+  const find = (p) => {
+    if (path.dirname(path.resolve(p)) !== path.resolve(dist)) return null;
+    const base = path.basename(p);
+    if (live.has(base)) return base;
+    if (caseSensitive) return null;
+    return [...live.keys()].find(n => n.toLowerCase() === base.toLowerCase()) || null;
+  };
+  return {
+    deleted,
+    fs: {
+      readdirSync: () => [...live.keys()],
+      statSync: (p, opts) => {
+        const n = find(p);
+        if (!n) throw enoent(p);
+        const ino = live.get(n);
+        return opts && opts.bigint
+          ? { dev: 1n, ino: BigInt(ino), isFile: () => true }
+          : { dev: 1, ino, isFile: () => true };
+      },
+      rmSync: (p) => { const n = find(p); if (n) { live.delete(n); deleted.push(n); } },
+      readFileSync: (p) => {
+        if (path.resolve(p) !== recordFile) throw enoent(p);
+        return recordText;
+      },
+      writeFileSync: (p, text) => { recordText = text; },
+      renameSync: () => {},
+    },
+  };
+}
+
+test('a kept PDF vouches for a grayscale twin of its exact name only', () => {
+  // The twin check approves a delete, and it compared case-folded paths
+  // on darwin and win32. On a case-sensitive APFS volume or NTFS folder,
+  // Acme_Resume.pdf kept made ACME_Resume_Grayscale.pdf, a different
+  // file of yours, look like its grayscale copy.
+  const dist = path.resolve('/virtual/dist');
+  for (const platform of ['darwin', 'win32']) {
+    const stub = stubVolume(dist, { 'Acme_Resume.pdf': 11, 'ACME_Resume_Grayscale.pdf': 12 },
+      { caseSensitive: true, recorded: ['Acme_Resume.pdf'] });
+    const removed = on.pruneStale(dist, 'resume', [path.join(dist, 'Acme_Resume.pdf')],
+      null, null, { fs: stub.fs, platform });
+    assertEq(removed, [], `${platform}, case-sensitive: nothing removed`);
+    assertEq(stub.deleted, [], `${platform}, case-sensitive: your PDF is still there`);
+  }
+  // Case-insensitive, the twin's spelling opens the kept file: the same
+  // inode, so the grayscale copy is this project's and goes.
+  const ci = stubVolume(dist, { 'Acme_Resume.pdf': 11, 'ACME_Resume_Grayscale.pdf': 12 },
+    { caseSensitive: false, recorded: ['Acme_Resume.pdf'] });
+  assertEq(on.pruneStale(dist, 'resume', [path.join(dist, 'Acme_Resume.pdf')],
+    null, null, { fs: ci.fs, platform: 'win32' }), ['ACME_Resume_Grayscale.pdf'],
+    'case-insensitive: matched by identity');
 });
 
 test('a directory sharing the naming pattern is not deleted', () => {
@@ -490,15 +606,29 @@ test('the pipeline hands back paths that match this module', () => {
   // The integration point: pipeline.paths.pdf is a getter over
   // outputPaths, and resume.js prunes with the result. If these two
   // ever disagreed, a build would delete the file it just wrote.
+  //
+  // Against a project of its own with known metadata: compared with
+  // outputPaths over the real dist/, this was the same call made twice,
+  // and it passed whatever either returned.
   const { createPipeline } = require(path.join(ROOT, 'build', 'pipeline.js'));
   const noPython = { buildHtml() {}, cropPdf() {} };
-  for (const variant of ['resume', 'letter']) {
-    const p = createPipeline({ root: ROOT, python: noPython, variant }).paths;
-    const expected = on.outputPaths(path.join(ROOT, 'dist'), p.pdfMeta, variant);
-    assertEq(p.pdf, expected.pdf, `${variant} pdf`);
-    assertTrue(on.outputPattern(variant).test(path.basename(p.pdf)),
-               `${variant} matches the prune pattern`);
-  }
+  withTempDir((root) => {
+    const dist = path.join(root, 'dist');
+    fs.mkdirSync(dist);
+    const stems = { resume: 'Gaius_Caesar_Resume', letter: 'Gaius_Caesar_Cover_Letter' };
+    writeMeta(dist, { output_stem: stems.resume });
+    fs.writeFileSync(path.join(dist, 'letter_meta.json'),
+                     JSON.stringify({ output_stem: stems.letter }), 'utf-8');
+    for (const variant of ['resume', 'letter']) {
+      const p = createPipeline({ root, python: noPython, variant }).paths;
+      const meta = variant === 'letter' ? 'letter_meta.json' : 'pdf_meta.json';
+      assertEq(p.pdfMeta, path.join(dist, meta), `${variant} reads its own metadata`);
+      assertEq(p.outputStem, stems[variant], `${variant} stem`);
+      assertEq(p.pdf, path.join(dist, `${stems[variant]}.pdf`), `${variant} pdf`);
+      assertTrue(on.outputPattern(variant).test(path.basename(p.pdf)),
+                 `${variant} matches the prune pattern`);
+    }
+  });
 });
 
 report('output_name');

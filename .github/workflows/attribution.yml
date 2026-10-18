@@ -1,8 +1,8 @@
 # Fails when a commit message, a tag message, a pull request's title or
 # description, or a release's notes carries an attribution line: a
-# Co-Authored-By or similar trailer, a chat or session link, or a
-# "Generated with <tool>" line. The work in this repository is
-# unattributed on purpose.
+# Co-Authored-By or similar trailer, a trailer that names an AI tool, a
+# chat or session link, or a "Generated with <tool>" or "Built with
+# <tool>" line. The work in this repository is unattributed on purpose.
 #
 # Local commit-msg and pre-push hooks catch the same lines before they
 # leave the machine, but a hook is skipped by --no-verify, is missing on
@@ -69,7 +69,7 @@ jobs:
           RELEASE_NAME: ${{ github.event.release.name }}
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          pattern='co-?authored[- ]by[[:space:]]*(:|：)|assisted-by[[:space:]]*:|made-with[[:space:]]*:|generated-by[[:space:]]*:|ai-(assisted|generated)(-by)?[[:space:]]*:|claude-session[[:space:]]*:|noreply@anthropic\.com|claude\.ai/(code|share|chat|project)|claude\.com/claude-code|chatgpt\.com/(share|c/)|chat\.openai\.com/share|gemini\.google\.com/share|g\.co/gemini/share|generated[[:space:]]+(with|by|using)[[:space:]]+\[?(claude|chatgpt|openai|codex|copilot|cursor|gemini|an? ai)|(generated|written|made|created)[[:space:]]+(with|by|using)[[:space:]]+(the help of[[:space:]]+)?\[?(claude|chatgpt|openai|codex|gemini)|^[^[:alnum:]]*generated[[:space:]]+(with|by|using)[[:space:]]+\[[[:alpha:]]'
+          pattern='co(-|‐|‑)?authored(-|‐|‑| )by[[:space:]]*(:|：)|co-developed-by[[:space:]]*:|helped-by[[:space:]]*:|assisted-by[[:space:]]*:|made-with[[:space:]]*:|generated-(by|with)[[:space:]]*:|ai-(assisted|generated)(-by)?[[:space:]]*:|claude-session[[:space:]]*:|^[[:alpha:]-]+-by[[:space:]]*:.*(claude|anthropic|chatgpt|openai|copilot|gemini)|noreply@anthropic\.com|claude\.ai/|claude\.com/|chatgpt\.com/(share|c/)|chat\.openai\.com/share|gemini\.google\.com/share|g\.co/gemini/share|(generated|built|written|made|created)[[:space:]]+(with|by|using)[[:space:]]+(the help of[[:space:]]+)?\[?(claude|chatgpt|openai|codex|copilot|gemini)([^[:alnum:]_-]|-(code|cli|[[:digit:]])|$)|(generated|built)[[:space:]]+(with|by|using)[[:space:]]+\[?((an? )?ai([^[:alnum:]_]|$)|cursor([^[:alnum:][:space:]_-]|[[:space:]]*$))|^[^[:alnum:]]*generated[[:space:]]+(with|by|using)[[:space:]]+\[[[:alpha:]]'
           zero=0000000000000000000000000000000000000000
           fail=0
 

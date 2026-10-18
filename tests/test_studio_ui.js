@@ -18,7 +18,18 @@
  *     (POST /api/open); a first render that fails shows what to do.
  *   • A render outlines what changed, the outlines go after four
  *     seconds, and turning the highlight off stops them.
+ *   • The page's own bookkeeping: a save renders the hidden document when
+ *     it is shown; a Build pressed during a preview runs after it; a build
+ *     is not reported failed by a status read after it; a dialog gives
+ *     focus back to a rebuilt opener; Data files opens one dialog, says
+ *     when it cannot list, and asks about a file of unknown kind; the drop
+ *     overlay is for files only; zoom is said once and saved in order; a
+ *     dropped event stream does not leave another window's render running.
  *   • None of it breaks the page's Content-Security-Policy.
+ *
+ * The page is opened as the desktop shell opens it, at the URL in the
+ * server's ready frame, whose launch token becomes a cookie; the later
+ * pages of the same browser open the plain address on that cookie.
  *
  * ISOLATION: a throwaway copy of the project with only the templates in
  * data/, as in test_studio_server.js. /api/open runs dry (it reports the
@@ -59,7 +70,8 @@ function startServer(projectDir) {
         log.push(line);
         if (line.startsWith(READY_PREFIX)) {
           clearTimeout(timer);
-          resolve({ child, log, port: JSON.parse(line.slice(READY_PREFIX.length)).port });
+          const { port, token, url } = JSON.parse(line.slice(READY_PREFIX.length));
+          resolve({ child, log, port, token, url });
         }
       }
     });
@@ -88,7 +100,9 @@ async function openPage(ctx, url, violations) {
   return page;
 }
 
-async function run(project, port, chromium) {
+async function run(project, { port, token, url }, chromium) {
+  // The page itself, once the first load (the ready frame's URL, as the
+  // desktop shell opens it) has left the launch token's cookie in `ctx`.
   const base = `http://127.0.0.1:${port}/`;
   const violations = [];
   const browser = await chromium.launch();
@@ -103,7 +117,8 @@ async function run(project, port, chromium) {
 
     /* ── a first render that fails: what to do, and where ───────── */
     fs.writeFileSync(dataFile, broken);
-    let page = await openPage(ctx, base, violations);
+    let page = await openPage(ctx, url, violations);
+    assertEq(page.url(), base, 'token: the ready frame\'s URL lands on the page, the token out of the address');
     await page.waitForSelector('#errOverlay', { state: 'visible', timeout: 90000 });
     // The build names the file the way the platform writes paths
     // (data\resume.yml on Windows), and the overlay shows it as given.
@@ -329,7 +344,20 @@ async function run(project, port, chromium) {
     seen.push(await pane());
     assertEq(seen, ['rail', 'scroller', 'inspector', 'scroller'], 'F6 / Shift+F6: move between the three panes');
 
-    // Ctrl+Shift+B builds what is on screen.
+    // Ctrl+Shift+B builds what is on screen. The status read that follows
+    // the build is made to fail once: the build still succeeded, and must
+    // not be reported as failed.
+    let buildAnswered = false, statusFailed = false;
+    await page.route('**/api/build', async (route) => {
+      const resp = await route.fetch({ timeout: 120000 });
+      buildAnswered = true;
+      await route.fulfill({ response: resp });
+    });
+    await page.route('**/api/status', (route) => {
+      if (!buildAnswered || statusFailed) return route.continue();
+      statusFailed = true;
+      return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"status unavailable"}' });
+    });
     const built = page.waitForResponse(r => r.url().endsWith('/api/build'), { timeout: 120000 });
     const [build] = await Promise.all([
       page.waitForRequest(r => r.url().endsWith('/api/build'), { timeout: 5000 }),
@@ -341,6 +369,12 @@ async function run(project, port, chromium) {
       .some(b => b.getAttribute('aria-disabled') === 'true' && /^Build/.test(b.textContent)), null, { timeout: 30000 });
     assertTrue(/last page \d+% full/.test(await page.textContent('.doc >> nth=0')),
       'Build: the last-page fill stays on the card (a built PDF read back has none of its own)');
+    assertTrue(statusFailed, 'Build: (the status read after it was made to fail)');
+    assertEq(await page.$$eval('.doc .errcard', ns => ns.map(n => n.textContent)), [],
+      'Build: a status read that fails afterwards does not turn it into "Build failed"');
+    assertTrue(/Built Resume/.test(await page.textContent('#toasts')), 'Build: ...it is reported as built');
+    await page.unroute('**/api/build');
+    await page.unroute('**/api/status');
 
     // Build the other document: the view follows it.
     await page.click('text=Build Cover Letter PDF');
@@ -348,13 +382,242 @@ async function run(project, port, chromium) {
       null, { timeout: 120000 });
     assertTrue(true, 'Build of the document not on screen: shows it when it is built');
 
+    /* ── a save renders the hidden document when it is shown ───── */
+    // On the Cover Letter, a save renders the letter. The Resume, read
+    // from that save too, used to keep its pages from before it, shown
+    // as "Live", because it had been rendered once already.
+    const previewOf = doc => r => r.url().endsWith('/api/preview') && r.request().method() === 'POST'
+      && JSON.parse(r.request().postData()).doc === doc;
+    const letterRender = page.waitForResponse(previewOf('letter'), { timeout: 30000 });
+    fs.writeFileSync(dataFile, template.replace('Sed gravida elit velit', 'Sed gravida elit velit, while hidden'));
+    await letterRender;
+    await sleep(500);
+    const [resumeReq] = await Promise.all([
+      page.waitForRequest(r => r.url().endsWith('/api/preview') && JSON.parse(r.postData()).doc === 'resume',
+        { timeout: 5000 }).catch(() => null),
+      page.keyboard.press('Control+1'),
+    ]);
+    assertTrue(Boolean(resumeReq), 'stale: showing the Resume after a save made on the Cover Letter renders it');
+    await page.waitForResponse(previewOf('resume'), { timeout: 30000 }).catch(() => null);
+    await page.waitForFunction(() => /^Preview up to date/.test(document.getElementById('liveSay').textContent),
+      null, { timeout: 30000 });
+    assertTrue(true, 'stale: ...and only then says the preview is up to date');
+
+    /* ── a Build pressed during a preview waits for it ─────────── */
+    // Every save's preview made the Build button ignore a press, without
+    // a word. Here a preview is held for 1.5 s and Build is pressed in it.
+    let previewDone = 0;
+    await page.route('**/api/preview', async (route) => {
+      await sleep(1500);
+      const resp = await route.fetch();
+      previewDone = Date.now();
+      await route.fulfill({ response: resp });
+    });
+    const held = page.waitForRequest(r => r.url().endsWith('/api/preview'), { timeout: 5000 });
+    await page.click('#menuRefresh');
+    await held;
+    assertEq(await page.getAttribute('text=Build Resume PDF', 'aria-disabled'), 'false',
+      'build queue: the Build button does not grey out for a preview');
+    const queuedBuilt = page.waitForResponse(r => r.url().endsWith('/api/build'), { timeout: 120000 }).catch(() => null);
+    const queuedBuild = page.waitForRequest(r => r.url().endsWith('/api/build'), { timeout: 15000 })
+      .then(r => ({ r, at: Date.now() }), () => null);
+    await page.click('text=Build Resume PDF');
+    await page.waitForFunction(() => document.getElementById('say').textContent === 'The build starts when the preview finishes',
+      null, { timeout: 3000 }).catch(() => null);
+    assertEq(await page.textContent('#say'), 'The build starts when the preview finishes',
+      'build queue: a press during a preview says it will run after it');
+    const buildReq = await queuedBuild;
+    assertTrue(Boolean(buildReq) && previewDone > 0 && buildReq.at >= previewDone,
+      'build queue: ...and the build runs once the preview is done');
+    await page.unroute('**/api/preview');
+    if (buildReq) await queuedBuilt;
+    await page.waitForFunction(() => ![...document.querySelectorAll('button')]
+      .some(b => b.getAttribute('aria-disabled') === 'true' && /^Build/.test(b.textContent)), null, { timeout: 30000 });
+
+    /* ── the letter's data file choice ─────────────────────────── */
+    // The resume's data-source setting is not the letter's: its select
+    // showed blank (no option) once the resume's was set.
+    await Promise.all([
+      page.waitForResponse(previewOf('resume'), { timeout: 30000 }),
+      page.selectOption('#dataChoice', 'mode:default'),
+    ]);
+    await page.keyboard.press('Control+2');
+    await page.waitForFunction(() => document.getElementById('canvasDoc').textContent === 'Cover Letter');
+    assertEq(await page.$eval('#dataChoice', s => s.value), 'mode:auto',
+      "data file: the letter's select shows its own setting, not the resume's");
+    await page.keyboard.press('Control+1');
+    await page.waitForFunction(() => document.getElementById('canvasDoc').textContent === 'Resume');
+    await Promise.all([
+      page.waitForResponse(previewOf('resume'), { timeout: 30000 }),
+      page.selectOption('#dataChoice', 'mode:auto'),
+    ]);
+
+    /* ── focus comes back after a dialog, though its opener was rebuilt ── */
+    if (!(await diagOpen())) await page.keyboard.press('Control+Shift+D');
+    await page.focus('#logExpand');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#consoleDlg');
+    // A save behind the dialog re-renders, which rebuilds the Inspector
+    // and the Expand button in it.
+    const behind = page.waitForResponse(previewOf('resume'), { timeout: 30000 });
+    fs.writeFileSync(dataFile, template.replace('Sed gravida elit velit', 'Sed gravida elit velit, behind a dialog'));
+    await behind;
+    await sleep(200);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#consoleDlg', { state: 'detached', timeout: 3000 });
+    assertEq(await page.evaluate(() => document.activeElement.id), 'logExpand',
+      'dialog: focus goes back to its opener even when a render rebuilt it');
+    // F5 / Ctrl+R re-render with a dialog open too, as the code says.
+    await page.keyboard.press('F1');
+    await page.waitForSelector('#helpDlg');
+    const [f5] = await Promise.all([
+      page.waitForRequest(r => r.url().endsWith('/api/preview'), { timeout: 5000 }).catch(() => null),
+      page.keyboard.press('F5'),
+    ]);
+    assertTrue(Boolean(f5) && Boolean(await page.$('#helpDlg')),
+      'F5 with a dialog open: re-renders behind it, and the dialog stays');
+    await page.waitForResponse(r => r.url().endsWith('/api/preview'), { timeout: 30000 }).catch(() => null);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#helpDlg', { state: 'detached', timeout: 3000 });
+
+    /* ── Data files: one dialog, a failure said, an unknown file asked about ── */
+    await page.evaluate(() => { const b = document.getElementById('openDlg'); b.click(); b.click(); });
+    await page.waitForSelector('#filesDlg');
+    await sleep(300);
+    assertEq(await page.$$eval('[role="dialog"]', ns => ns.length), 1, 'Data files: two quick clicks open one dialog');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#filesDlg', { state: 'detached', timeout: 3000 });
+    await page.route('**/api/datafiles', route => route.fulfill({
+      status: 500, contentType: 'application/json', body: '{"error":"data/ could not be read"}' }));
+    await page.focus('#menuRefresh');
+    await page.keyboard.press('Control+o');
+    await page.waitForFunction(() => /Could not list data\//.test(document.getElementById('toasts').textContent),
+      null, { timeout: 3000 }).catch(() => null);
+    assertTrue(/Could not list data\//.test(await page.textContent('#toasts')) && !(await page.$('[role="dialog"]')),
+      'Data files: a listing that fails says so, and opens nothing');
+    await page.unroute('**/api/datafiles');
+    // A file whose document the server could not tell (doc: null) is
+    // asked about, as a dropped one is, not loaded under a guess.
+    await page.route('**/api/datafiles', route => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ files: [{ name: 'resume_default.yml', bytes: 100, mtimeMs: Date.now(), doc: null, isTemplate: true }] }) }));
+    await page.keyboard.press('Control+o');
+    await page.waitForSelector('#filesDlg .filerow');
+    await page.click('#filesDlg .filerow');
+    await page.waitForSelector('.drop .drop-h');
+    assertEq(await page.textContent('.drop .drop-h'), 'Which document is this?',
+      'Data files: a file of unknown kind asks which document it is');
+    const pickedRender = page.waitForResponse(previewOf('resume'), { timeout: 30000 });
+    const [picked] = await Promise.all([
+      page.waitForRequest(r => r.url().endsWith('/api/pick'), { timeout: 5000 }),
+      page.click('.drop .target >> nth=0'),
+    ]);
+    assertEq(JSON.parse(picked.postData()), { doc: 'resume', name: 'resume_default.yml' },
+      'Data files: ...and reads it under the one chosen');
+    await page.unroute('**/api/datafiles');
+    await pickedRender;
+    await Promise.all([
+      page.waitForResponse(previewOf('resume'), { timeout: 30000 }),
+      page.selectOption('#dataChoice', 'mode:auto'),
+    ]);
+
+    /* ── the drop overlay is for files ─────────────────────────── */
+    const drag = (type, file) => page.evaluate(([type, file]) => {
+      const dt = new DataTransfer();
+      if (file) dt.items.add(new File([file.content], file.name));
+      else dt.setData('text/plain', 'a line of console output');
+      window.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, [type, file]);
+    const yml = { name: 'x.yml', content: 'x: 1\n' };
+    await drag('dragenter', null);
+    assertEq(await page.$('.drop'), null, 'drop: dragging text over the window shows no "Drop a .yml file"');
+    await drag('dragleave', null);
+    await drag('dragenter', yml);
+    assertTrue(Boolean(await page.$('.drop')), 'drop: dragging a file does');
+    await drag('dragleave', yml);
+    assertEq(await page.$('.drop'), null, '...and it goes when the drag leaves');
+    // A file that is neither document: the chooser asks, and a drag
+    // passing through the window meanwhile does not close it.
+    await drag('drop', { name: 'odd.yml', content: 'title: neither of the two\n' });
+    await page.waitForSelector('.drop .drop-h', { timeout: 5000 });
+    assertEq(await page.textContent('.drop .drop-h'), 'Which document is this?', 'drop: an undecidable file is asked about');
+    await drag('dragenter', yml);
+    await drag('dragleave', yml);
+    assertTrue(Boolean(await page.$('.drop .target')), 'drop: ...and a drag leaving the window does not close the question');
+    await page.keyboard.press('Escape');
+    assertEq(await page.$('.drop'), null, 'drop: Escape closes it');
+
+    /* ── Load… leaves no file inputs behind ────────────────────── */
+    for (let i = 0; i < 3; i++) await page.click('.doc-file button >> nth=0');
+    assertTrue(await page.$$eval('input[type="file"]', ns => ns.length) <= 1,
+      'Load…: a chooser that was never answered leaves at most its own input in the page');
+
+    /* ── zoom: said once when asked for, not on every resize ───── */
+    assertEq(await page.getAttribute('#zoomVal', 'role'), null,
+      'zoom: the readout is not a live region (a fit changes it on every resize)');
+    await page.keyboard.press('Control+8');
+    await sleep(100);
+    await page.evaluate(() => { document.getElementById('say').textContent = 'quiet'; });
+    await page.setViewportSize({ width: 1300, height: 900 });
+    await sleep(300);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await sleep(300);
+    assertEq(await page.textContent('#say'), 'quiet', 'zoom: resizing under a fit announces nothing');
+    // Fast steps: one PUT /api/prefs at a time, and the last one wins.
+    let inFlight = 0, maxInFlight = 0;
+    await page.route('**/api/prefs', async (route) => {
+      if (route.request().method() !== 'PUT') return route.continue();
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await sleep(300);
+      try { await route.continue(); } finally { inFlight--; }
+    });
+    await page.focus('#scroller');
+    for (let i = 0; i < 3; i++) await page.keyboard.press('+');
+    const shown = await page.textContent('#zoomVal');
+    await page.waitForFunction(z => document.getElementById('say').textContent === `Zoom ${z}`, shown, { timeout: 3000 })
+      .catch(() => null);
+    assertEq(await page.textContent('#say'), `Zoom ${shown}`, 'zoom: a zoom step is said');
+    await sleep(1500);
+    await page.unroute('**/api/prefs');
+    assertEq(maxInFlight, 1, 'prefs: fast zoom steps send one PUT at a time');
+    const saved = await page.evaluate(() => fetch('/api/prefs').then(r => r.json()));
+    assertEq(`${saved.prefs.zoom}%`, shown, 'prefs: ...and the zoom saved is the last one');
+
+    /* ── another window's render, cut off: its busy flag does not stick ── */
+    // A page whose event stream drops after another window's render
+    // started never hears it end; the flag used to hold every render of
+    // this page back for good. The first stream here says only that.
+    let streams = 0;
+    const third = await ctx.newPage();
+    third.on('pageerror', err => violations.push(`page error: ${err.message}`));
+    await third.route('**/api/events', (route) => {
+      if (++streams > 1) return route.continue();
+      return route.fulfill({ status: 200, contentType: 'text/event-stream',
+        body: 'retry: 200\n\nevent: render\ndata: {"state":"start","doc":"letter"}\n\n' });
+    });
+    await third.goto(base);
+    await third.waitForSelector('.sheet img', { timeout: 60000 }).catch(() => null);
+    for (let i = 0; i < 100 && streams < 2; i++) await sleep(100);
+    assertTrue(streams >= 2, `busy: (the stream dropped and reconnected: ${streams} streams)`);
+    await sleep(500);
+    const [thirdLetter] = await Promise.all([
+      third.waitForRequest(r => r.url().endsWith('/api/preview') && JSON.parse(r.postData()).doc === 'letter',
+        { timeout: 10000 }).catch(() => null),
+      third.keyboard.press('Control+2'),
+    ]);
+    assertTrue(Boolean(thirdLetter), 'busy: a dropped stream does not leave another window\'s render "running" for good');
+    await third.waitForResponse(previewOf('letter'), { timeout: 30000 }).catch(() => null);
+    await third.close();
+
     /* ── settings outlive the origin ───────────────────────────── */
     await Promise.all([
       page.waitForResponse(r => r.url().endsWith('/api/prefs') && r.request().method() === 'PUT'),
       page.click('#fitPage'),
     ]);
     await sleep(200);
-    const other = await openPage(ctx, `http://localhost:${port}/`, violations);
+    // With the token, as a launch opens it: cookies are kept per host, so
+    // localhost has none from the 127.0.0.1 page.
+    const other = await openPage(ctx, `http://localhost:${port}/?t=${token}`, violations);
     await other.waitForSelector('.sheet img', { timeout: 90000 });
     assertEq(await other.getAttribute('html', 'data-theme'), 'dark',
       'settings: a page from another origin (a new launch) opens in the saved theme');
@@ -392,7 +655,7 @@ async function run(project, port, chromium) {
   try {
     copyProject(project);
     srv = await startServer(project);
-    await run(project, srv.port, chromium);
+    await run(project, srv, chromium);
   } catch (err) {
     fail('studio ui run', { error: `${err.stack || err.message}\n${srv ? srv.log.slice(-30).join('\n') : ''}` });
   } finally {

@@ -26,7 +26,10 @@
  *   • dist/index.html after each render is byte-identical to what the
  *     non-speculative run wrote, because that file is the deliverable
  *     the CLI and tests/test_engine_equivalence.js compare;
- *   • the layout invariants still ran, on the page that was printed.
+ *   • the layout invariants still ran, on the page that was printed;
+ *   • a speculative page that stops answering fails only the guess:
+ *     its deadline closes that page, not Chromium under the render;
+ *     so does one that never opens.
  *
  * Two engines are used, one with speculation on and one with it off,
  * because the comparison must be between the two paths and nothing
@@ -158,6 +161,109 @@ async function runSequence(engine, dataFile, dist) {
 }
 
 
+/**
+ * The speculative page stops answering (here: a load whose fonts never
+ * settle). Its deadline must close that page only: the guess fails, and
+ * the render goes on as if there had been none, on the same Chromium.
+ * It used to close the whole browser, under the main page, so the
+ * render failed with Playwright's "target closed" instead.
+ */
+async function stuckGuess(createEngine, root, dataFile) {
+  const engine = await createEngine({ root, speculative: true, timeouts: { pageMs: 1500 } });
+  try {
+    const env = { RESUME_DATA_FILE: dataFile, RESUME_DATA_SOURCE: null };
+    fs.copyFileSync(path.join(ROOT, 'data', 'resume_default.yml'), dataFile);
+    const first = await engine.renderPreview({ doc: 'resume', env });   // leaves a placement to guess from
+    edit(dataFile, 'Phasellus scelerisque magna', 'Phasellus scelerisque magnum');
+    const pl = engine.pipelines.resume;
+    const load = pl.openDocument;
+    // The first load of the render is the measurement page's, the second
+    // the speculative page's.
+    let calls = 0;
+    pl.openDocument = (page, opts) => {
+      calls += 1;
+      if (calls === 2) return page.evaluate(() => new Promise(() => {}));
+      return load(page, opts);
+    };
+    let r = null;
+    let err = null;
+    try {
+      r = await engine.renderPreview({ doc: 'resume', env });
+    } catch (e) {
+      err = e;
+    } finally {
+      pl.openDocument = load;
+    }
+    assertEq(err ? err.message.split('\n')[0] : null, null,
+      'stuck guess: the render still succeeds when the speculative page stops answering');
+    assertEq(r && r.timings.speculative, 'failed', 'stuck guess: ...the guess is reported as failed');
+    assertEq(r && r.invariants && r.invariants.ok, true, 'stuck guess: ...the layout check ran and passed');
+    assertEq(r && r.pages, first.pages, 'stuck guess: ...and every page came back');
+    const next = await engine.renderPreview({ doc: 'resume', env, recompileStyles: true });
+    assertEq(next.timings.browserLaunch, 0, 'stuck guess: Chromium itself was not closed');
+  } finally {
+    await engine.dispose();
+  }
+}
+
+/**
+ * The speculative page is never opened: Chromium does not answer
+ * newPage(). The guess fails at its deadline and the render goes on
+ * without it. Opening that page had no deadline, so the guess, and the
+ * render waiting for it, waited forever.
+ */
+async function stuckOpening(createEngine, root, dataFile) {
+  const engine = await createEngine({ root, speculative: true, timeouts: { pageMs: 1500 } });
+  try {
+    const env = { RESUME_DATA_FILE: dataFile, RESUME_DATA_SOURCE: null };
+    fs.copyFileSync(path.join(ROOT, 'data', 'resume_default.yml'), dataFile);
+    // No placement yet, so the first render opens no speculative page.
+    // It leaves one to guess from, and hands over the main page, whose
+    // context the speculative page is opened in.
+    fs.rmSync(path.join(root, 'dist', 'placement.json'), { force: true });
+    const pl = engine.pipelines.resume;
+    const load = pl.openDocument;
+    let ctx = null;
+    pl.openDocument = (page, opts) => {
+      ctx = page.context();
+      return load(page, opts);
+    };
+    let first;
+    try {
+      first = await engine.renderPreview({ doc: 'resume', env });
+    } finally {
+      pl.openDocument = load;
+    }
+    edit(dataFile, 'Phasellus scelerisque magna', 'Phasellus scelerisque magnum');
+    const newPage = ctx.newPage;
+    let asked = 0;
+    ctx.newPage = () => { asked += 1; return new Promise(() => {}); };
+    const t0 = Date.now();
+    let r = null;
+    let err = null;
+    try {
+      r = await Promise.race([
+        engine.renderPreview({ doc: 'resume', env }),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('still pending after 20000 ms')), 20000).unref();
+        }),
+      ]);
+    } catch (e) {
+      err = e;
+    } finally {
+      ctx.newPage = newPage;
+    }
+    assertEq(asked, 1, 'stuck opening: the speculative page was asked for');
+    assertEq(err ? err.message.split('\n')[0] : null, null,
+      'stuck opening: the render still succeeds when the speculative page never opens');
+    assertTrue(Date.now() - t0 < 15000, `stuck opening: ...at the deadline (${Date.now() - t0} ms)`);
+    assertEq(r && r.timings.speculative, 'failed', 'stuck opening: ...the guess is reported as failed');
+    assertEq(r && r.pages, first.pages, 'stuck opening: ...and every page came back');
+  } finally {
+    await engine.dispose();
+  }
+}
+
 (async () => {
   try {
     require('playwright');
@@ -236,6 +342,9 @@ async function runSequence(engine, dataFile, dist) {
     // already asserted — and the returned page count is honest.
     assertTrue(fast.every(r => r.hashes.length === r.pages),
       'every render returned one image per page');
+
+    await stuckGuess(createEngine, project.root, dataFile);
+    await stuckOpening(createEngine, project.root, dataFile);
   } catch (err) {
     fail('speculative load run', { error: err.stack || err.message });
   } finally {

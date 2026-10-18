@@ -238,13 +238,13 @@ class TestPageKeys(unittest.TestCase):
         never this checkout's dist/. The raw Chromium prints the preview
         keys are covered by tests/test_engine_equivalence.js."""
         sys.path.insert(0, str(ROOT / "tests"))
-        from _project import Project, real_dist_fingerprint
+        from _project import Project, build_error, real_dist_fingerprint
         before = real_dist_fingerprint()
         project = Project("preview-raster-test")
         try:
             problem = project.build()
             if problem:
-                self.skipTest(f"could not build a copy of the project ({problem})")
+                raise build_error(problem)
             pdfs = sorted(project.dist.glob("*.pdf"))
             self.assertEqual(len(pdfs), 2, [p.name for p in pdfs])
             for pdf in pdfs:
