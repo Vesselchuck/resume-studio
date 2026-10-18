@@ -200,9 +200,11 @@ test('auto-detection returns the absolute path the interpreter reports', () => {
   // On Windows a bare name is looked up in the current directory first
   // (the project root, for the CLIs and the engine): spawned by name,
   // a python.exe dropped there would run instead.
+  // Absolute on this platform: a Windows path is relative on Linux, and
+  // detection rightly falls back to the bare name for it.
+  const exe = process.platform === 'win32' ? 'C:\\Python312\\python.exe' : '/opt/python3.12/bin/python3';
   const all = { python: 'Python 3.12.1', py: 'Python 3.12.1', python3: 'Python 3.12.1' };
-  assertEq(detect({}, all, [], { [FIRST]: 'C:\\Python312\\python.exe' }),
-    'C:\\Python312\\python.exe', 'its sys.executable');
+  assertEq(detect({}, all, [], { [FIRST]: exe }), exe, 'its sys.executable');
 });
 
 test('a candidate that cannot say where it is runs by its name, not skipped', () => {
@@ -354,10 +356,19 @@ test('the compile cache is reported off when NODE_DISABLE_COMPILE_CACHE turns it
   try {
     const off = compileCacheIn({ NODE_COMPILE_CACHE: dir, NODE_DISABLE_COMPILE_CACHE: '1' });
     assertEq([off.r.enabled, off.d], [false, null], 'off, and nothing to describe');
+    // Without the opt-out it is on only where this Node reads the
+    // variable: 22.1 and later. Older ones (the 20.19 minimum) ignore it,
+    // and the next test covers what is reported there.
+    const [major, minor] = process.versions.node.split('.').map(Number);
     const on = compileCacheIn({ NODE_COMPILE_CACHE: dir });
-    assertEq(on.r.enabled, true, 'on without the opt-out');
-    assertTrue(path.resolve(on.r.dir).startsWith(path.resolve(dir)),
-      `in the directory it names: ${on.r.dir}`);
+    if (major > 22 || (major === 22 && minor >= 1)) {
+      assertEq(on.r.enabled, true, 'on without the opt-out');
+      assertTrue(path.resolve(on.r.dir).startsWith(path.resolve(dir)),
+        `in the directory it names: ${on.r.dir}`);
+    } else {
+      assertEq([on.r.enabled, on.d], [false, null],
+        `Node ${process.versions.node} ignores NODE_COMPILE_CACHE: off, and nothing to describe`);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
