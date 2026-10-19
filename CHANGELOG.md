@@ -42,6 +42,22 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+- **Changed.** The dot between a job's dates and its location is drawn,
+  no longer the character "·" (U+00B7), so the text layer reads "MMM
+  YYYY – MMM YYYY Roma, Imperium Romanum" with no symbol after the date:
+  RChilli documents returning an empty date when a symbol that is not
+  part of a date appears in it. The dot copies the glyph's size, place
+  and advance; every glyph on the page sits where it did, and only the
+  dot's own pixels differ (up to 0.3pt vertically). OCR still reads a
+  dot, as "-", so this helps only parsers that read the text layer.
+  `tests/test_text_extraction.py` checks each date and location read
+  as two words with nothing between them, and the template's PDF
+  snapshot is refreshed to match.
+- **Added.** pdfminer.six is a test dependency (`requirements.txt`), so
+  the check that its layout order keeps each bullet whole and with its
+  job runs everywhere, CI included. Run
+  `py -m pip install -r requirements.txt` once; without it
+  `STRICT_TESTS=1` fails on the skip.
 - **Fixed.** The fonts kerned some letters against a space: Manrope
   pulled the space after a capital L, Y, T or K in by up to 0.05em, and
   Newsreader kerned A, V and others against it. The letter's box then
@@ -53,10 +69,10 @@ minor one before 1.0.0).
   after such a pair moves up to half a point to the right ("SKILLS" in
   KEY SKILLS, "EXPERIENCE" in WORK EXPERIENCE, the location after each
   date's year); nothing else moves and page breaks are unchanged.
-  `tests/test_font_faces.js` checks the fonts for such pairs. The
-  committed PDF snapshots no longer match and need
-  `python build/snapshot_pdf.py --update-all` (the comparison is off by
-  default and in CI).
+  `tests/test_font_faces.js` checks the fonts for such pairs, and the
+  template's PDF snapshot is refreshed to match. Refresh your own with
+  `python build/snapshot_pdf.py --update-all` if you use the snapshot
+  comparison (it is off by default and in CI).
 - **Added.** `tests/test_text_extraction.py` checks that no glyph is
   hidden the way published hidden-text detectors look for it (under
   4pt, too close to white, an invisible render mode, off the page),

@@ -273,7 +273,7 @@
 /* Job header — stacks vertically. Title sits alone on its row
    (full column width, no competing right-side element to compress
    it), and the meta line below combines date + location separated
-   by a middle-dot character.                                        */
+   by a drawn middle dot.                                            */
 .entry-header {
   display: flex;
   flex-direction: column;
@@ -309,16 +309,42 @@
   color: var(--text-muted);
 }
 
-/* Meta-row separator between date and location. Uses a middle-dot
-   character (U+00B7) rather than a pseudo-element rule — softer
-   typographic texture, optically aligned with x-height instead of
-   the full text body. The :last-child suppression prevents a stray
+/* Meta-row separator between date and location. A middle dot rather
+   than a rule — softer typographic texture, optically aligned with
+   x-height instead of the full text body — drawn, not written. As
+   the character U+00B7 it sat in the PDF's text layer right after
+   the date, and RChilli documents returning an empty date when a
+   symbol that is not part of a date appears in it; drawn, the line
+   reads "date location". OCR still sees a dot, so this helps only
+   parsers that read the text layer.
+
+   It copies the Manrope glyph it replaced, in that font's 2000 units
+   per em: a dot of radius 107 centred 630 above the baseline, in a
+   453-unit advance. The box is the advance wide and 1260 tall, twice
+   the centre's height, so the clip's default centre is the dot's; an
+   empty inline-block sits on the baseline, well inside the line,
+   whose height is unchanged.
+   The width is 454, not 453: Chromium lays out in 1/64 px, and at
+   453 the location came out 1/64 px left of where the glyph put it.
+
+   Clipped, not rounded with border-radius: printing, Chromium snaps
+   a box's background to whole CSS px, and a 1.28 px round box came
+   out 1 px wide and 2 high. The clip is drawn at its exact size. The
+   text's baseline is snapped to a whole px and the box is not, so
+   the dot can sit up to half a px above or below where the glyph's
+   did. The clip makes the dot a stacking context, painted after the
+   column's in-flow text; it holds no text, so the PDF's text order
+   is unchanged. The :last-child suppression prevents a stray
    trailing dot on entries that have only a date (e.g. a gap entry,
    which has no location).                                          */
 .job-date::after {
-  content: "·";
+  content: "";
+  display: inline-block;
+  width: calc(454em / 2000);
+  height: calc(1260em / 2000);
   margin-inline: var(--sp-sm);
-  color: var(--text-muted);
+  background: var(--text-muted);
+  clip-path: circle(calc(107em / 2000));
 }
 .job-date:last-child::after { display: none; }
 

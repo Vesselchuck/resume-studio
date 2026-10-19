@@ -66,11 +66,15 @@ that orders text by position: each bullet follows its own job and reads
 in one piece, and the main column's headings come in order.
 
 TestParserConventions guards what résumé parsers document asking of
-the text, all of which the build already gives: each job's dates on
-one line, the contact details before the first section, each contact
-detail and link text whole on one line (so a wrap can never split an
-email or a URL), and no word in the text layer that the page does not
-show.
+the text: each job's dates on one line, each date and its location as
+two words with no symbol between them, the contact details before the
+first section, each contact detail and link text whole on one line (so
+a wrap can never split an email or a URL), and no word in the text
+layer that the page does not show. The separator between a date and
+its location was a middle dot (U+00B7) in the text, and RChilli
+documents returning an empty date when a symbol that is not part of a
+date appears in it; the dot is drawn now (styles/_components.scss,
+.job-date::after). The rest the build always gave.
 
 TestHiddenText guards against what hidden-text detectors look for
 (arXiv 2605.28999), none of which the build does: no glyph under 4 pt,
@@ -81,10 +85,11 @@ reader read text other than the glyphs shown. Chromium writes no
 /ActualText for these documents; with ligatures on it wrote none for
 the ligature glyphs either (see above).
 
-pdfplumber and pdftotext, also checked when the fix was made, and
-pdfminer.six, which pdfplumber is built on, are not project
-dependencies; they are used here when installed. A missing one
-used to drop out without a word, so a run that never read the PDFs
+pdfplumber and pdftotext, also checked when the fix was made, are not
+project dependencies; they are used here when installed. pdfminer.six,
+which pdfplumber is built on, is a test dependency (requirements.txt),
+so its layout order is read on every run that installed them. A
+missing extractor used to drop out without a word, so a run that never read the PDFs
 with pdftotext looked the same as one that did. TestOptionalExtractors
 now skips once for each one that is missing, and says which. The
 pdftotext that matters most is Xpdf's, in the Windows CI job, which
@@ -189,7 +194,8 @@ EXTRACTORS = {"pypdf": _pypdf, "pdfium": _pdfium,
 
 
 class TestOptionalExtractors(unittest.TestCase):
-    """The optional extractors this run reads the PDFs with.
+    """The extractors this run may lack: pdfplumber and pdftotext, which
+    are optional, and pdfminer.six, a test dependency.
 
     The other tests use whichever extractors are installed. These say
     which ones were not: a skip here means every check in this file ran
@@ -207,8 +213,8 @@ class TestOptionalExtractors(unittest.TestCase):
         try:
             import pdfminer  # noqa: F401
         except ImportError:
-            self.skipTest("pdfminer.six is not installed, so the text layer "
-                          "is not read in its layout order (optional)")
+            self.skipTest("pdfminer.six is not installed (requirements.txt), so "
+                          "the text layer is not read in its layout order")
 
     def test_pdftotext_is_on_path(self):
         if not shutil.which("pdftotext"):
@@ -522,8 +528,8 @@ class TestReadingOrder(unittest.TestCase):
 class TestLayoutOrder(TestReadingOrder):
     """The résumé's text, in pdfminer.six's layout order, follows the
     document too: each bullet after its own job and in one piece, and
-    the main column's sections in order. Used when pdfminer.six is
-    installed (TestOptionalExtractors says when it is not)."""
+    the main column's sections in order. pdfminer.six is in
+    requirements.txt; TestOptionalExtractors says when it is missing."""
 
     ORDER = LAYOUT_ORDER
 
@@ -560,14 +566,17 @@ def _not_on_one_line(text, values):
 
 class TestParserConventions(unittest.TestCase):
     """What résumé parsers document asking of the text, and the build
-    already gives: each job's dates on one line (Textkernel's quality
-    codes 224/225), the contact details first, as page text (Greenhouse
-    and RChilli lose them from headers, footers and text boxes), each
-    contact detail and link whole on one line (a parser matches an
-    email or a URL within a line), and no text that is not on the page
-    (hidden text is flagged as keyword stuffing; detectors compare the
-    text layer with what is shown). These guard them; nothing here was
-    ever broken."""
+    gives: each job's dates on one line (Textkernel's quality
+    codes 224/225), each date and its location with no symbol between
+    them (RChilli documents returning an empty date when a symbol that
+    is not part of a date appears in it), the contact details first, as
+    page text (Greenhouse and RChilli lose them from headers, footers
+    and text boxes), each contact detail and link whole on one line (a
+    parser matches an email or a URL within a line), and no text that
+    is not on the page (hidden text is flagged as keyword stuffing;
+    detectors compare the text layer with what is shown). These guard
+    them. Only the symbol was ever broken: the separator was a middle
+    dot in the text until it was drawn."""
 
     @classmethod
     def setUpClass(cls):
@@ -589,6 +598,26 @@ class TestParserConventions(unittest.TestCase):
             with self.subTest(extractor=name):
                 self.assertEqual(split, [], f"{name} ({_version(name)}) splits these dates "
                                  "across lines")
+
+    def test_each_date_and_location_read_as_two_words(self):
+        # The separator is drawn. As a middle dot in the text, every
+        # extractor read "date · location".
+        metas = [(_norm(html.unescape(d)), _norm(html.unescape(loc))) for d, loc in re.findall(
+            r'<time class="job-date"[^>]*>([^<]*)</time>\s*<span class="job-loc">([^<]*)</span>', self.html)]
+        self.assertGreater(len(metas), 2, metas)
+        texts = dict(self.texts)
+        raw = _pdftotext_raw_pages(_pdf("Resume"))
+        if raw is not None:
+            texts["pdftotext -raw"] = "\n".join(raw)
+        for name, text in texts.items():
+            lines = [_norm(line) for line in text.splitlines()]
+            # Counted, not found: the template's are all alike.
+            apart = [m for m, n in Counter(metas).items()
+                     if sum(line.count(f"{m[0]} {m[1]}") for line in lines) < n]
+            near = [line for line in lines if any(d in line for d, _ in apart)]
+            with self.subTest(extractor=name):
+                self.assertEqual(apart, [], f"{name} ({_version(name.split()[0])}) does not read "
+                                 f"these as the date, a space and the location; it read {near[:4]!r}")
 
     def test_the_contact_details_come_first(self):
         contact = _element_texts(self.html, r'<span class="header-contact-(?:address|item)">(.*?)</span>')

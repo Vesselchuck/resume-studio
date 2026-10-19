@@ -32,3 +32,9 @@ isal==1.8.0
 # imports it, and the test skips itself if it is missing, so you can
 # drop this line without breaking `node resume.js`.
 jsonschema==4.26.0
+
+# Test only. tests/test_text_extraction.py reads the PDFs in its layout
+# order (the order pdfplumber and many résumé parsers build on) and
+# checks each bullet stays whole and with its job. Nothing in the build
+# imports it; without it those checks skip, and STRICT_TESTS fails.
+pdfminer.six==20260107

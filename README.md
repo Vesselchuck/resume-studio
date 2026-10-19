@@ -728,10 +728,13 @@ build keeps that text equal to the words on the page:
   render mode and inside the page: the rules published hidden-text
   detectors apply.
 - **What parsers document asking for.** Each job's dates read on one
-  line, the contact details come first as page text (not in a header,
-  footer or text box), and the text layer holds no word the page does
-  not show: hidden keywords are flagged as stuffing by checkers that
-  compare the two.
+  line, and then the location with no symbol between them: the dot
+  between date and location is drawn, not the character "·", since
+  RChilli returns an empty date when a symbol that is not part of a
+  date appears in it. The contact details come first as page text
+  (not in a header, footer or text box), and the text layer holds no
+  word the page does not show: hidden keywords are flagged as stuffing
+  by checkers that compare the two.
 
 `tests/test_text_extraction.py` builds both documents and checks that
 pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
@@ -740,10 +743,11 @@ and no word split into letters, the dates on one line, the contact
 details first and each of them on one line, and no hidden text; that
 pypdf, pdfium and `pdftotext -raw`, which read in stream order, keep
 each bullet whole and with its job, no sidebar heading inside the main
-column, and the footer last on its page; and, when pdfminer.six is
-installed, that its layout order keeps each bullet whole and with its
-job too. A missing pdfplumber, pdfminer.six or pdftotext is reported as
-a skip that names it.
+column, and the footer last on its page; and that pdfminer.six's
+layout order, the one pdfplumber and many résumé parsers build on,
+keeps each bullet whole and with its job too. pdfminer.six is a test
+dependency in `requirements.txt`; a missing pdfplumber or pdftotext is
+reported as a skip that names it.
 
 The rest is in your data, and in what you do when you apply:
 
@@ -1197,7 +1201,7 @@ small page of their own.
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_worker_protocol.py`     | The worker's own plumbing: frames it cannot write, the per-request environment, the stale-placement report, the pixel comparison |
 | `test_build_placement.py`     | A gap entry with `bullets:` left empty; a placement solved for other data, or unreadable, reported as such by the CLI and the worker |
-| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show, no odd code points or soft hyphens, no word split into letters, contact details each on one line, no hidden text or ActualText; read in stream order (and pdfminer.six's layout order, when installed), each bullet whole and after its job, the main column unbroken, the footer last; which optional extractors were missing |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show, no odd code points or soft hyphens, no word split into letters, contact details each on one line, no hidden text or ActualText; read in stream order and in pdfminer.six's layout order, each bullet whole and after its job, the main column unbroken, the footer last; which optional extractors were missing |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself; a root that is not a process id |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`), including the experience heading kept with its first job across a rounding error, and a continuation that opens on a group label |
