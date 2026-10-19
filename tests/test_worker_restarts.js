@@ -105,8 +105,16 @@ async function unitTests() {
 
     // A worker that never answers. Its requests are swallowed before
     // they reach it: alive, and silent, on every platform.
-    const hung = new PythonWorker({ root: ROOT, python, timeoutMs: 500 });
+    //
+    // The short deadline is set only for that request. The worker's
+    // start is held to the same deadline, and importing build/build.py
+    // alone took 430-470 ms on a Windows laptop, so a worker built
+    // with 500 ms was killed while starting, before the request this
+    // checks was ever sent.
+    const hung = new PythonWorker({ root: ROOT, python });
     await hung.start();
+    const normal = hung.timeoutMs;
+    hung.timeoutMs = 500;
     const stuck = hung.proc;
     stuck.stdin.write = () => true;
     const t0 = Date.now();
@@ -117,6 +125,7 @@ async function unitTests() {
     assertTrue(err && /stopped/.test(err.message), '...saying the worker was stopped');
     assertTrue(!hung.alive(), '...and the stuck worker is no longer used');
     assertEq(hung.crashes.length, 1, '...and counts as a crash');
+    hung.timeoutMs = normal;      // the fresh worker gets a normal start
     const frame = await Promise.race([hung.run({ op: 'ping' }).then(f => f, e => e),
       new Promise(res => setTimeout(() => res(new Error('still pending after 10 s')), 10000).unref())]);
     assertTrue(frame && frame.ok && hung.proc !== stuck, 'the next request starts a fresh worker and is answered');
