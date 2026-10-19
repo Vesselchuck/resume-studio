@@ -35,6 +35,20 @@ extractors in requirements.txt. For each:
 The template has no details block, so TestDetailLabels builds a copy
 with one and checks that its labels read whole.
 
+TestReadingOrder reads the résumé in the order its text is written into
+the PDF, which is what pypdf, pdfium and `pdftotext -raw` give and what
+many parsers read (Tika's defaults, for one). Chromium writes text in
+CSS paint order, not DOM order: a positioned box paints after all the
+in-flow content of its column. With `position: relative` on the bullets
+(only there to anchor their dot), every page's bullets came after all
+of that page's job titles, and page 2's after EDUCATION, so a reader in
+stream order filed them under the wrong job; and the sidebar, first in
+the DOM, came before the main column on every page, so page 1's sidebar
+split the jobs of page 1 from those of page 2. It checks, against the
+final HTML, that each bullet follows its own job's title, that the main
+column's headings come in order, and that no sidebar heading falls
+between the main column's first heading and its last.
+
 pdfplumber and pdftotext, also checked when the fix was made, are not
 project dependencies; they are used here when installed. A missing one
 used to drop out without a word, so a run that never read the PDFs
@@ -49,8 +63,10 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import unittest
 from collections import Counter
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -99,17 +115,7 @@ def _pypdf(path):
 
 
 def _pdfium(path):
-    import pypdfium2 as pdfium
-    doc = pdfium.PdfDocument(str(path))
-    try:
-        out = []
-        for i in range(len(doc)):
-            tp = doc[i].get_textpage()
-            out.append(tp.get_text_range())
-            tp.close()
-        return "\n".join(out)
-    finally:
-        doc.close()
+    return "\n".join(_pdfium_pages(path))
 
 
 def _pdfplumber(path):
@@ -213,6 +219,182 @@ class TestTextLayer(unittest.TestCase):
                 with self.subTest(document=doc, extractor=name, field="role"):
                     self.assertIsNotNone(re.search(r"IMPERATOR\s+ROMANUS", text),
                                          f"the header reads as: {head}")
+
+
+def _norm(text):
+    # The PDF's text can curl a quote the HTML has straight.
+    text = unicodedata.normalize("NFKC", text).replace(" ", " ")
+    text = text.translate(str.maketrans("‘’“”", "''\"\""))
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+class _Outline(HTMLParser):
+    """The résumé's structure from its final HTML, in DOM order: one
+    (page, column, kind, text) per section heading, job title and bullet,
+    column "main" or "side", kind "heading", "title" or "bullet"."""
+
+    VOID = {"meta", "link", "br", "img", "hr", "input", "source", "wbr"}
+
+    def __init__(self):
+        super().__init__()
+        self.stack, self.items, self.page, self.open = [], [], 0, None
+
+    def _inside(self, cls):
+        return any(cls in classes for _, classes in self.stack)
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.VOID:
+            return
+        classes = (dict(attrs).get("class") or "").split()
+        if tag == "article" and "page" in classes:
+            self.page += 1
+        kind = ("heading" if "section-heading" in classes
+                else "title" if "entry-title" in classes and "list-group-heading" not in classes
+                else "bullet" if tag == "li" and self._inside("bullets") else None)
+        if kind and self.open is None:
+            self.open = (kind, [], len(self.stack))
+        self.stack.append((tag, classes))
+
+    def handle_endtag(self, tag):
+        if tag in self.VOID or not self.stack:
+            return
+        self.stack.pop()
+        if self.open and len(self.stack) == self.open[2]:
+            kind, parts, _ = self.open
+            text = _norm("".join(parts))
+            if text:
+                self.items.append((self.page, "side" if self._inside("sidebar") else "main", kind, text))
+            self.open = None
+
+    def handle_data(self, data):
+        if self.open:
+            self.open[1].append(data)
+
+
+def _cells(text):
+    """`text` on one line, and where each of its lines starts there."""
+    flat, starts, at = [], [], 0
+    for line in text.splitlines():
+        cell = _norm(line)
+        if cell:
+            starts.append((at, cell))
+            flat.append(cell)
+            at += len(cell) + 1
+    return " ".join(flat), starts
+
+
+def _pypdf_pages(path):
+    import logging
+    from pypdf import PdfReader
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    return [p.extract_text() or "" for p in PdfReader(str(path)).pages]
+
+
+def _pdfium_pages(path):
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        out = []
+        for i in range(len(doc)):
+            tp = doc[i].get_textpage()
+            out.append(tp.get_text_range())
+            tp.close()
+        return out
+    finally:
+        doc.close()
+
+
+def _pdftotext_raw_pages(path):
+    exe = shutil.which("pdftotext")
+    if not exe:
+        return None
+    text = subprocess.run([exe, "-raw", "-enc", "UTF-8", str(path), "-"], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace").stdout
+    return text.split("\f")
+
+
+# Extractors that give text in the order it is written into the PDF.
+STREAM_ORDER = {"pypdf": _pypdf_pages, "pdfium": _pdfium_pages, "pdftotext -raw": _pdftotext_raw_pages}
+
+
+class TestReadingOrder(unittest.TestCase):
+    """The résumé's text, in the order it is written into the PDF,
+    follows the document: each bullet after its own job, the main
+    column's sections in order, and no sidebar heading between the
+    main column's pages. See the module docstring for why it once
+    did not."""
+
+    @classmethod
+    def setUpClass(cls):
+        outline = _Outline()
+        outline.feed((PROJECT.dist / "index.html").read_text(encoding="utf-8"))
+        cls.items = outline.items
+        cls.pages = {}
+        for name, fn in STREAM_ORDER.items():
+            pages = fn(_pdf("Resume"))
+            if pages is not None:
+                cls.pages[name] = pages
+
+    def test_the_outline_is_found(self):
+        kinds = Counter(kind for _, _, kind, _ in self.items)
+        self.assertGreater(kinds["bullet"], 5, kinds)
+        self.assertGreater(kinds["title"], 2, kinds)
+
+    @staticmethod
+    def _position(flat, starts, item):
+        # A heading is a line of its own (its words also occur in prose);
+        # a title or bullet is found by its first words, which may wrap.
+        if item[2] == "heading":
+            return next((at for at, cell in starts if cell == item[3]), -1)
+        return flat.find(" ".join(item[3].split()[:6]))
+
+    def test_each_bullet_follows_its_own_job(self):
+        for name, pages in self.pages.items():
+            flat, starts = _cells("\n".join(pages))
+            pos = [self._position(flat, starts, it) for it in self.items]
+            markers = [(p, i) for i, (it, p) in enumerate(zip(self.items, pos))
+                       if it[1] == "main" and it[2] in ("title", "heading") and p >= 0]
+            wrong, owner = [], None
+            for i, it in enumerate(self.items):
+                if it[1] == "main" and it[2] == "title":
+                    owner = i
+                elif it[1] == "main" and it[2] == "heading":
+                    owner = None
+                elif it[1] == "main" and it[2] == "bullet":
+                    before = [m for m in markers if m[0] <= pos[i]]
+                    if pos[i] < 0 or not before or max(before)[1] != owner:
+                        wrong.append(it[3][:40])
+            with self.subTest(extractor=name):
+                self.assertEqual(wrong, [], f"{name} ({_version(name.split()[0])}) reads these bullets "
+                                 "away from their job (the nearest title or heading before "
+                                 "them is another one's)")
+
+    def test_the_main_sections_come_in_order(self):
+        for name, pages in self.pages.items():
+            flat, starts = _cells("\n".join(pages))
+            at = [self._position(flat, starts, it) for it in self.items
+                  if it[1] == "main" and it[2] == "heading"]
+            with self.subTest(extractor=name):
+                self.assertTrue(all(a >= 0 for a in at) and at == sorted(at),
+                                f"{name}: section headings at {at}")
+
+    def test_the_main_column_reads_unbroken(self):
+        self.assertGreater(max(it[0] for it in self.items), 1,
+                           "the template fits on one page, so a page break is never read")
+        for name, pages in self.pages.items():
+            flat, starts = _cells("\n".join(pages))
+            found = {"main": [], "side": []}
+            for it in self.items:
+                if it[2] in ("heading", "title"):
+                    p = self._position(flat, starts, it)
+                    if p >= 0:
+                        found[it[1]].append((p, it[3]))
+            with self.subTest(extractor=name):
+                self.assertTrue(found["main"] and found["side"], found)
+                lo, hi = min(found["main"])[0], max(found["main"])[0]
+                inside = [text for p, text in sorted(found["side"]) if lo < p < hi]
+                self.assertEqual(inside, [], f"{name}: sidebar headings read between "
+                                 "the main column's first and last heading")
 
 
 class TestDetailLabels(unittest.TestCase):

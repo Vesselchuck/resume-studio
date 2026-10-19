@@ -559,6 +559,13 @@ def _destination_page(writer: PdfWriter, dest, pages) -> int | None:
 _PATH = {b'm', b'l', b'c', b'v', b'y', b'h', b're'}
 _PAINT = {b'f', b'F', b'f*', b'S', b's', b'B', b'B*', b'b', b'b*'}
 _SHOW = {b'Tj', b'TJ', b"'", b'"', b'Do', b'sh', b'INLINE IMAGE'}
+_TEXT_SHOW = {b'Tj', b'TJ', b"'", b'"'}
+# What may sit between two glyphs of one run of text without ending the
+# run: text positioning and text state, and colour or graphics state,
+# none of which draws anything.
+_TEXT_BETWEEN = {b'Td', b'TD', b'Tm', b'T*', b'Tf', b'Tc', b'Tw', b'Tz', b'TL', b'Ts',
+                 b'Tr', b'g', b'G', b'rg', b'RG', b'k', b'K', b'cs', b'CS', b'sc', b'SC',
+                 b'scn', b'SCN', b'gs'}
 
 
 def _artifact_spans(ops, holds_tags=lambda i: False, covers=lambda i: True):
@@ -570,11 +577,24 @@ def _artifact_spans(ops, holds_tags=lambda i: False, covers=lambda i: True):
     content (/OC) or a bare /Span, leaves its drawing neither tagged
     nor an artifact, so that drawing is wrapped too. A `Do` for which
     holds_tags(index) is true draws a form with tagged content inside,
-    and is left out: see mark_untagged_as_artifacts."""
+    and is left out: see mark_untagged_as_artifacts.
+
+    Untagged text is one span per run, not one per glyph. Chromium
+    writes each glyph as its own Tj after a Td, and an artifact around
+    each of them made pdf.js (OpenResume's parser, and every
+    pdf.js-based reader) return the footer as single letters with no
+    spaces: "Page1of2", run into the next line. A run is the show
+    operators of one text object with only _TEXT_BETWEEN operators
+    between them, so its span still opens and closes inside that BT …
+    ET."""
     stack = []     # whether each open sequence covers what it holds
     covered = 0    # how many of them do
     path_start = None
+    text = None    # [first, last] of the untagged run of text being read
     for i, op in enumerate(ops):
+        if text is not None and not (op in _TEXT_SHOW or op in _TEXT_BETWEEN):
+            yield tuple(text)
+            text = None
         if op in (b'BDC', b'BMC'):
             stack.append(bool(covers(i)))
             covered += stack[-1]
@@ -588,9 +608,16 @@ def _artifact_spans(ops, holds_tags=lambda i: False, covers=lambda i: True):
             if not covered and op != b'n':
                 yield (i if path_start is None else path_start, i)
             path_start = None
+        elif op in _TEXT_SHOW and not covered:
+            if text is None:
+                text = [i, i]
+            else:
+                text[1] = i
         elif op in _SHOW and not covered:
             if op != b'Do' or not holds_tags(i):
                 yield (i, i)
+    if text is not None:
+        yield tuple(text)
 
 
 def _bare_draws(ops, covers):

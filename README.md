@@ -699,11 +699,23 @@ build keeps that text equal to the words on the page:
   read as "SECURIT Y CLEARANCE".
 - **Real spaces.** A space that is only markup between two elements
   can vanish from the text; the name's is inside the first one.
+- **Text in reading order.** Some readers take the text in the order it
+  is written into the PDF, not by where it sits on the page, and
+  Chromium writes it in paint order. Nothing inside a column is
+  positioned (a positioned box paints after everything around it: the
+  bullets once came after all of a page's job titles, and page 2's
+  after Education). Page 1 paints its sidebar first and page 2 its
+  main column first, so the main column reads unbroken across the
+  page break, between page 1's sidebar and page 2's. Read in stream
+  order, each bullet follows its own job; on the page nothing moved.
+  Past two pages no order keeps the main column unbroken.
 
 `tests/test_text_extraction.py` builds both documents and checks that
 pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
-every word on the page. A missing pdfplumber or pdftotext is reported
-as a skip that names it.
+every word on the page, and that pypdf, pdfium and `pdftotext -raw`,
+which read in stream order, keep each bullet with its job and no
+sidebar heading inside the main column. A missing pdfplumber or
+pdftotext is reported as a skip that names it.
 
 ### A PDF a screen reader can follow
 
@@ -736,7 +748,8 @@ checked with NVDA and Acrobat.
   since it shows a path on your computer to whoever opens the PDF.
 - **Decoration is marked as such.** The page background, the rules and
   the "Page 1 of 2" footer are wrapped as artifacts, so a screen reader
-  skips them; the pages draw the same pixels. Some drawing Chromium
+  skips them; the pages draw the same pixels. A line of text is one
+  artifact, not one per letter, which pdf.js read as "Page1of2". Some drawing Chromium
   puts in a group of its own, tagged inside (content drawn with
   opacity, a blend mode or a mask; on the templates, the section
   rules). Such
@@ -1114,7 +1127,7 @@ small page of their own.
 | `test_markdown_filter.py`     | The `**bold**` filter for bullet text       |
 | `test_derive_pdf_metadata.py` | PDF metadata derivation from YAML           |
 | `test_read_accent.py`         | Accent color parsing from `_tokens.scss`   |
-| `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; link descriptions, links inside the document and `file:` links; artifact marks, forms holding tagged content included (drawn once or more, shared, in any encoding), and drawing inside other marked content; a lone surrogate in the metadata; the preview's in-memory crop gives the same pixels |
+| `test_crop_pdf.py`            | PDF cropping, metadata, XMP and `/Lang`; the crop keeps the structure tree; link descriptions, links inside the document and `file:` links; artifact marks, one per line of text, forms holding tagged content included (drawn once or more, shared, in any encoding), and drawing inside other marked content; a lone surrogate in the metadata; the preview's in-memory crop gives the same pixels |
 | `test_tagged_groups.py`       | Artifact marking on what Chromium really prints for a group (content drawn with opacity): nothing untagged outside an artifact, nothing tagged inside one, no pixel changed |
 | `test_masked_groups.py`       | The same for a masked element (`-webkit-mask-image`), which Chromium prints as one tagged form drawn twice: marked inside, nothing left loose |
 | `test_marked_content.py`      | The checker the marking suites rely on (`tests/_marked_content.py`): drawing inside other marked content, an MCID in a named property list, unbalanced operators, an MCID the structure tree does not lead back to |
@@ -1135,7 +1148,7 @@ small page of their own.
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_worker_protocol.py`     | The worker's own plumbing: frames it cannot write, the per-request environment, the stale-placement report, the pixel comparison |
 | `test_build_placement.py`     | A gap entry with `bullets:` left empty; a placement solved for other data, or unreadable, reported as such by the CLI and the worker |
-| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; which optional extractors were missing |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; read in stream order, each bullet follows its job and the main column reads unbroken; which optional extractors were missing |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself; a root that is not a process id |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`), including the experience heading kept with its first job across a rounding error, and a continuation that opens on a group label |
@@ -1632,7 +1645,7 @@ And this one by the test runner (`npm test`, `node build/run_tests.js`):
     ├── test_worker_protocol.py          The worker's frames, environment and comparison.
     ├── test_build_placement.py          Gap entries, and a placement solved for other data.
     ├── test_power.py                    Windows power-throttling opt-out.
-    ├── test_text_extraction.py          The PDFs' text layer reads as the page.
+    ├── test_text_extraction.py          The PDFs' text layer reads as the page, in order.
     ├── test_pdf_fonts.py                The PDFs embed TrueType, not Type 3.
     ├── test_pdf_accessibility.py        What a screen reader and PDF/UA need from the tags.
     ├── test_engine_equivalence.js       Warm engine == cold CLI, pixel for pixel.

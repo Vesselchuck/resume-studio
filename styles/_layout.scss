@@ -179,8 +179,27 @@ main.resume {
    build/solve_layout.js (interBlockCost / interSectionCost) will still
    charge the correct amount (their `2 * gap` term graciously handles
    it), but the visual rhythm token --section-rhythm no longer matches
-   the visible spacing — change one, change the other. */
+   the visible spacing — change one, change the other.
+
+   Paint order (position and z-index): Chromium writes text into the
+   PDF in paint order, page by page, and a parser reading the PDF in
+   stream order reads it in that order. Each column is its own
+   stacking context, so z-index picks which column of a page is
+   written first. Page 1 writes its sidebar first and every later
+   page its main column first: the main column then reads unbroken
+   from page 1 onto page 2 (a job that continues over the break stays
+   in one piece), between page 1's sidebar and page 2's. With the
+   main column first on page 1 too, page 1's sidebar fell between
+   the two pages' jobs, and OpenResume filed page 2's jobs under the
+   sidebar's last heading. No order keeps the main column unbroken
+   past two pages. Nothing overlaps between the columns, so nothing
+   on the page changes; the tags read main first throughout
+   (aria-owns in templates/resume.j2). A positioned element inside a
+   column would paint after that column's in-flow text: see
+   .bullets li in _components.scss. */
 .sidebar {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -188,10 +207,21 @@ main.resume {
 }
 
 .main-col {
+  position: relative;
+  z-index: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
   min-inline-size: 0;
+}
+
+/* Page 1 only: the sidebar is written first. See the note above. */
+.page:first-of-type .sidebar {
+  z-index: 0;
+}
+
+.page:first-of-type .main-col {
+  z-index: 1;
 }
 
 

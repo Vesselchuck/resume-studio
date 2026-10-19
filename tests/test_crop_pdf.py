@@ -1058,6 +1058,24 @@ class TestAccessibility(unittest.TestCase):
         self.assertEqual(names[j + 1], b"n")
         self.assertNotEqual(names[j + 2], b"EMC")
 
+    def test_a_run_of_untagged_text_is_one_artifact(self):
+        # Chromium's footer: one Tj per glyph, a Td and a colour between
+        # them. An artifact around each glyph made pdf.js read "Page1of2".
+        footer = (b"BT /F1 9 Tf 1 0 0 1 72 30 Tm (P) Tj 5 0 Td (a) Tj 0 g 5 0 Td (g) Tj"
+                  b" 5 0 Td (e) Tj ET\nBT /F1 9 Tf 1 0 0 1 120 30 Tm (1) Tj ET\n")
+        w = make_tagged_pdf_with_content(footer)
+        # One per text object, not one per glyph.
+        self.assertEqual(crop_pdf.mark_untagged_as_artifacts(w), 2)
+        r = round_trip(w)
+        self.assertEqual(_unmarked_painting(r.pages[0], r), [])
+        self.assertEqual(_marked_content.check(r).unbalanced, [])
+        names = [op for _, op in _operations(r.pages[0], r)]
+        first, last = [i for i, op in enumerate(names) if op == b"BT"][-2:]
+        self.assertEqual(names[first:last],
+                         [b"BT", b"Tf", b"Tm", b"BMC", b"Tj", b"Td", b"Tj", b"g", b"Td", b"Tj",
+                          b"Td", b"Tj", b"EMC", b"ET"])
+        self.assertEqual(names[last:], [b"BT", b"Tf", b"Tm", b"BMC", b"Tj", b"EMC", b"ET"])
+
     def test_a_second_pass_changes_nothing(self):
         w = make_tagged_pdf_with_content()
         crop_pdf.mark_untagged_as_artifacts(w)

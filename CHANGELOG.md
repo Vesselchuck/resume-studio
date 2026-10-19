@@ -42,6 +42,22 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+- **Fixed.** A parser that reads a PDF's text in the order it is
+  written, not by where it sits on the page, filed most of the
+  résumé's bullets under the wrong job: each page's bullets were
+  written after all of that page's job titles, and page 2's after
+  Education. Each page's sidebar also came before its main column,
+  so page 1's sidebar split the jobs on page 1 from those on page 2.
+  Read that way, each bullet now follows its own job, and the main
+  column reads unbroken across the page break: page 1 writes its
+  sidebar first and page 2 its main column first. pypdf, pdfium and
+  `pdftotext -raw` are checked by `tests/test_text_extraction.py`.
+  On the page nothing moved: the PDFs render the same, pixel for
+  pixel.
+- **Fixed.** pdf.js, the PDF reader in Firefox and in many résumé
+  parsers, read the "Page 1 of 2" footer as "Page1of2", run into the
+  line after it: the build wrapped each of its letters in an artifact
+  of its own. A run of untagged text is now one artifact.
 - **Fixed.** The Studio no longer dies when Chromium closes while the
   Python worker is still starting: a slow first start, with Chromium
   killed or crashing in that window. The engine's handler for a closed

@@ -330,19 +330,29 @@
   flex-direction: column;
   gap: var(--sp-xs);
 }
+/* Not positioned, on purpose. Chromium writes a page's text into the
+   PDF in paint order, and a positioned box paints after all the
+   in-flow content around it: with `position: relative` here (it only
+   anchored the dot below), every page's bullets came after all of that
+   page's job titles, and page 2's after EDUCATION, so a parser that
+   reads the PDF in stream order filed them under the wrong job.
+   tests/test_text_extraction.py (TestReadingOrder) checks the order. */
 .bullets li {
   font-size: var(--size-body);
-  position: relative;
 }
 /* Dot marker — a 3×3px filled circle positioned absolutely in the
    padding-inline-start gutter so it sits outside the text column and
    doesn't affect line wrapping. Background is --text-muted (not
    --accent) to keep the accent reserved for the section headings
    and the role line, where it reads as architecture rather than
-   decoration. `top: 0.6em` aligns the dot optically with the visual
-   center of the line (between x-height and baseline) rather than
-   mathematically with x-height, which lets the small filled dot
-   read as a peer to the text instead of floating above it.       */
+   decoration. It has no offsets, so it starts at its static position,
+   the start of the li's first line, and its margins move it from
+   there: --sp-lg into the gutter, and 0.6em down, which aligns the dot
+   optically with the visual center of the line (between x-height and
+   baseline) rather than mathematically with x-height, which lets the
+   small filled dot read as a peer to the text instead of floating
+   above it. The same place `inset-inline-start` and `top` gave it from
+   a positioned li, without the li being positioned (see above).    */
 .bullets li::before {
   content: "";
   width: 3px;
@@ -350,8 +360,8 @@
   border-radius: 50%;
   background: var(--text-muted);
   position: absolute;
-  inset-inline-start: calc(-1 * var(--sp-lg));
-  top: 0.6em;
+  margin-inline-start: calc(-1 * var(--sp-lg));
+  margin-block-start: 0.6em;
 }
 .bullets strong { font-weight: 600; }
 
