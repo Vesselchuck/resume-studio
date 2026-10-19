@@ -30,7 +30,9 @@ function written(id) {
 
 /** The page's inline script run against a stand-in document. */
 function loadPage() {
-  const scripts = [...PAGE.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  // Any case, attributes and whitespace in either tag: a script written
+  // `<SCRIPT>` or `</script >` still counts (CodeQL js/bad-tag-filter).
+  const scripts = [...PAGE.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
   assertEq(scripts.length, 1, 'loading.html has one inline script');
   const elements = {
     heading: { textContent: written('heading') },
