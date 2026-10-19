@@ -42,6 +42,16 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+- **Fixed.** The "Page 1 of 2" footer was written into the PDF's text
+  between the two columns: on page 2 between Education and the
+  sidebar, where a parser reading the text in order could take it into
+  a section. It is now written last on each page (`z-index: 2` on
+  `.page-footer`); the pages render the same, pixel for pixel.
+  `tests/test_text_extraction.py` also checks now that no odd code
+  point reaches the text (U+00A0 and other spaces a reader may not
+  split on, zero-width characters, U+FFFD, private-use slots), that no
+  capital letter other than A and I stands alone, as tracked headings
+  once read, and that each bullet reads in one piece in stream order.
 - **Added.** The README's "Text a machine can read" says what résumé
   parsers document asking for and what is left to your data: skills
   named in your jobs' bullets, standard headings, "Present", a link's

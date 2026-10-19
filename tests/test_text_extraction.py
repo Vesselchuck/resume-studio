@@ -30,7 +30,11 @@ extractors in requirements.txt. For each:
 
   • every word the page shows is in the text, as often as it is shown;
   • no ligature code points (U+FB00–FB06) appear;
-  • the name and the role read as whole words.
+  • the name and the role read as whole words;
+  • no odd code points: spaces a reader may not split words on,
+    zero-width characters, U+FFFD, private-use slots;
+  • no capital letter stands alone (other than A and I), as tracked
+    uppercase read before its tracking moved into the font.
 
 The template has no details block, so TestDetailLabels builds a copy
 with one and checks that its labels read whole.
@@ -45,9 +49,11 @@ of that page's job titles, and page 2's after EDUCATION, so a reader in
 stream order filed them under the wrong job; and the sidebar, first in
 the DOM, came before the main column on every page, so page 1's sidebar
 split the jobs of page 1 from those of page 2. It checks, against the
-final HTML, that each bullet follows its own job's title, that the main
-column's headings come in order, and that no sidebar heading falls
-between the main column's first heading and its last.
+final HTML, that each bullet follows its own job's title and reads in
+one piece, that the main column's headings come in order, that no
+sidebar heading falls between the main column's first heading and its
+last, and that the "Page 1 of 2" footer ends each page's text. The
+footer, at z-index auto, had been written between the two columns.
 
 TestParserConventions guards what résumé parsers document asking of
 the text, all of which the build already gives: each job's dates on
@@ -213,6 +219,32 @@ class TestTextLayer(unittest.TestCase):
             for name, text in self._texts(doc).items():
                 with self.subTest(document=doc, extractor=name):
                     self.assertEqual(re.findall("[ﬀ-ﬆ]", text), [])
+
+    # Spaces a reader may not split words on (U+00A0 and the narrow and
+    # thin ones), zero-width characters, U+FFFD for a glyph that maps to
+    # nothing, and private-use code points for one that maps to a font's
+    # own slot. poppler's pdftotext turns U+00A0 into a space, so pypdf
+    # and pdfium are the stricter readers here.
+    ODD = re.compile("[     ​-‏⁠﻿�-]")
+
+    def test_no_odd_code_points(self):
+        for doc, _ in DOCS:
+            for name, text in self._texts(doc).items():
+                with self.subTest(document=doc, extractor=name):
+                    found = Counter(f"U+{ord(c):04X}" for c in self.ODD.findall(text))
+                    self.assertEqual(found, {}, f"{name} ({_version(name)})")
+
+    def test_no_word_reads_as_single_letters(self):
+        # A capital letter standing alone, other than A and I: how tracked
+        # uppercase read before its tracking moved into the font, "C E RT
+        # I F ICAT ION S", "I M P E R AT O R", "SECURIT Y". The name, role
+        # and labels are checked whole above; this covers every heading.
+        lone = re.compile(r"(?<![^\s(])[B-HJ-Z](?![^\s,.;:)])")
+        for doc, _ in DOCS:
+            for name, text in self._texts(doc).items():
+                with self.subTest(document=doc, extractor=name):
+                    lines = [" ".join(line.split()) for line in text.splitlines() if lone.search(line)]
+                    self.assertEqual(lines, [], f"{name} ({_version(name)}) splits these into letters")
 
     def test_the_name_and_role_read_whole(self):
         # Both documents carry the same header, role line included.
@@ -402,6 +434,29 @@ class TestReadingOrder(unittest.TestCase):
                 inside = [text for p, text in sorted(found["side"]) if lo < p < hi]
                 self.assertEqual(inside, [], f"{name}: sidebar headings read between "
                                  "the main column's first and last heading")
+
+    def test_each_bullet_reads_whole(self):
+        # Compared without whitespace: a line break inside a bullet, and a
+        # hyphen at one ("Cambridge-" / "aligned"), are not breaks in it;
+        # a sidebar line written between its lines is.
+        squash = lambda text: re.sub(r"\s+", "", text)
+        bullets = [it[3] for it in self.items if it[2] == "bullet"]
+        for name, pages in self.pages.items():
+            flat = squash(_cells("\n".join(pages))[0])
+            broken = [b[:40] for b in bullets if squash(b) not in flat]
+            with self.subTest(extractor=name):
+                self.assertEqual(broken, [], f"{name}: these bullets do not read in one piece")
+
+    def test_the_page_marker_reads_last(self):
+        # The "Page 1 of 2" footer ends each page's text, outside every
+        # section, not between two columns.
+        count = max(it[0] for it in self.items)
+        for name, pages in self.pages.items():
+            for number, page in enumerate(pages[:count], 1):
+                lines = [_norm(line) for line in page.splitlines() if line.strip()]
+                with self.subTest(extractor=name, page=number):
+                    self.assertEqual(lines[-1:], [f"page {number} of {count}"],
+                                     f"{name}: page {number} ends with {lines[-3:]!r}")
 
 
 def _element_texts(html_text, pattern):

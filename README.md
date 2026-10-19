@@ -707,8 +707,14 @@ build keeps that text equal to the words on the page:
   after Education). Page 1 paints its sidebar first and page 2 its
   main column first, so the main column reads unbroken across the
   page break, between page 1's sidebar and page 2's. Read in stream
-  order, each bullet follows its own job; on the page nothing moved.
-  Past two pages no order keeps the main column unbroken.
+  order, each bullet follows its own job and reads in one piece, and
+  the "Page 1 of 2" footer comes last on its page, outside every
+  section; on the page nothing moved. Past two pages no order keeps
+  the main column unbroken.
+- **No odd characters.** No space a reader may not split words on, no
+  zero-width character, no U+FFFD and no private-use code point, read
+  with pypdf and pdfium (poppler's pdftotext turns U+00A0 into a
+  space, so it would not see one).
 - **What parsers document asking for.** Each job's dates read on one
   line, the contact details come first as page text (not in a header,
   footer or text box), and the text layer holds no word the page does
@@ -717,10 +723,11 @@ build keeps that text equal to the words on the page:
 
 `tests/test_text_extraction.py` builds both documents and checks that
 pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
-every word on the page and no other, the dates on one line and the
-contact details first; and that pypdf, pdfium and `pdftotext -raw`,
-which read in stream order, keep each bullet with its job and no
-sidebar heading inside the main column. A missing pdfplumber or
+every word on the page and no other, none of the odd characters above
+and no word split into letters, the dates on one line and the contact
+details first; and that pypdf, pdfium and `pdftotext -raw`, which read
+in stream order, keep each bullet whole and with its job, no sidebar
+heading inside the main column, and the footer last on its page. A missing pdfplumber or
 pdftotext is reported as a skip that names it.
 
 The rest is in your data, and in what you do when you apply:
@@ -1173,7 +1180,7 @@ small page of their own.
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_worker_protocol.py`     | The worker's own plumbing: frames it cannot write, the per-request environment, the stale-placement report, the pixel comparison |
 | `test_build_placement.py`     | A gap entry with `bullets:` left empty; a placement solved for other data, or unreadable, reported as such by the CLI and the worker |
-| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show; read in stream order, each bullet follows its job and the main column reads unbroken; which optional extractors were missing |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show, no odd code points, no word split into letters; read in stream order, each bullet whole and after its job, the main column unbroken, the footer last; which optional extractors were missing |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself; a root that is not a process id |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`), including the experience heading kept with its first job across a rounding error, and a continuation that opens on a group label |

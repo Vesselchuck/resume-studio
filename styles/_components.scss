@@ -414,9 +414,16 @@
    rail: contact info (top-right) to page marker (bottom-
    right). The left side is already heavy with the sidebar
    column; placing the footer right rather than left balances
-   the page's visual weight rather than piling it up.       */
+   the page's visual weight rather than piling it up.
+
+   z-index 2 paints it, and writes its text, after both columns
+   (z-index 0 and 1, see .sidebar in _layout.scss). At auto it
+   came between them in the PDF's text, between Education and
+   page 2's sidebar, where a parser reading in that order could
+   take "Page 2 of 2" into a section. It overlaps nothing.      */
 .page-footer {
   position: absolute;
+  z-index: 2;
   inset-block-end: 0.25in;
   inset-inline-end: var(--page-margin);
 }
