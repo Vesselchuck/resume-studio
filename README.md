@@ -698,7 +698,13 @@ build keeps that text equal to the words on the page:
   a details block (`Manrope Tracked` 600), which poppler's pdftotext
   read as "SECURIT Y CLEARANCE".
 - **Real spaces.** A space that is only markup between two elements
-  can vanish from the text; the name's is inside the first one.
+  can vanish from the text; the name's is inside the first one. And no
+  letter is kerned against a space: Manrope pulled the space after a
+  capital L, Y, T or K in by up to 0.05em, and Newsreader kerned A, V
+  and others against it, so the letter's box overlapped the space and
+  Xpdf's `pdftotext -raw`, pdfium and Tesseract read "ESLClassrooms"
+  and "SQLServer". The font cuts carry no kerning against a space; the
+  word after such a pair sits up to half a point further right.
 - **Text in reading order.** Some readers take the text in the order it
   is written into the PDF, not by where it sits on the page, and
   Chromium writes it in paint order. Nothing inside a column is
@@ -712,9 +718,15 @@ build keeps that text equal to the words on the page:
   section; on the page nothing moved. Past two pages no order keeps
   the main column unbroken.
 - **No odd characters.** No space a reader may not split words on, no
-  zero-width character, no U+FFFD and no private-use code point, read
-  with pypdf and pdfium (poppler's pdftotext turns U+00A0 into a
-  space, so it would not see one).
+  zero-width character, no U+FFFD, no private-use code point and no
+  soft hyphen, read with pypdf and pdfium (poppler's pdftotext turns
+  U+00A0 into a space, so it would not see one). No `/ActualText`
+  either: a reader that honours it and one that doesn't would read
+  different words.
+- **No hidden text.** Every glyph is at least 4pt, clearly darker than
+  the page (at least 15 RGB units from white), drawn with a visible
+  render mode and inside the page: the rules published hidden-text
+  detectors apply.
 - **What parsers document asking for.** Each job's dates read on one
   line, the contact details come first as page text (not in a header,
   footer or text box), and the text layer holds no word the page does
@@ -724,11 +736,14 @@ build keeps that text equal to the words on the page:
 `tests/test_text_extraction.py` builds both documents and checks that
 pypdf and pdfium (and pdfplumber and pdftotext, when installed) read
 every word on the page and no other, none of the odd characters above
-and no word split into letters, the dates on one line and the contact
-details first; and that pypdf, pdfium and `pdftotext -raw`, which read
-in stream order, keep each bullet whole and with its job, no sidebar
-heading inside the main column, and the footer last on its page. A missing pdfplumber or
-pdftotext is reported as a skip that names it.
+and no word split into letters, the dates on one line, the contact
+details first and each of them on one line, and no hidden text; that
+pypdf, pdfium and `pdftotext -raw`, which read in stream order, keep
+each bullet whole and with its job, no sidebar heading inside the main
+column, and the footer last on its page; and, when pdfminer.six is
+installed, that its layout order keeps each bullet whole and with its
+job too. A missing pdfplumber, pdfminer.six or pdftotext is reported as
+a skip that names it.
 
 The rest is in your data, and in what you do when you apply:
 
@@ -1112,10 +1127,12 @@ so letter widths and the layout are unchanged; the pixels differ
 slightly at the edges of letters, where a TrueType font is smoothed
 differently from a drawn shape.
 
-`build/make_static_fonts.py` makes the cuts. It is a one-off tool, not
-a build step: the files it writes are committed, and it needs
-fontTools and brotli, which nothing else uses
-(`py -m pip install fonttools brotli`). Drawing text at a weight or a
+`build/make_static_fonts.py` makes the cuts, and drops every kerning
+pair against a space from them (see "Text a machine can read"). It is a
+one-off tool, not a build step: the files it writes are committed, and
+it needs fontTools and brotli, which nothing else uses
+(`py -m pip install fonttools==4.67.0 brotli==1.2.0`, the versions that
+cut the committed files). Drawing text at a weight or a
 Newsreader size that has no cut makes `tests/test_font_faces.js`
 fail (as does letter-spacing on top of the tracked cut); the fix is a line in that script, running it, and an
 `@font-face` rule in `styles/_fonts.scss`.
@@ -1180,7 +1197,7 @@ small page of their own.
 | `test_worker_equivalence.py`  | Warm Python worker == cold CLI, byte for byte, in a built copy of the project |
 | `test_worker_protocol.py`     | The worker's own plumbing: frames it cannot write, the per-request environment, the stale-placement report, the pixel comparison |
 | `test_build_placement.py`     | A gap entry with `bullets:` left empty; a placement solved for other data, or unreadable, reported as such by the CLI and the worker |
-| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show, no odd code points, no word split into letters; read in stream order, each bullet whole and after its job, the main column unbroken, the footer last; which optional extractors were missing |
+| `test_text_extraction.py`     | The PDFs' text reads back as every word on the page: no lost ligatures, the name and role whole, a word longer than its column kept on the page; dates on one line, contact details first, no word the page does not show, no odd code points or soft hyphens, no word split into letters, contact details each on one line, no hidden text or ActualText; read in stream order (and pdfminer.six's layout order, when installed), each bullet whole and after its job, the main column unbroken, the footer last; which optional extractors were missing |
 | `test_pdf_fonts.py`           | The PDFs embed their fonts as TrueType, not Type 3 |
 | `test_power.py`               | Windows power-throttling opt-out: the process tree, and (on Windows) the setting itself; a root that is not a process id |
 | `test_solve_layout.js`        | The layout solver (`build/solve_layout.js`), including the experience heading kept with its first job across a rounding error, and a continuation that opens on a group label |
@@ -1204,7 +1221,7 @@ small page of their own.
 | `test_hidden_release.js`      | Chromium closes while the window is hidden and comes back when it is shown, never in the middle of a render or right after one |
 | `test_failure_recovery.js`    | A killed Chromium is replaced; the window shown during a pending release keeps it; unreadable entries in `data/`; a failed render ends for every window; a failed start leaves no Chromium; no usable Python; queued work does not run after shutdown; the letter's layout check; a check that cannot run fails the render; a Chromium that never opens a page |
 | `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium, and Chromium closing during it cannot take the engine down |
-| `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size |
+| `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size; no font kerns a letter against a space |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
 | `test_env_parsing.js`         | `PYTHON` (quotes, the 3.10 floor), Python detection (a version, an absolute path, one that is not plain ASCII, what the log shows), `NO_COLOR` / `FORCE_COLOR` parsing, the compile cache turned off, or ignored by an older Node |
 | `test_dist_lock.js`           | `dist/`'s lock: a stale one is taken over, a live one waited for, one that can be neither created nor read given up on; a CLI build beside back-to-back previews |

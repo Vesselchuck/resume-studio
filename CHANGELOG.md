@@ -42,6 +42,28 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+- **Fixed.** The fonts kerned some letters against a space: Manrope
+  pulled the space after a capital L, Y, T or K in by up to 0.05em, and
+  Newsreader kerned A, V and others against it. The letter's box then
+  overlapped the space, and Xpdf's `pdftotext -raw`, pdfium and
+  Tesseract read "ESL Classrooms" as "ESLClassrooms" and "SQL Server"
+  as "SQLServer". `build/make_static_fonts.py` now drops every kerning
+  pair against a space (U+0020 and U+00A0) and the font cuts are
+  regenerated; every other pair is unchanged. On the page, the word
+  after such a pair moves up to half a point to the right ("SKILLS" in
+  KEY SKILLS, "EXPERIENCE" in WORK EXPERIENCE, the location after each
+  date's year); nothing else moves and page breaks are unchanged.
+  `tests/test_font_faces.js` checks the fonts for such pairs. The
+  committed PDF snapshots no longer match and need
+  `python build/snapshot_pdf.py --update-all` (the comparison is off by
+  default and in CI).
+- **Added.** `tests/test_text_extraction.py` checks that no glyph is
+  hidden the way published hidden-text detectors look for it (under
+  4pt, too close to white, an invisible render mode, off the page),
+  that the PDFs carry no `/ActualText`, that no soft hyphen and no
+  contact detail split over two lines reaches the text, and, when
+  pdfminer.six is installed, that its layout order keeps each bullet
+  whole and with its job.
 - **Fixed.** The "Page 1 of 2" footer was written into the PDF's text
   between the two columns: on page 2 between Education and the
   sidebar, where a parser reading the text in order could take it into

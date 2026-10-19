@@ -34,10 +34,13 @@ extractors in requirements.txt. For each:
   • no odd code points: spaces a reader may not split words on,
     zero-width characters, U+FFFD, private-use slots;
   • no capital letter stands alone (other than A and I), as tracked
-    uppercase read before its tracking moved into the font.
+    uppercase read before its tracking moved into the font;
+  • no soft hyphen (U+00AD): a reader keeps it inside the word, so a
+    search for the word misses it.
 
 The template has no details block, so TestDetailLabels builds a copy
-with one and checks that its labels read whole.
+with one and checks that its labels read whole and its values each on
+one line.
 
 TestReadingOrder reads the résumé in the order its text is written into
 the PDF, which is what pypdf, pdfium and `pdftotext -raw` give and what
@@ -55,13 +58,32 @@ sidebar heading falls between the main column's first heading and its
 last, and that the "Page 1 of 2" footer ends each page's text. The
 footer, at z-index auto, had been written between the two columns.
 
+TestLayoutOrder reads it in pdfminer.six's layout order instead, with
+the default LAParams and with boxes_flow=None (top to bottom, then left
+to right): the order parsers built on pdfminer.six read, pdfplumber
+among them. It applies the checks that mean something for a reader
+that orders text by position: each bullet follows its own job and reads
+in one piece, and the main column's headings come in order.
+
 TestParserConventions guards what résumé parsers document asking of
 the text, all of which the build already gives: each job's dates on
-one line, the contact details before the first section, and no word in
-the text layer that the page does not show.
+one line, the contact details before the first section, each contact
+detail and link text whole on one line (so a wrap can never split an
+email or a URL), and no word in the text layer that the page does not
+show.
 
-pdfplumber and pdftotext, also checked when the fix was made, are not
-project dependencies; they are used here when installed. A missing one
+TestHiddenText guards against what hidden-text detectors look for
+(arXiv 2605.28999), none of which the build does: no glyph under 4 pt,
+none whose colour is within 15 RGB units of the white page (two of the
+paper's rules), none drawn in an invisible render mode or outside
+the crop box (tricks it names), and no /ActualText, which makes a
+reader read text other than the glyphs shown. Chromium writes no
+/ActualText for these documents; with ligatures on it wrote none for
+the ligature glyphs either (see above).
+
+pdfplumber and pdftotext, also checked when the fix was made, and
+pdfminer.six, which pdfplumber is built on, are not project
+dependencies; they are used here when installed. A missing one
 used to drop out without a word, so a run that never read the PDFs
 with pdftotext looked the same as one that did. TestOptionalExtractors
 now skips once for each one that is missing, and says which. The
@@ -157,7 +179,7 @@ def _version(name):
             r = subprocess.run([shutil.which("pdftotext"), "-v"], capture_output=True, text=True)
             return (r.stdout + r.stderr).strip().splitlines()[0]
         from importlib.metadata import version
-        return version({"pdfium": "pypdfium2"}.get(name, name))
+        return version({"pdfium": "pypdfium2", "pdfminer": "pdfminer.six"}.get(name, name))
     except Exception:  # noqa: BLE001 — only ever decoration on a failure
         return "(version unknown)"
 
@@ -180,6 +202,13 @@ class TestOptionalExtractors(unittest.TestCase):
         except ImportError:
             self.skipTest("pdfplumber is not installed, so the text layer "
                           "is not read with it (optional)")
+
+    def test_pdfminer_is_installed(self):
+        try:
+            import pdfminer  # noqa: F401
+        except ImportError:
+            self.skipTest("pdfminer.six is not installed, so the text layer "
+                          "is not read in its layout order (optional)")
 
     def test_pdftotext_is_on_path(self):
         if not shutil.which("pdftotext"):
@@ -233,6 +262,16 @@ class TestTextLayer(unittest.TestCase):
                 with self.subTest(document=doc, extractor=name):
                     found = Counter(f"U+{ord(c):04X}" for c in self.ODD.findall(text))
                     self.assertEqual(found, {}, f"{name} ({_version(name)})")
+
+    def test_no_soft_hyphens(self):
+        # Xpdf's pdftotext reads a soft hyphen in the data inside its
+        # word ("Imper" U+00AD "ator" as "Impera" U+00AD " tor"), where a
+        # search for the word misses it. pypdf and pdfium drop it.
+        for doc, _ in DOCS:
+            for name, text in self._texts(doc).items():
+                with self.subTest(document=doc, extractor=name):
+                    words = [w for w in text.split() if "\u00ad" in w]
+                    self.assertEqual(words, [], f"{name} ({_version(name)}) reads soft hyphens")
 
     def test_no_word_reads_as_single_letters(self):
         # A capital letter standing alone, other than A and I: how tracked
@@ -356,6 +395,25 @@ def _pdftotext_raw_pages(path):
 STREAM_ORDER = {"pypdf": _pypdf_pages, "pdfium": _pdfium_pages, "pdftotext -raw": _pdftotext_raw_pages}
 
 
+def _pdfminer_pages(path, **laparams):
+    try:
+        from pdfminer.high_level import extract_text
+        from pdfminer.layout import LAParams
+    except ImportError:
+        return None
+    import logging
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+    # One form feed after each page, the last one included.
+    return extract_text(str(path), laparams=LAParams(**laparams)).split("\f")
+
+
+# Extractors that order text by its position on the page: pdfminer.six's
+# layout analysis, as it ships, and sorted only top to bottom, then left
+# to right.
+LAYOUT_ORDER = {"pdfminer": _pdfminer_pages,
+                "pdfminer boxes_flow=None": lambda path: _pdfminer_pages(path, boxes_flow=None)}
+
+
 class TestReadingOrder(unittest.TestCase):
     """The résumé's text, in the order it is written into the PDF,
     follows the document: each bullet after its own job, the main
@@ -363,13 +421,15 @@ class TestReadingOrder(unittest.TestCase):
     main column's pages. See the module docstring for why it once
     did not."""
 
+    ORDER = STREAM_ORDER
+
     @classmethod
     def setUpClass(cls):
         outline = _Outline()
         outline.feed((PROJECT.dist / "index.html").read_text(encoding="utf-8"))
         cls.items = outline.items
         cls.pages = {}
-        for name, fn in STREAM_ORDER.items():
+        for name, fn in cls.ORDER.items():
             pages = fn(_pdf("Resume"))
             if pages is not None:
                 cls.pages[name] = pages
@@ -459,6 +519,24 @@ class TestReadingOrder(unittest.TestCase):
                                      f"{name}: page {number} ends with {lines[-3:]!r}")
 
 
+class TestLayoutOrder(TestReadingOrder):
+    """The résumé's text, in pdfminer.six's layout order, follows the
+    document too: each bullet after its own job and in one piece, and
+    the main column's sections in order. Used when pdfminer.six is
+    installed (TestOptionalExtractors says when it is not)."""
+
+    ORDER = LAYOUT_ORDER
+
+    # Not checked here. The outline is the same HTML, checked above. A
+    # reader that orders text by position reads each page's sidebar
+    # beside its main column, so the sidebar falls between the main
+    # column's pages by design; and nothing in its order promises the
+    # footer comes last. Both are stream-order checks.
+    test_the_outline_is_found = None
+    test_the_main_column_reads_unbroken = None
+    test_the_page_marker_reads_last = None
+
+
 def _element_texts(html_text, pattern):
     """The text of every element `pattern` (a regex with one group for
     its inner HTML) matches, tags stripped and normalised."""
@@ -466,14 +544,30 @@ def _element_texts(html_text, pattern):
             for inner in re.findall(pattern, html_text, re.S)]
 
 
+def _contact_values(html_text):
+    """The header's contact details, the details blocks' values and the
+    text of every link, from the final HTML, each once."""
+    values = _element_texts(html_text, r'<span class="(?:header-contact-(?:address|item)|detail-value)">'
+                                       r'(.*?)</span>')
+    return list(dict.fromkeys(values + _element_texts(html_text, r"<a\b[^>]*>(.*?)</a>")))
+
+
+def _not_on_one_line(text, values):
+    """The `values` no single line of `text` holds whole."""
+    lines = [_norm(line) for line in text.splitlines()]
+    return [v for v in values if not any(v in line for line in lines)]
+
+
 class TestParserConventions(unittest.TestCase):
     """What résumé parsers document asking of the text, and the build
     already gives: each job's dates on one line (Textkernel's quality
     codes 224/225), the contact details first, as page text (Greenhouse
-    and RChilli lose them from headers, footers and text boxes), and no
-    text that is not on the page (hidden text is flagged as keyword
-    stuffing; detectors compare the text layer with what is shown).
-    These guard them; nothing here was ever broken."""
+    and RChilli lose them from headers, footers and text boxes), each
+    contact detail and link whole on one line (a parser matches an
+    email or a URL within a line), and no text that is not on the page
+    (hidden text is flagged as keyword stuffing; detectors compare the
+    text layer with what is shown). These guard them; nothing here was
+    ever broken."""
 
     @classmethod
     def setUpClass(cls):
@@ -510,6 +604,20 @@ class TestParserConventions(unittest.TestCase):
                 self.assertEqual(late, [], f"{name}: contact details missing or after "
                                  "the first section heading")
 
+    def test_each_contact_detail_reads_on_one_line(self):
+        # overflow-wrap breaks a word too wide for its column anywhere,
+        # an email or a URL included (TestLongWords); this is where one
+        # would show.
+        values = _contact_values(self.html)
+        self.assertGreater(len(values), 2, values)
+        for name, text in self.texts.items():
+            split = _not_on_one_line(text, values)
+            near = [" ".join(line.split()) for line in text.splitlines()
+                    if any(v[:6] in _norm(line) for v in split)]
+            with self.subTest(extractor=name):
+                self.assertEqual(split, [], f"{name} ({_version(name)}) does not read these "
+                                 f"on one line; it read {near[:4]!r}")
+
     def test_no_text_that_is_not_on_the_page(self):
         shown = Counter(w.lower() for w in _visible_words(self.html))
         for name, text in self.texts.items():
@@ -520,8 +628,145 @@ class TestParserConventions(unittest.TestCase):
                                  "page does not show")
 
 
+def _hidden_glyphs(path):
+    """Every glyph a hidden-text detector would flag, as (page, character,
+    why), read with pdfium; spaces and the line breaks it adds are not
+    glyphs."""
+    import ctypes
+    import math
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+    # Modes that fill the glyph, so that its fill colour is what shows.
+    filled = {raw.FPDF_TEXTRENDERMODE_FILL, raw.FPDF_TEXTRENDERMODE_FILL_STROKE,
+              raw.FPDF_TEXTRENDERMODE_FILL_CLIP, raw.FPDF_TEXTRENDERMODE_FILL_STROKE_CLIP}
+    found = []
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        for number in range(len(doc)):
+            page = doc[number]
+            left, bottom, right, top = page.get_cropbox()
+            tp = page.get_textpage()
+            matrix = raw.FS_MATRIX()
+            r, g, b, a = (ctypes.c_uint() for _ in range(4))
+            for i in range(tp.count_chars()):
+                char = chr(raw.FPDFText_GetUnicode(tp, i))
+                if char.isspace() or raw.FPDFText_IsGenerated(tp, i):
+                    continue
+                why = []
+                # The size set by Tf, scaled by the text and page matrices
+                # (Chromium sets it in CSS px under a 0.75 scale).
+                raw.FPDFText_GetMatrix(tp, i, matrix)
+                scale = math.sqrt(abs(matrix.a * matrix.d - matrix.b * matrix.c))
+                size = raw.FPDFText_GetFontSize(tp, i) * scale
+                if size < 4:
+                    why.append(f"{size:.2f} pt")
+                # The colour as it shows: blended over the white page by its
+                # opacity, then compared with white by Euclidean distance.
+                if raw.FPDFText_GetFillColor(tp, i, r, g, b, a):
+                    shown = [(c.value * a.value + 255 * (255 - a.value)) / 255 for c in (r, g, b)]
+                    if math.dist(shown, (255, 255, 255)) < 15:
+                        why.append(f"colour {tuple(round(c) for c in shown)} on white")
+                mode = raw.FPDFTextObj_GetTextRenderMode(raw.FPDFText_GetTextObject(tp, i))
+                if mode not in filled:
+                    why.append(f"render mode {mode}")
+                x0, y0, x1, y1 = tp.get_charbox(i)
+                if x0 < left or y0 < bottom or x1 > right or y1 > top:
+                    why.append(f"at ({x0:.0f}, {y0:.0f}), outside the crop box")
+                if why:
+                    found.append((number + 1, char, ", ".join(why)))
+            tp.close()
+    finally:
+        doc.close()
+    return found
+
+
+def _content_operations(path):
+    """(where, operands, operator, resources) for every operation in the
+    pages' content streams and in the form XObjects they draw, each form
+    read once, read with pypdf."""
+    import logging
+    from pypdf import PdfReader
+    from pypdf.generic import ContentStream
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    reader = PdfReader(str(path))
+    seen = set()
+
+    def walk(stream, resources, where):
+        resources = resources.get_object() if resources is not None else {}
+        xobjects = resources.get("/XObject")
+        for operands, op in ContentStream(stream, reader).operations:
+            yield where, operands, op, resources
+            if op == b"Do" and xobjects is not None:
+                ref = xobjects.get_object().raw_get(operands[0])
+                form = ref.get_object()
+                key = getattr(ref, "idnum", id(form))
+                if form.get("/Subtype") == "/Form" and key not in seen:
+                    seen.add(key)
+                    yield from walk(form, form.get("/Resources") or resources,
+                                    f"{where}, form {operands[0]}")
+
+    for number, page in enumerate(reader.pages, 1):
+        contents = page.get_contents()
+        if contents is not None:
+            yield from walk(contents, page.get("/Resources"), f"page {number}")
+
+
+class TestHiddenText(unittest.TestCase):
+    """Nothing in either document is hidden the ways a hidden-text
+    detector looks for (arXiv 2605.28999), and no /ActualText makes a
+    reader read other text than the glyphs show. A résumé found doing
+    either is flagged as keyword stuffing or prompt injection. These
+    guard them; the build does none of them."""
+
+    def test_no_glyph_is_hidden(self):
+        # The paper's rules: text under 4 pt, and text within 15 units
+        # (Euclidean, 0-255 RGB) of its background. The background here
+        # is the white page (styles/_print.scss): the templates draw no
+        # fill behind text, only rules. And two of the tricks it names:
+        # a render mode that does not fill the glyph (3 draws nothing,
+        # 7 only clips), and text outside the visible page.
+        for doc, _ in DOCS:
+            with self.subTest(document=doc):
+                found = _hidden_glyphs(_pdf(doc))
+                reasons = Counter(why for _, _, why in found)
+                self.assertEqual(found, [], f"pdfium ({_version('pdfium')}) reads {len(found)} "
+                                 f"hidden glyphs, as {dict(reasons.most_common(4))}")
+
+    def test_no_invisible_render_mode_is_set(self):
+        # The same render modes, read from the content streams by pypdf:
+        # a second reader, and one that sees a `Tr` with no glyph after it.
+        for doc, _ in DOCS:
+            with self.subTest(document=doc):
+                found = [f"{where}: {operands[0]} Tr"
+                         for where, operands, op, _ in _content_operations(_pdf(doc))
+                         if op == b"Tr" and int(operands[0]) in (3, 7)]
+                self.assertEqual(found, [])
+
+    def test_no_actual_text(self):
+        # Chromium writes none for these documents, so any /ActualText
+        # is new: a reader takes its text in place of the glyphs', which
+        # is text the page does not show unless the two match. Checked
+        # in marked-content properties both inline and named in the
+        # resources' /Properties.
+        for doc, _ in DOCS:
+            found = []
+            for where, operands, op, resources in _content_operations(_pdf(doc)):
+                if op != b"BDC" or len(operands) < 2:
+                    continue
+                props = operands[1]
+                if not hasattr(props, "keys"):
+                    named = resources.get("/Properties")
+                    props = named.get_object().get(props) if named is not None else None
+                props = props.get_object() if props is not None else {}
+                if "/ActualText" in props:
+                    found.append(f"{where}: {operands[0]} /ActualText {str(props['/ActualText'])!r}")
+            with self.subTest(document=doc):
+                self.assertEqual(found, [])
+
+
 class TestDetailLabels(unittest.TestCase):
-    """The labels of a details block read as whole words.
+    """The labels of a details block read as whole words, and its
+    values each on one line.
 
     Built in a copy of its own, from the template with the details
     block its comments give as an example, first in the sidebar.
@@ -569,6 +814,22 @@ class TestDetailLabels(unittest.TestCase):
                     self.assertIsNotNone(
                         re.search(r"\s+".join(map(re.escape, label.split())), text),
                         f"{name} ({_version(name)}) read it as {near[:3]!r}")
+
+    def test_the_values_read_on_one_line(self):
+        # As TestParserConventions checks the header's: the LinkedIn
+        # value is a URL, and a link.
+        values = _contact_values((self.project.dist / "index.html").read_text(encoding="utf-8"))
+        for row in self.BLOCK["rows"]:
+            self.assertIn(_norm(row["value"]), values)
+        found = list(self.project.dist.glob("*_Resume.pdf"))
+        self.assertEqual(len(found), 1, found)
+        for name, fn in EXTRACTORS.items():
+            text = fn(found[0])
+            if text is None:
+                continue
+            with self.subTest(extractor=name):
+                self.assertEqual(_not_on_one_line(text, values), [],
+                                 f"{name} ({_version(name)}) does not read these on one line")
 
 
 class TestLongWords(unittest.TestCase):

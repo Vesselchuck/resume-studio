@@ -142,6 +142,7 @@ const EXPECTED_SKIPS = [
   { reason: /^no data\/_profile\.yml$/, when: ON_GITHUB },
   { reason: /^pdfplumber is not installed, so the text layer is not read with it \(optional\)$/, when: true },
   { reason: /^pdftotext is not on PATH, so the text layer is not read with it \(optional\)$/, when: true },
+  { reason: /^pdfminer\.six is not installed, so the text layer is not read in its layout order \(optional\)$/, when: true },
 ].filter(s => s.when).map(s => s.reason);
 
 /**
