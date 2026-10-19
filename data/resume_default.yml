@@ -248,6 +248,8 @@ mainColumn:
   #               "Mar 2021 – Present"
   #               "2020 – 2024"
   #               "May 2018 – December 2021"
+  #             End a current job with "Present": résumé parsers read
+  #             that as current.
   #
   #   datetime: the START date in a machine-readable form. This is for
   #             screen readers (so they can announce dates correctly)
@@ -257,7 +259,10 @@ mainColumn:
   #   location: city, country/state. Free text.
   #
   #   bullets:  a list of achievement lines. Each bullet should describe
-  #             a concrete result, ideally with a number. To make part
+  #             a concrete result, ideally with a number. Name the skills
+  #             you used there, as your Key Skills list names them:
+  #             résumé parsers date a skill by the job it appears in, and
+  #             a sidebar list says nothing about when. To make part
   #             of a bullet appear bold, wrap it in double asterisks:
   #
   #               "Cut onboarding time by **30%**..."

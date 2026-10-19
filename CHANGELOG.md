@@ -42,6 +42,17 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+- **Added.** The README's "Text a machine can read" says what résumé
+  parsers document asking for and what is left to your data: skills
+  named in your jobs' bullets, standard headings, "Present", a link's
+  address as its text, and checking the fields an application form
+  fills in from the PDF. The template's comments say the same where
+  you write dates and bullets. `tests/test_text_extraction.py` now
+  checks that each job's dates read on one line, the contact details
+  come first, and the text layer holds no word the page does not show.
+  Its pdftotext reads UTF-8: Xpdf's Latin-1 default had turned an en
+  dash, or a ligature, into U+FFFD, so the ligature check could not
+  see one there.
 - **Fixed.** A parser that reads a PDF's text in the order it is
   written, not by where it sits on the page, filed most of the
   résumé's bullets under the wrong job: each page's bullets were

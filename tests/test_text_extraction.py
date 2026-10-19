@@ -49,6 +49,11 @@ final HTML, that each bullet follows its own job's title, that the main
 column's headings come in order, and that no sidebar heading falls
 between the main column's first heading and its last.
 
+TestParserConventions guards what résumé parsers document asking of
+the text, all of which the build already gives: each job's dates on
+one line, the contact details before the first section, and no word in
+the text layer that the page does not show.
+
 pdfplumber and pdftotext, also checked when the fix was made, are not
 project dependencies; they are used here when installed. A missing one
 used to drop out without a word, so a run that never read the PDFs
@@ -133,7 +138,9 @@ def _pdftotext(path):
     exe = shutil.which("pdftotext")
     if not exe:
         return None
-    return subprocess.run([exe, "-layout", str(path), "-"], capture_output=True,
+    # Xpdf's pdftotext writes Latin-1 unless told otherwise, which turned
+    # an en dash, or a ligature, into U+FFFD.
+    return subprocess.run([exe, "-layout", "-enc", "UTF-8", str(path), "-"], capture_output=True,
                           text=True, encoding="utf-8", errors="replace").stdout
 
 
@@ -395,6 +402,67 @@ class TestReadingOrder(unittest.TestCase):
                 inside = [text for p, text in sorted(found["side"]) if lo < p < hi]
                 self.assertEqual(inside, [], f"{name}: sidebar headings read between "
                                  "the main column's first and last heading")
+
+
+def _element_texts(html_text, pattern):
+    """The text of every element `pattern` (a regex with one group for
+    its inner HTML) matches, tags stripped and normalised."""
+    return [_norm(html.unescape(re.sub(r"<[^>]+>", " ", inner)))
+            for inner in re.findall(pattern, html_text, re.S)]
+
+
+class TestParserConventions(unittest.TestCase):
+    """What résumé parsers document asking of the text, and the build
+    already gives: each job's dates on one line (Textkernel's quality
+    codes 224/225), the contact details first, as page text (Greenhouse
+    and RChilli lose them from headers, footers and text boxes), and no
+    text that is not on the page (hidden text is flagged as keyword
+    stuffing; detectors compare the text layer with what is shown).
+    These guard them; nothing here was ever broken."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (PROJECT.dist / "index.html").read_text(encoding="utf-8")
+        cls.texts = {}
+        for name, fn in EXTRACTORS.items():
+            text = fn(_pdf("Resume"))
+            if text is not None:
+                cls.texts[name] = text
+
+    def test_each_job_date_reads_on_one_line(self):
+        dates = _element_texts(self.html, r'<time class="job-date"[^>]*>(.*?)</time>')
+        self.assertGreater(len(dates), 2, dates)
+        for name, text in self.texts.items():
+            lines = [_norm(line) for line in text.splitlines()]
+            # Counted, not found: the template's dates are all alike.
+            split = [d for d, n in Counter(dates).items()
+                     if sum(line.count(d) for line in lines) < n]
+            with self.subTest(extractor=name):
+                self.assertEqual(split, [], f"{name} ({_version(name)}) splits these dates "
+                                 "across lines")
+
+    def test_the_contact_details_come_first(self):
+        contact = _element_texts(self.html, r'<span class="header-contact-(?:address|item)">(.*?)</span>')
+        self.assertGreater(len(contact), 1, contact)
+        headings = _element_texts(self.html, r'<h2 class="section-heading[^"]*"[^>]*>(.*?)</h2>')
+        self.assertTrue(headings, "no section heading found in the HTML")
+        for name, text in self.texts.items():
+            flat, starts = _cells(text)
+            first = min((at for at, cell in starts if cell in headings), default=-1)
+            with self.subTest(extractor=name):
+                self.assertGreaterEqual(first, 0, f"{name}: no section heading on a line of its own")
+                late = [c for c in contact if not 0 <= flat.find(c) < first]
+                self.assertEqual(late, [], f"{name}: contact details missing or after "
+                                 "the first section heading")
+
+    def test_no_text_that_is_not_on_the_page(self):
+        shown = Counter(w.lower() for w in _visible_words(self.html))
+        for name, text in self.texts.items():
+            got = Counter(w.lower() for w in re.findall(r"[A-Za-z]+", text))
+            extra = {w: n - shown[w] for w, n in got.items() if n > shown[w]}
+            with self.subTest(extractor=name):
+                self.assertEqual(extra, {}, f"{name} ({_version(name)}) reads words the "
+                                 "page does not show")
 
 
 class TestDetailLabels(unittest.TestCase):
