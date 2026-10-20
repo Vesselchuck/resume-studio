@@ -42,6 +42,36 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.1.0] — 2026-10-19
+
+*The Studio's local server now answers only requests that carry a
+token made fresh at each start, so other programs on the computer can
+no longer read your data or run builds through it: open the Studio
+from the link `npm run ui` prints. The PDFs read better in résumé
+parsers and text extractors: their text is written in reading order
+with the footer last, no letter is kerned against a space, and the
+date line carries no symbol. On the page, a word after some capital
+letters sits up to half a point further right and the dot in each
+date line is drawn; nothing else moves. The Studio, the build and the
+desktop app take over eighty fixes, and CI runs every test strictly
+on Linux, Windows and the minimum versions.*
+
+### Upgrading from 1.0.0
+
+1. Open the Studio from the link `npm run ui` or `npm run ui:serve`
+   prints at each start. A bookmarked address such as
+   `http://127.0.0.1:PORT/` shows a page saying where to open it from.
+2. If you run the tests, run `py -m pip install -r requirements.txt`
+   once: pdfminer.six is a new test dependency, and without it
+   `STRICT_TESTS=1` fails.
+3. If you use the snapshot comparison, refresh your own fixture with
+   `python build/snapshot_pdf.py --update-all`: the fonts and the date
+   line's dot changed a few pixels.
+
+### Changes
+
 - **Changed.** The dot between a job's dates and its location is drawn,
   no longer the character "·" (U+00B7), so the text layer reads "MMM
   YYYY – MMM YYYY Roma, Imperium Romanum" with no symbol after the date:
@@ -2202,8 +2232,10 @@ the old names can still be followed.
 | 0.9.1 | — | readable and accessible PDFs, static fonts, a lighter Studio |
 | 0.10.0 | — | breaking: links must be full addresses; a recovering, keyboard-ready Studio |
 | 1.0.0 | — | the interface settled; Node 20.19 minimum, faster builds |
+| 1.1.0 | — | a token-protected Studio; PDFs that read better in parsers |
 
 [Unreleased]: #unreleased
+[1.1.0]: #110--2026-10-19
 [1.0.0]: #100--2026-10-02
 [0.10.0]: #0100--2026-09-29
 [0.9.1]: #091--2026-09-27
