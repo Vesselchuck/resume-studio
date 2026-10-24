@@ -15,7 +15,7 @@
 # Build pipeline (build.py + crop_pdf.py)
 PyYAML==6.0.3
 Jinja2==3.1.6
-pypdf==6.19.0
+pypdf==6.21.2
 
 # Snapshot test and Studio preview (build/snapshot_pdf.py, build/worker.py)
 pypdfium2==5.13.0
