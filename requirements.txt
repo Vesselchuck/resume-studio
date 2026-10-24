@@ -19,7 +19,7 @@ pypdf==6.19.0
 
 # Snapshot test and Studio preview (build/snapshot_pdf.py, build/worker.py)
 pypdfium2==5.13.0
-Pillow==12.3.0
+Pillow==13.0.0
 
 # Studio preview only: faster deflate for the preview PNGs (build/_png.py).
 # Optional — without it the preview falls back to the standard zlib.
