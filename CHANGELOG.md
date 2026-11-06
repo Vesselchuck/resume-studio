@@ -42,7 +42,17 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
-Nothing yet.
+- **Changed.** Python 3.11 or newer is required, up from 3.10. Pillow
+  13, below, does not install on 3.10, which reached end of life in
+  October 2026. Python 3.14 is still recommended. The build, the
+  Studio and the test runner refuse an older `PYTHON` by name, and the
+  CI job on the minimum versions runs Python 3.11. On 3.10, install
+  3.11 or newer and run `pip install -r requirements.txt` (`py -m pip
+  …` on Windows) with it.
+- **Changed.** Pillow 12.3.0 → 13.0.0, which fixes several security
+  issues. Nothing the project uses from Pillow changed: it reads,
+  compares and writes the preview and snapshot images, and the PDFs
+  themselves are drawn by Chromium and rasterized by pdfium.
 
 ## [1.1.0] — 2026-10-19
 
