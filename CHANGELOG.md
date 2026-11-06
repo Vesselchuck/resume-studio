@@ -42,6 +42,26 @@ minor one before 1.0.0).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.1.1] — 2026-11-05
+
+*Python 3.11 is now the minimum, up from 3.10, because Pillow 13 does
+not install on 3.10; Python 3.14 is still recommended. Pillow 13.0.0
+and pypdf 6.21.4 bring the dependencies up to date, Pillow with
+security fixes. The PDFs look and read as before.*
+
+### Upgrading from 1.1.0
+
+1. Check your Python version: `py --version` on Windows, `python3
+   --version` elsewhere. Below 3.11, install Python 3.14 (3.11 or newer
+   works).
+2. With that Python, run `py -m pip install -r requirements.txt`
+   (`pip install -r requirements.txt` elsewhere). This brings Pillow to
+   13.0.0 and pypdf to 6.21.4.
+
+### Changes
+
 - **Changed.** Python 3.11 or newer is required, up from 3.10. Pillow
   13, below, does not install on 3.10, which reached end of life in
   October 2026. Python 3.14 is still recommended. The build, the
@@ -53,6 +73,9 @@ minor one before 1.0.0).
   issues. Nothing the project uses from Pillow changed: it reads,
   compares and writes the preview and snapshot images, and the PDFs
   themselves are drawn by Chromium and rasterized by pdfium.
+- **Changed.** pypdf 6.19.0 → 6.21.4.
+- **Changed.** CI runs on actions/setup-node 7.1.0,
+  actions/setup-python 7.1.0 and actions/upload-artifact 7.0.2.
 
 ## [1.1.0] — 2026-10-19
 
@@ -2243,8 +2266,10 @@ the old names can still be followed.
 | 0.10.0 | — | breaking: links must be full addresses; a recovering, keyboard-ready Studio |
 | 1.0.0 | — | the interface settled; Node 20.19 minimum, faster builds |
 | 1.1.0 | — | a token-protected Studio; PDFs that read better in parsers |
+| 1.1.1 | — | Python 3.11 minimum; Pillow 13 with security fixes |
 
 [Unreleased]: #unreleased
+[1.1.1]: #111--2026-11-05
 [1.1.0]: #110--2026-10-19
 [1.0.0]: #100--2026-10-02
 [0.10.0]: #0100--2026-09-29
