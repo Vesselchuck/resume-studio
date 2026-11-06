@@ -11,7 +11,7 @@
  *
  * And two where the value was taken on trust: cmd.exe's
  * `set PYTHON="C:\…\python.exe"` keeps its quotes, and a Python older
- * than README's 3.10 got as far as a traceback mid-build. detectPython
+ * than README's minimum got as far as a traceback mid-build. detectPython
  * now checks both first.
  *
  * Detection itself: an interpreter under a non-ASCII path came back
@@ -158,11 +158,12 @@ test("cmd.exe's quotes around a path are removed", () => {
   assertEq(pythonOverride({ PYTHON: '"py' }), '"py', 'an unmatched quote is left alone');
 });
 
-test('PYTHON older than README\'s 3.10 is refused, by name', () => {
-  assertEq(MIN_PYTHON, [3, 10], "README.md: 'Python 3.10+'");
+test('PYTHON older than README\'s 3.11 is refused, by name', () => {
+  assertEq(MIN_PYTHON, [3, 11], "README.md: 'Python 3.11+'");
   assertEq(detect({ PYTHON: 'python3.9' }, { 'python3.9': 'Python 3.9.18' }), 'exit 1', '3.9');
   assertEq(detect({ PYTHON: 'python2' }, { python2: 'Python 2.7.18' }), 'exit 1', '2.7');
-  assertEq(detect({ PYTHON: 'python3.10' }, { 'python3.10': 'Python 3.10.0' }), 'python3.10', '3.10');
+  assertEq(detect({ PYTHON: 'python3.10' }, { 'python3.10': 'Python 3.10.16' }), 'exit 1', '3.10');
+  assertEq(detect({ PYTHON: 'python3.11' }, { 'python3.11': 'Python 3.11.0' }), 'python3.11', '3.11');
 });
 
 test('a PYTHON that cannot be run stops here, not mid-build', () => {

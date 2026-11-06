@@ -27,12 +27,14 @@ const c = require('./_console');
 
 /**
  * The oldest Python this project runs on: README.md, "Requirements",
- * says 3.10+. The code relies on it — `Path | None` in signatures that
- * are evaluated at import (build/crop_pdf.py) is a TypeError on 3.9 —
- * so an older interpreter used to fail somewhere in the middle of a
- * build with a traceback that never mentioned the version.
+ * says 3.11+. Pillow 13 (requirements.txt) needs 3.11, so pip cannot
+ * install the pinned packages on 3.10. The code relies on a floor too —
+ * `Path | None` in signatures that are evaluated at import
+ * (build/crop_pdf.py) is a TypeError on 3.9 — so an older interpreter
+ * used to fail somewhere in the middle of a build with a traceback that
+ * never mentioned the version.
  */
-const MIN_PYTHON = [3, 10];
+const MIN_PYTHON = [3, 11];
 
 /**
  * The PYTHON override, trimmed; null when unset or blank.

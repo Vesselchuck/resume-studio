@@ -125,7 +125,7 @@ jobs:
           path: dist/*.pdf
           if-no-files-found: ignore
 
-  # The README gives Node 20.19 and Python 3.10 as the minimums, and
+  # The README gives Node 20.19 and Python 3.11 as the minimums, and
   # nothing ran on them: both other jobs use the recommended 24 and 3.14,
   # so a dependency or a language feature that needs newer would reach a
   # release unnoticed. Same steps as the first job, on the same pinned
@@ -141,7 +141,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Quoted: unquoted, YAML reads 3.10 as the number 3.1.
+      # Quoted: unquoted, YAML reads a version as a number, and 3.10
+      # became 3.1.
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -151,7 +152,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.10"
+          python-version: "3.11"
           cache: pip
 
       - name: Install Node packages

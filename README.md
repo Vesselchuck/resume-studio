@@ -31,8 +31,8 @@ All screenshots show the placeholder data the project ships with
 
 ### Requirements
 
-- **Python** 3.14 recommended; 3.10+ works. CI runs the tests on
-  3.14, and on 3.10 in a job of its own.
+- **Python** 3.14 recommended; 3.11+ works. CI runs the tests on
+  3.14, and on 3.11 in a job of its own.
 - **Node** 24 LTS recommended; 20.19+ works. Playwright 1.63 needs
   Node 20, and Sass (`sass-embedded`, and the file watcher it uses)
   needs 20.19. `package.json` declares the minimum (`engines`), and CI
@@ -1227,7 +1227,7 @@ small page of their own.
 | `test_power_throttling.js`    | The engine asks for the power-throttling opt-out; a slow Python start cannot leak a Chromium, and Chromium closing during it cannot take the engine down |
 | `test_font_faces.js`          | Every piece of text has a font file cut for its weight and size; no font kerns a letter against a space |
 | `test_pipeline_reports.js`    | Every build failure prints why              |
-| `test_env_parsing.js`         | `PYTHON` (quotes, the 3.10 floor), Python detection (a version, an absolute path, one that is not plain ASCII, what the log shows), `NO_COLOR` / `FORCE_COLOR` parsing, the compile cache turned off, or ignored by an older Node |
+| `test_env_parsing.js`         | `PYTHON` (quotes, the 3.11 floor), Python detection (a version, an absolute path, one that is not plain ASCII, what the log shows), `NO_COLOR` / `FORCE_COLOR` parsing, the compile cache turned off, or ignored by an older Node |
 | `test_dist_lock.js`           | `dist/`'s lock: a stale one is taken over, a live one waited for, one that can be neither created nor read given up on; a CLI build beside back-to-back previews |
 | `test_run_tests.js`           | The test runner: a reported failure fails, large output, partial skips, `STRICT_TESTS` and its expected skips (each only where it is right: by platform, and on GitHub), a single target that names no test, a run that writes this checkout's `dist/` |
 
@@ -1453,7 +1453,7 @@ To force a particular Python interpreter:
 
 Without `PYTHON`, the build tries `python`, `py` and `python3` on
 Windows (`python3`, then `python`, elsewhere) and takes the first that
-runs, reports a Python version and is 3.10 or newer. It then runs that
+runs, reports a Python version and is 3.11 or newer. It then runs that
 interpreter by the absolute path it reports for itself: on Windows a
 bare name is looked up in the current folder before `PATH`, and that
 is usually the project, so a `python.exe` left there could otherwise
@@ -1473,7 +1473,7 @@ data-source menu.
 | Variable                   | Purpose                                                |
 |----------------------------|--------------------------------------------------------|
 | `PYTHON`                   | Explicit Python interpreter (overrides auto-detect).   |
-|                            | One program, no arguments; must be Python 3.10+. The   |
+|                            | One program, no arguments; must be Python 3.11+. The   |
 |                            | Studio and the test runner read it too.                |
 | `RESUME_DATA_SOURCE`       | `default` or `mine` — force which data file to use,    |
 |                            | ignoring the yours-preferred-over-template logic. Used |
@@ -1561,7 +1561,7 @@ And this one by the test runner (`npm test`, `node build/run_tests.js`):
 │   │   │                     (pinned to windows-2025), which also runs
 │   │   │                     cargo check and cargo test on the shell and
 │   │   │                     fails without pdftotext; and the minimums,
-│   │   │                     Node 20.19 and Python 3.10 on Linux. The two
+│   │   │                     Node 20.19 and Python 3.11 on Linux. The two
 │   │   │                     Linux jobs install pdftotext (poppler's).
 │   │   └── attribution.yml   Fails on co-author trailers and similar
 │   │                         lines in commit and tag messages, pull
@@ -1756,7 +1756,7 @@ starting the Studio: `set "PYTHON=py" && npm run studio` in cmd, or
 not (`set PYTHON="C:\Program Files\Python312\python.exe"` works). It
 cannot carry arguments, so `py -3.12` does not work; give that
 version's path instead. The build checks the interpreter before it
-starts and stops with a message if it is older than 3.10. An
+starts and stops with a message if it is older than 3.11. An
 auto-detected interpreter is run by its absolute path, or by its name
 when it cannot report one; the "Detected Python" line prints its name
 and version, not the path. `PYTHON` is run as written.
