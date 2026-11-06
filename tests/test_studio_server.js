@@ -605,27 +605,93 @@ function commandOf(pid) {
   try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf-8').replace(/\0/g, ' '); } catch { return ''; }
 }
 
+/** A time in ms since 1970 as a Windows FILETIME (100 ns since 1601). */
+const filetime = ms => BigInt(Math.floor(ms)) * 10000n + 116444736000000000n;
+
 /**
- * Every process below `pid`: /proc on Linux; on Windows from the process
- * table, where a process whose parent has exited keeps that parent's id,
- * so it still finds what a server left behind after it is gone.
- * Elsewhere nothing (not checked).
+ * The Windows process table, pid → { parent, born, name }, or null when
+ * it cannot be read. `born` is the creation time as a FILETIME BigInt
+ * (a Number cannot hold one exactly), null where Windows gives none.
  */
-function familyOf(pid) {
-  if (process.platform === 'linux') return descendants(pid);
-  if (process.platform !== 'win32') return [];
+function windowsProcesses() {
   let text = '';
   try {
     text = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'],
+      // No double quotes: see chromiumChildren in test_failure_recovery.js.
+      "Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + ' ' + [string]$_.ParentProcessId + ' ' + "
+        + "$(if ($_.CreationDate) { [string]$_.CreationDate.ToFileTimeUtc() } else { '0' }) + ' ' + $_.Name }"],
     { encoding: 'utf-8', windowsHide: true, timeout: 30000 });
-  } catch { return []; }
-  const rows = text.trim().split(/\r?\n/).map(l => l.trim().split(/\s+/).map(Number));
+  } catch { return null; }
+  const table = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(\d+) (\d+) (\d+) ?(.*)$/.exec(line);
+    if (m) table.set(Number(m[1]), { parent: Number(m[2]), born: m[3] === '0' ? null : BigInt(m[3]), name: m[4].trim() });
+  }
+  return table;
+}
+
+/**
+ * Whether `pid`, recorded with creation time `born`, is still that
+ * process in `table`: Windows hands a freed pid to the next new process,
+ * so a pid alive now may be someone else's. Without a table or a time,
+ * it is taken to be.
+ */
+function stillThe(table, pid, born) {
+  if (!table) return true;
+  const entry = table.get(pid);
+  return !!entry && (born === null || entry.born === null || entry.born === born);
+}
+
+/**
+ * Every process below `pid`, as [pid, born] pairs (born null off
+ * Windows): /proc on Linux; on Windows from the process table, where a
+ * process whose parent has exited keeps that parent's id, so it still
+ * finds what a server left behind after it is gone. Elsewhere nothing
+ * (not checked).
+ *
+ * Windows never updates a recorded parent id and reuses freed ones, so a
+ * process can name as its parent a pid that now belongs to something
+ * younger and unrelated. Walked by parent id alone, such an orphan was
+ * counted as the server's child: a long-running one failed leftBehind,
+ * and killRun killed it. As in build/_power.py's
+ * descendants, a "child" created before the process it names is skipped.
+ * The root's own children are bounded by `since` and `until`
+ * (FILETIMEs): created after the server was spawned (after the server
+ * itself, while the table still shows it), and before it exited once it
+ * has. Anything else names an earlier or a later holder of its pid.
+ */
+function familyOf(pid, { since = null, until = null } = {}) {
+  if (process.platform === 'linux') return descendants(pid).map(p => [p, null]);
+  if (process.platform !== 'win32') return [];
+  const table = windowsProcesses();
+  if (!table) return [];
+  const children = new Map();
+  for (const [child, { parent }] of table) {
+    if (child === parent) continue;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(child);
+  }
+  // The server itself, if the table still shows it: created after the
+  // spawn began and, once it has exited, before that.
+  const root = table.get(pid);
+  const rootBorn = root && root.born !== null && (since === null || root.born >= since)
+    && (until === null || root.born <= until) ? root.born : since;
   const out = [];
-  const walk = (p) => {
-    for (const [child, parent] of rows) if (parent === p && child !== p && !out.includes(child)) { out.push(child); walk(child); }
-  };
-  walk(pid);
+  const seen = new Set([pid]);
+  const queue = [pid];
+  while (queue.length) {
+    const p = queue.shift();
+    const born = p === pid ? rootBorn : table.get(p).born;
+    for (const child of children.get(p) || []) {
+      if (seen.has(child)) continue;
+      const childBorn = table.get(child).born;
+      if (childBorn !== null && ((born !== null && childBorn < born)
+        || (p === pid && until !== null && childBorn > until))) continue;
+      seen.add(child);
+      out.push([child, childBorn]);
+      queue.push(child);
+    }
+  }
   return out;
 }
 
@@ -1573,9 +1639,13 @@ function launch(projectDir, args, extraEnv = {}, script = path.join(projectDir, 
   const env = { ...process.env };
   for (const k of ['RESUME_DATA_SOURCE', 'RESUME_DATA_FILE', 'LETTER_DATA_FILE', 'STUDIO_PORT']) delete env[k];
   Object.assign(env, extraEnv);
+  // Taken before the spawn, so the server and everything it starts are
+  // created after it.
+  const since = filetime(Date.now());
   const child = spawn(process.execPath, [script, ...args],
     { cwd: projectDir, env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const run = { child, lines: [], stderr: '', seen: new Set(), exit: null };
+  // seen: pid → its creation time when recorded (familyOf).
+  const run = { child, lines: [], stderr: '', seen: new Map(), exit: null, since, until: null };
   let buffer = '';
   child.stdout.setEncoding('utf-8');
   child.stdout.on('data', (chunk) => {
@@ -1588,11 +1658,15 @@ function launch(projectDir, args, extraEnv = {}, script = path.join(projectDir, 
   });
   child.stderr.setEncoding('utf-8');
   child.stderr.on('data', (chunk) => { run.stderr += chunk; });
-  run.exited = new Promise(res => child.once('exit', (code, signal) => { run.exit = { code, signal }; res(run.exit); }));
+  run.exited = new Promise(res => child.once('exit', (code, signal) => {
+    run.exit = { code, signal };
+    run.until = filetime(Date.now());
+    res(run.exit);
+  }));
   let polling = true;
   (async () => {
     while (polling && !run.exit) {
-      for (const pid of familyOf(child.pid)) run.seen.add(pid);
+      for (const [pid, born] of familyOf(child.pid, run)) run.seen.set(pid, born);
       await new Promise(res => setTimeout(res, 150));
     }
   })();
@@ -1612,23 +1686,35 @@ function launch(projectDir, args, extraEnv = {}, script = path.join(projectDir, 
 const within = (promise, ms) => Promise.race([promise,
   new Promise(res => setTimeout(() => res('timeout'), ms))]);
 
-/** Everything `run` started is gone (within a few seconds) once it has exited. */
+/**
+ * Everything `run` started is gone (within a few seconds) once it has
+ * exited: what is still running, as "pid name".
+ */
 async function leftBehind(run) {
   run.stop();
   // On Windows an orphan keeps its exited parent's id; look once more.
-  for (const pid of familyOf(run.child.pid)) run.seen.add(pid);
-  const left = [];
-  for (const pid of run.seen) if (!(await goneWithin(pid, 5000))) left.push(pid);
-  return left;
+  for (const [pid, born] of familyOf(run.child.pid, run)) run.seen.set(pid, born);
+  const running = [];
+  for (const pid of run.seen.keys()) if (!(await goneWithin(pid, 5000))) running.push(pid);
+  // A pid in use may have been handed to a new process since it was seen.
+  const table = process.platform === 'win32' && running.length ? windowsProcesses() : null;
+  return running.filter(pid => stillThe(table, pid, run.seen.get(pid)))
+    .map(pid => `${pid} ${table ? table.get(pid).name : commandOf(pid).slice(0, 60)}`.trim());
 }
 
 function killRun(run) {
   if (!run || run.exit) return;
   if (process.platform === 'win32') {
+    // taskkill's /T skips a process older than the one it names as parent.
     try { execFileSync('taskkill', ['/PID', String(run.child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
   }
   try { run.child.kill('SIGKILL'); } catch { /* gone */ }
-  for (const pid of run.seen) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+  // Only a pid that is still the process seen: a reused one is someone else's.
+  const table = process.platform === 'win32' ? windowsProcesses() : null;
+  for (const [pid, born] of run.seen) {
+    if (!stillThe(table, pid, born)) continue;
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+  }
 }
 
 async function startupTests(project) {
