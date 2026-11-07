@@ -87,10 +87,17 @@ function chromiumChildren() {
   const isChromium = name => /chrom|headless/i.test(name);
   if (process.platform === 'win32') {
     // Playwright spawns chrome.exe (or the headless shell) directly.
+    // Windows keeps an exited parent's id and hands it to new processes,
+    // so a Chromium older than this process (the reader's own browser,
+    // say) can name this pid as its parent; the callers kill what this
+    // returns. A child cannot be older than its parent, so one is skipped,
+    // as in build/_power.py's descendants.
     const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       // No double quotes: Node escapes them on the command line, and
       // Windows PowerShell 5.1 does not always read them back the same.
+      `$me = (Get-CimInstance Win32_Process -Filter 'ProcessId=${process.pid}').CreationDate; ` +
       `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${process.pid}' | ` +
+      'Where-Object { -not $me -or -not $_.CreationDate -or $_.CreationDate -ge $me } | ' +
       "ForEach-Object { [string]$_.ProcessId + ' ' + $_.Name }"], { encoding: 'utf-8' });
     return out.split(/\r?\n/).map(l => l.trim().split(/\s+/))
       .filter(([pid, name]) => /^\d+$/.test(pid) && isChromium(name || ''))
@@ -119,16 +126,21 @@ function chromiumChildren() {
  * Chromium renderer processes below the given browser pids: every
  * descendant whose command line says --type=renderer. On Linux the
  * renderers hang off a zygote, not the browser itself, hence the walk.
+ * On Windows a process older than the one it names as parent is not its
+ * child (see chromiumChildren), and the walk skips it: `born` is the
+ * creation time as a FILETIME BigInt, null where it is not known.
  */
 function rendererPids(browserPids) {
   let rows;
   if (process.platform === 'win32') {
     const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       "Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + ' ' + " +
-      "[string]$_.ParentProcessId + ' ' + $_.CommandLine }"], { encoding: 'utf-8', maxBuffer: 64 << 20 });
+      "[string]$_.ParentProcessId + ' ' + " +
+      "$(if ($_.CreationDate) { [string]$_.CreationDate.ToFileTimeUtc() } else { '0' }) + ' ' + $_.CommandLine }"],
+    { encoding: 'utf-8', maxBuffer: 64 << 20 });
     rows = out.split(/\r?\n/).map((l) => {
-      const m = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(l);
-      return m && { pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] };
+      const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s?(.*)$/.exec(l);
+      return m && { pid: Number(m[1]), ppid: Number(m[2]), born: m[3] === '0' ? null : BigInt(m[3]), cmd: m[4] };
     }).filter(Boolean);
   } else if (fs.existsSync('/proc/self/stat')) {
     rows = [];
@@ -148,11 +160,16 @@ function rendererPids(browserPids) {
       return m && { pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] };
     }).filter(Boolean);
   }
+  const bornOf = new Map(rows.map(r => [r.pid, r.born ?? null]));
   const below = new Set(browserPids);
   for (let grew = true; grew;) {
     grew = false;
     for (const r of rows) {
-      if (!below.has(r.pid) && below.has(r.ppid)) { below.add(r.pid); grew = true; }
+      if (below.has(r.pid) || !below.has(r.ppid)) continue;
+      const parentBorn = bornOf.get(r.ppid) ?? null;
+      if (r.born != null && parentBorn !== null && r.born < parentBorn) continue;
+      below.add(r.pid);
+      grew = true;
     }
   }
   return rows.filter(r => below.has(r.pid) && /--type=renderer/.test(r.cmd)).map(r => r.pid);
