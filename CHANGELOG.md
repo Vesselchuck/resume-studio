@@ -44,6 +44,27 @@ minor one before 1.0.0).
 
 Nothing yet.
 
+## [1.1.2] — 2026-11-26
+
+*On Windows, two test suites could take another program's process for
+one of their own: a check failed, which stopped the build, and that
+program could be killed. The PDFs are unchanged, and nothing you rely
+on changed.*
+
+- **Fixed.** On Windows, `tests/test_studio_server.js` could report an
+  unrelated program as a process the Studio server left behind, and
+  stop it while cleaning up. Since `node resume.js` runs the tests
+  first, the build stopped too. Windows never updates a process's
+  recorded parent and hands a freed id to new processes, so a program
+  started earlier could name the server's id as its parent. The suite
+  now skips a "child" created before its parent or outside the
+  server's lifetime, and stops only a process whose creation time
+  still matches the one it recorded.
+- **Fixed.** On Windows, `tests/test_failure_recovery.js` could take an
+  older Chromium, your own browser for instance, for one it had
+  launched, and kill it. A process created before the one it names as
+  its parent is now skipped, as `build/_power.py` already does.
+
 ## [1.1.1] — 2026-11-05
 
 *Python 3.11 is now the minimum, up from 3.10, because Pillow 13 does
@@ -2267,8 +2288,10 @@ the old names can still be followed.
 | 1.0.0 | — | the interface settled; Node 20.19 minimum, faster builds |
 | 1.1.0 | — | a token-protected Studio; PDFs that read better in parsers |
 | 1.1.1 | — | Python 3.11 minimum; Pillow 13 with security fixes |
+| 1.1.2 | — | Windows test fixes: no other program's process counted or killed |
 
 [Unreleased]: #unreleased
+[1.1.2]: #112--2026-11-26
 [1.1.1]: #111--2026-11-05
 [1.1.0]: #110--2026-10-19
 [1.0.0]: #100--2026-10-02
